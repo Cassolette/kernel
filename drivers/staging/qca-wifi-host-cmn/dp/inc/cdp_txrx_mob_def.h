@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2016-2017 The Linux Foundation. All rights reserved.
+ * Copyright (c) 2016-2021 The Linux Foundation. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -22,6 +22,13 @@
 #include <htt.h>
 
 #define TX_WMM_AC_NUM	4
+#define ENABLE_DP_HIST_STATS
+#define DP_MEMORY_OPT
+#ifndef CONFIG_BERYLLIUM
+#define DP_USE_SINGLE_TCL
+#endif
+
+#define DP_RX_DISABLE_NDI_MDNS_FORWARDING
 
 #define OL_TXQ_PAUSE_REASON_FW                (1 << 0)
 #define OL_TXQ_PAUSE_REASON_PEER_UNAUTHORIZED (1 << 1)
@@ -30,8 +37,6 @@
 #define OL_TXQ_PAUSE_REASON_THERMAL_MITIGATION (1 << 4)
 
 #define OL_TXRX_INVALID_NUM_PEERS (-1)
-
-#define OL_TXRX_MAC_ADDR_LEN 6
 
 
 /* Maximum number of station supported by data path, including BC. */
@@ -86,19 +91,25 @@
  * @WLAN_STOP_NON_PRIORITY_QUEUE: stop non priority netif queues
  */
 enum netif_action_type {
+	WLAN_NETIF_ACTION_TYPE_NONE = 0,
 	WLAN_STOP_ALL_NETIF_QUEUE = 1,
-	WLAN_START_ALL_NETIF_QUEUE,
-	WLAN_WAKE_ALL_NETIF_QUEUE,
-	WLAN_STOP_ALL_NETIF_QUEUE_N_CARRIER,
-	WLAN_START_ALL_NETIF_QUEUE_N_CARRIER,
-	WLAN_NETIF_TX_DISABLE,
-	WLAN_NETIF_TX_DISABLE_N_CARRIER,
-	WLAN_NETIF_CARRIER_ON,
-	WLAN_NETIF_CARRIER_OFF,
-	WLAN_NETIF_PRIORITY_QUEUE_ON,
-	WLAN_NETIF_PRIORITY_QUEUE_OFF,
-	WLAN_WAKE_NON_PRIORITY_QUEUE,
-	WLAN_STOP_NON_PRIORITY_QUEUE,
+	WLAN_START_ALL_NETIF_QUEUE = 2,
+	WLAN_WAKE_ALL_NETIF_QUEUE = 3,
+	WLAN_STOP_ALL_NETIF_QUEUE_N_CARRIER = 4,
+	WLAN_START_ALL_NETIF_QUEUE_N_CARRIER = 5,
+	WLAN_NETIF_TX_DISABLE = 6,
+	WLAN_NETIF_TX_DISABLE_N_CARRIER = 7,
+	WLAN_NETIF_CARRIER_ON = 8,
+	WLAN_NETIF_CARRIER_OFF = 9,
+	WLAN_NETIF_PRIORITY_QUEUE_ON = 10,
+	WLAN_NETIF_PRIORITY_QUEUE_OFF = 11,
+	WLAN_NETIF_VO_QUEUE_ON = 12,
+	WLAN_NETIF_VO_QUEUE_OFF = 13,
+	WLAN_NETIF_VI_QUEUE_ON = 14,
+	WLAN_NETIF_VI_QUEUE_OFF = 15,
+	WLAN_NETIF_BE_BK_QUEUE_OFF = 16,
+	WLAN_WAKE_NON_PRIORITY_QUEUE = 17,
+	WLAN_STOP_NON_PRIORITY_QUEUE = 18,
 	WLAN_NETIF_ACTION_TYPE_MAX,
 };
 
@@ -188,15 +199,52 @@ enum ol_tx_spec {
 };
 
 /**
+ * @enum peer_debug_id_type: debug ids to track peer get_ref and release_ref
+ * @brief Unique peer debug IDs to track the callers. Each new usage can add to
+ *        this enum list to create a new "PEER_DEBUG_ID_".
+ * @PEER_DEBUG_ID_OL_INTERNAL: debug id for OL internal usage
+ * @PEER_DEBUG_ID_WMA_PKT_DROP: debug id for wma_is_pkt_drop_candidate API
+ * @PEER_DEBUG_ID_WMA_ADDBA_REQ: debug id for ADDBA request
+ * @PEER_DEBUG_ID_WMA_DELBA_REQ: debug id for DELBA request
+ * @PEER_DEBUG_ID_LIM_SEND_ADDBA_RESP: debug id for send ADDBA response
+ * @PEER_DEBUG_ID_OL_RX_THREAD: debug id for rx thread
+ * @PEER_DEBUG_ID_WMA_CCMP_REPLAY_ATTACK: debug id for CCMP replay
+ * @PEER_DEBUG_ID_WMA_DEL_BSS:debug id for remove BSS
+ * @PEER_DEBUG_ID_WMA_VDEV_STOP_RESP:debug id for vdev stop response handler
+ * @PEER_DEBUG_ID_OL_PEER_MAP:debug id for peer map/unmap
+ * @PEER_DEBUG_ID_OL_PEER_ATTACH: debug id for peer attach/detach
+ * @PEER_DEBUG_ID_OL_TXQ_VDEV_FL: debug id for vdev flush
+ * @PEER_DEBUG_ID_OL_HASH_ERS:debug id for peer find hash erase
+ * @PEER_DEBUG_ID_MAX: debug id MAX
+ */
+enum peer_debug_id_type {
+	PEER_DEBUG_ID_OL_INTERNAL,
+	PEER_DEBUG_ID_WMA_PKT_DROP,
+	PEER_DEBUG_ID_WMA_ADDBA_REQ,
+	PEER_DEBUG_ID_WMA_DELBA_REQ,
+	PEER_DEBUG_ID_LIM_SEND_ADDBA_RESP,
+	PEER_DEBUG_ID_OL_RX_THREAD,
+	PEER_DEBUG_ID_WMA_CCMP_REPLAY_ATTACK,
+	PEER_DEBUG_ID_WMA_DEL_BSS,
+	PEER_DEBUG_ID_WMA_VDEV_STOP_RESP,
+	PEER_DEBUG_ID_OL_PEER_MAP,
+	PEER_DEBUG_ID_OL_PEER_ATTACH,
+	PEER_DEBUG_ID_OL_TXQ_VDEV_FL,
+	PEER_DEBUG_ID_OL_HASH_ERS,
+	PEER_DEBUG_ID_OL_UNMAP_TIMER_WORK,
+	PEER_DEBUG_ID_MAX
+};
+
+/**
  * struct ol_txrx_desc_type - txrx descriptor type
- * @sta_id: sta id
  * @is_qos_enabled: is station qos enabled
  * @is_wapi_supported: is station wapi supported
+ * @peer_addr: peer mac address
  */
 struct ol_txrx_desc_type {
-	uint8_t sta_id;
 	uint8_t is_qos_enabled;
 	uint8_t is_wapi_supported;
+	struct qdf_mac_addr peer_addr;
 };
 
 /**
@@ -241,18 +289,46 @@ struct txrx_pdev_cfg_param_t {
 	uint32_t uc_tx_partition_base;
 	/* IP, TCP and UDP checksum offload */
 	bool ip_tcp_udp_checksum_offload;
+	/* IP, TCP and UDP checksum offload for NAN Mode */
+	bool nan_ip_tcp_udp_checksum_offload;
+	/* IP, TCP and UDP checksum offload for P2P Mode*/
+	bool p2p_ip_tcp_udp_checksum_offload;
+	/* Checksum offload override flag for Legcay modes */
+	bool legacy_mode_csum_disable;
 	/* Rx processing in thread from TXRX */
 	bool enable_rxthread;
 	/* CE classification enabled through INI */
 	bool ce_classify_enabled;
-#ifdef QCA_LL_TX_FLOW_CONTROL_V2
+#if defined(QCA_LL_TX_FLOW_CONTROL_V2) || defined(QCA_LL_PDEV_TX_FLOW_CONTROL)
 	/* Threshold to stop queue in percentage */
 	uint32_t tx_flow_stop_queue_th;
 	/* Start queue offset in percentage */
 	uint32_t tx_flow_start_queue_offset;
 #endif
 
+#ifdef QCA_SUPPORT_TXRX_DRIVER_TCP_DEL_ACK
+	/* enable the tcp delay ack feature in the driver */
+	bool  del_ack_enable;
+	/* timeout if no more tcp ack frames, unit is ms */
+	uint16_t del_ack_timer_value;
+	/* the maximum number of replaced tcp ack frames */
+	uint16_t del_ack_pkt_count;
+#endif
+
 	struct ol_tx_sched_wrr_ac_specs_t ac_specs[TX_WMM_AC_NUM];
+	bool gro_enable;
+	bool tso_enable;
+	bool lro_enable;
+	bool sg_enable;
+	bool enable_data_stall_detection;
+	bool enable_flow_steering;
+	bool disable_intra_bss_fwd;
+
+#ifdef WLAN_SUPPORT_TXRX_HL_BUNDLE
+	uint16_t bundle_timer_value;
+	uint16_t bundle_size;
+#endif
+	uint8_t pktlog_buffer_size;
 };
 
 #ifdef IPA_OFFLOAD
@@ -260,27 +336,22 @@ struct txrx_pdev_cfg_param_t {
  * ol_txrx_ipa_resources - Resources needed for IPA
  */
 struct ol_txrx_ipa_resources {
-	qdf_dma_addr_t ce_sr_base_paddr;
+	qdf_shared_mem_t *ce_sr;
 	uint32_t ce_sr_ring_size;
 	qdf_dma_addr_t ce_reg_paddr;
 
-	qdf_dma_addr_t tx_comp_ring_base_paddr;
-	uint32_t tx_comp_ring_size;
+	qdf_shared_mem_t *tx_comp_ring;
 	uint32_t tx_num_alloc_buffer;
 
-	qdf_dma_addr_t rx_rdy_ring_base_paddr;
-	uint32_t rx_rdy_ring_size;
-	qdf_dma_addr_t rx_proc_done_idx_paddr;
-	void *rx_proc_done_idx_vaddr;
+	qdf_shared_mem_t *rx_rdy_ring;
+	qdf_shared_mem_t *rx_proc_done_idx;
 
-	qdf_dma_addr_t rx2_rdy_ring_base_paddr;
-	uint32_t rx2_rdy_ring_size;
-	qdf_dma_addr_t rx2_proc_done_idx_paddr;
-	void *rx2_proc_done_idx_vaddr;
+	qdf_shared_mem_t *rx2_rdy_ring;
+	qdf_shared_mem_t *rx2_proc_done_idx;
 
 	/* IPA UC doorbell registers paddr */
-	qdf_dma_addr_t tx_comp_doorbell_paddr;
-	qdf_dma_addr_t rx_ready_doorbell_paddr;
+	qdf_dma_addr_t tx_comp_doorbell_dmaaddr;
+	qdf_dma_addr_t rx_ready_doorbell_dmaaddr;
 
 	uint32_t tx_pipe_handle;
 	uint32_t rx_pipe_handle;
@@ -306,9 +377,9 @@ struct ol_mic_error_info {
 	uint8_t vdev_id;
 	uint32_t key_id;
 	uint64_t pn;
-	uint8_t sa[OL_TXRX_MAC_ADDR_LEN];
-	uint8_t da[OL_TXRX_MAC_ADDR_LEN];
-	uint8_t ta[OL_TXRX_MAC_ADDR_LEN];
+	uint8_t sa[QDF_MAC_ADDR_SIZE];
+	uint8_t da[QDF_MAC_ADDR_SIZE];
+	uint8_t ta[QDF_MAC_ADDR_SIZE];
 };
 
 /**
@@ -388,33 +459,7 @@ struct ieee80211_delba_parameterset {
  * ol_txrx_vdev_peer_remove_cb - wma_remove_peer callback
  */
 typedef void (*ol_txrx_vdev_peer_remove_cb)(void *handle, uint8_t *bssid,
-		uint8_t vdev_id, void *peer, bool roam_synch_in_progress);
-
-/**
- * ol_txrx_tx_flow_control_fp - tx flow control notification
- * function from txrx to OS shim
- * @osif_dev - the virtual device's OS shim object
- * @tx_resume - tx os q should be resumed or not
- */
-typedef void (*ol_txrx_tx_flow_control_fp)(void *osif_dev, bool tx_resume);
-
-/**
- * ol_txrx_tx_flow_control_is_pause_fp - is tx paused by flow control
- * function from txrx to OS shim
- * @osif_dev - the virtual device's OS shim object
- *
- * Return: true if tx is paused by flow control
- */
-typedef bool (*ol_txrx_tx_flow_control_is_pause_fp)(void *osif_dev);
-
-/**
- * ol_txrx_tx_flow_control_fp - tx flow control notification
- * function from txrx to OS shim
- * @osif_dev - the virtual device's OS shim object
- * @tx_resume - tx os q should be resumed or not
- */
-typedef void (*tx_flow_control_fp)(void *osif_dev,
-			 bool tx_resume);
+		uint8_t vdev_id, void *peer);
 
 /**
  * @typedef tx_pause_callback
@@ -426,5 +471,35 @@ typedef void (*tx_pause_callback)(uint8_t vdev_id,
 
 typedef void (*ipa_uc_op_cb_type)(uint8_t *op_msg,
 			void *osif_ctxt);
+
+/**
+ * struct ol_rx_inv_peer_params - rx invalid peer data parameters
+ * @vdev_id: Virtual device ID
+ * @ra: RX data receiver MAC address
+ * @ta: RX data transmitter MAC address
+ */
+struct ol_rx_inv_peer_params {
+	uint8_t vdev_id;
+	uint8_t ra[QDF_MAC_ADDR_SIZE];
+	uint8_t ta[QDF_MAC_ADDR_SIZE];
+};
+
+/**
+ * cdp_txrx_ext_stats: dp extended stats
+ * tx_msdu_enqueue: tx msdu queued to hw
+ * tx_msdu_overflow: tx msdu overflow
+ * rx_mpdu_received: rx mpdu processed by hw
+ * rx_mpdu_delivered: rx mpdu received from hw
+ * rx_mpdu_error: rx mpdu error count
+ * rx_mpdu_missed: rx mpdu missed by hw
+ */
+struct cdp_txrx_ext_stats {
+	uint32_t tx_msdu_enqueue;
+	uint32_t tx_msdu_overflow;
+	uint32_t rx_mpdu_received;
+	uint32_t rx_mpdu_delivered;
+	uint32_t rx_mpdu_error;
+	uint32_t rx_mpdu_missed;
+};
 
 #endif /* __CDP_TXRX_MOB_DEF_H */

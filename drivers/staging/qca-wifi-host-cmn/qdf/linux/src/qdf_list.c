@@ -1,8 +1,5 @@
 /*
- * Copyright (c) 2014-2017 The Linux Foundation. All rights reserved.
- *
- * Previously licensed under the ISC license by Qualcomm Atheros, Inc.
- *
+ * Copyright (c) 2014-2018 The Linux Foundation. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -19,12 +16,6 @@
  * PERFORMANCE OF THIS SOFTWARE.
  */
 
-/*
- * This file was originally distributed by Qualcomm Atheros, Inc.
- * under proprietary terms before Copyright ownership was assigned
- * to the Linux Foundation.
- */
-
 /**
  * DOC: qdf_list.c
  *
@@ -35,7 +26,7 @@
 
 /* Include files */
 #include <qdf_list.h>
-#include <linux/export.h>
+#include <qdf_module.h>
 
 /* Function declarations and documenation */
 
@@ -47,7 +38,7 @@ QDF_STATUS qdf_list_insert_before(qdf_list_t *list,
 
 	return QDF_STATUS_SUCCESS;
 }
-EXPORT_SYMBOL(qdf_list_insert_before);
+qdf_export_symbol(qdf_list_insert_before);
 
 QDF_STATUS qdf_list_insert_after(qdf_list_t *list,
 	qdf_list_node_t *new_node, qdf_list_node_t *node)
@@ -57,7 +48,7 @@ QDF_STATUS qdf_list_insert_after(qdf_list_t *list,
 
 	return QDF_STATUS_SUCCESS;
 }
-EXPORT_SYMBOL(qdf_list_insert_after);
+qdf_export_symbol(qdf_list_insert_after);
 
 /**
  * qdf_list_insert_front() - insert input node at front of the list
@@ -72,7 +63,7 @@ QDF_STATUS qdf_list_insert_front(qdf_list_t *list, qdf_list_node_t *node)
 	list->count++;
 	return QDF_STATUS_SUCCESS;
 }
-EXPORT_SYMBOL(qdf_list_insert_front);
+qdf_export_symbol(qdf_list_insert_front);
 
 /**
  * qdf_list_insert_back() - insert input node at back of the list
@@ -87,7 +78,7 @@ QDF_STATUS qdf_list_insert_back(qdf_list_t *list, qdf_list_node_t *node)
 	list->count++;
 	return QDF_STATUS_SUCCESS;
 }
-EXPORT_SYMBOL(qdf_list_insert_back);
+qdf_export_symbol(qdf_list_insert_back);
 
 /**
  * qdf_list_insert_back_size() - insert input node at back of list and save
@@ -106,7 +97,7 @@ QDF_STATUS qdf_list_insert_back_size(qdf_list_t *list,
 	*p_size = list->count;
 	return QDF_STATUS_SUCCESS;
 }
-EXPORT_SYMBOL(qdf_list_insert_back_size);
+qdf_export_symbol(qdf_list_insert_back_size);
 
 /**
  * qdf_list_remove_front() - remove node from front of the list
@@ -124,12 +115,12 @@ QDF_STATUS qdf_list_remove_front(qdf_list_t *list, qdf_list_node_t **node2)
 
 	listptr = list->anchor.next;
 	*node2 = listptr;
-	list_del(list->anchor.next);
+	list_del_init(list->anchor.next);
 	list->count--;
 
 	return QDF_STATUS_SUCCESS;
 }
-EXPORT_SYMBOL(qdf_list_remove_front);
+qdf_export_symbol(qdf_list_remove_front);
 
 /**
  * qdf_list_remove_back() - remove node from end of the list
@@ -147,23 +138,13 @@ QDF_STATUS qdf_list_remove_back(qdf_list_t *list, qdf_list_node_t **node2)
 
 	listptr = list->anchor.prev;
 	*node2 = listptr;
-	list_del(list->anchor.prev);
+	list_del_init(list->anchor.prev);
 	list->count--;
 
 	return QDF_STATUS_SUCCESS;
 }
-EXPORT_SYMBOL(qdf_list_remove_back);
+qdf_export_symbol(qdf_list_remove_back);
 
-/**
- * qdf_list_has_node() - check if a node is in a list
- * @list: pointer to the list being searched
- * @node: pointer to the node to search for
- *
- * It is expected that the list being checked is locked
- * when this function is being called.
- *
- * Return: true if the node is in the list
- */
 bool qdf_list_has_node(qdf_list_t *list, qdf_list_node_t *node)
 {
 	qdf_list_node_t *tmp;
@@ -172,6 +153,7 @@ bool qdf_list_has_node(qdf_list_t *list, qdf_list_node_t *node)
 		if (tmp == node)
 			return true;
 	}
+
 	return false;
 }
 
@@ -192,12 +174,12 @@ QDF_STATUS qdf_list_remove_node(qdf_list_t *list,
 	if (list_empty(&list->anchor))
 		return QDF_STATUS_E_EMPTY;
 
-	list_del(node_to_remove);
+	list_del_init(node_to_remove);
 	list->count--;
 
 	return QDF_STATUS_SUCCESS;
 }
-EXPORT_SYMBOL(qdf_list_remove_node);
+qdf_export_symbol(qdf_list_remove_node);
 
 /**
  * qdf_list_peek_front() - peek front node from list
@@ -215,9 +197,10 @@ QDF_STATUS qdf_list_peek_front(qdf_list_t *list, qdf_list_node_t **node2)
 
 	listptr = list->anchor.next;
 	*node2 = listptr;
+
 	return QDF_STATUS_SUCCESS;
 }
-EXPORT_SYMBOL(qdf_list_peek_front);
+qdf_export_symbol(qdf_list_peek_front);
 
 /**
  * qdf_list_peek_next() - peek next node of input node in the list
@@ -244,7 +227,7 @@ QDF_STATUS qdf_list_peek_next(qdf_list_t *list,
 
 	return QDF_STATUS_SUCCESS;
 }
-EXPORT_SYMBOL(qdf_list_peek_next);
+qdf_export_symbol(qdf_list_peek_next);
 
 /**
  * qdf_list_empty() - check if the list is empty
@@ -256,4 +239,26 @@ bool qdf_list_empty(qdf_list_t *list)
 {
 	return list_empty(&list->anchor);
 }
-EXPORT_SYMBOL(qdf_list_empty);
+qdf_export_symbol(qdf_list_empty);
+
+bool qdf_list_node_in_any_list(const qdf_list_node_t *node)
+{
+	const struct list_head *linux_node = (const struct list_head *)node;
+
+	if (!linux_node)
+		return false;
+
+	/* if the node is an empty list, it is not tied to an anchor node */
+	if (list_empty(linux_node))
+		return false;
+
+	if (!linux_node->prev || !linux_node->next)
+		return false;
+
+	if (linux_node->prev->next != linux_node ||
+	    linux_node->next->prev != linux_node)
+		return false;
+
+	return true;
+}
+

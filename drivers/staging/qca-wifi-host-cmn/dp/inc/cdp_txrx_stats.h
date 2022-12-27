@@ -1,8 +1,5 @@
 /*
- * Copyright (c) 2016-2017 The Linux Foundation. All rights reserved.
- *
- * Previously licensed under the ISC license by Qualcomm Atheros, Inc.
- *
+ * Copyright (c) 2016-2017,2019,2021 The Linux Foundation. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -19,11 +16,6 @@
  * PERFORMANCE OF THIS SOFTWARE.
  */
 
-/*
- * This file was originally distributed by Qualcomm Atheros, Inc.
- * under proprietary terms before Copyright ownership was assigned
- * to the Linux Foundation.
- */
 /**
  * @file cdp_txrx_stats.h
  * @brief Define the host data path statistics API functions
@@ -32,22 +24,40 @@
 #ifndef _CDP_TXRX_STATS_H_
 #define _CDP_TXRX_STATS_H_
 #include <cdp_txrx_ops.h>
+#include <cdp_txrx_cmn.h>
 
-static inline void
-cdp_clear_stats(ol_txrx_soc_handle soc, uint16_t bitmap)
+static inline QDF_STATUS
+cdp_clear_stats(ol_txrx_soc_handle soc, uint8_t pdev_id, uint8_t bitmap)
 {
-	if (soc->ops->mob_stats_ops->clear_stats)
-		return soc->ops->mob_stats_ops->clear_stats(bitmap);
-	return;
+
+	if (!soc || !soc->ops) {
+		dp_cdp_debug("Invalid Instance");
+		QDF_BUG(0);
+		return QDF_STATUS_E_INVAL;
+	}
+
+	if (!soc->ops->mob_stats_ops ||
+	    !soc->ops->mob_stats_ops->clear_stats)
+		return QDF_STATUS_E_INVAL;
+
+	return soc->ops->mob_stats_ops->clear_stats(soc, pdev_id, bitmap);
 }
 
 static inline int
 cdp_stats(ol_txrx_soc_handle soc, uint8_t vdev_id, char *buffer,
 		unsigned int buf_len)
 {
-	if (soc->ops->mob_stats_ops->stats)
-		return soc->ops->mob_stats_ops->stats(vdev_id, buffer, buf_len);
-	return 0;
+	if (!soc || !soc->ops) {
+		dp_cdp_debug("Invalid Instance");
+		QDF_BUG(0);
+		return 0;
+	}
+
+	if (!soc->ops->mob_stats_ops ||
+	    !soc->ops->mob_stats_ops->stats)
+		return 0;
+
+	return soc->ops->mob_stats_ops->stats(vdev_id, buffer, buf_len);
 }
 
 #endif /* _CDP_TXRX_STATS_H_ */

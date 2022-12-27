@@ -1,8 +1,5 @@
 /*
- * Copyright (c) 2014-2017 The Linux Foundation. All rights reserved.
- *
- * Previously licensed under the ISC license by Qualcomm Atheros, Inc.
- *
+ * Copyright (c) 2014-2019 The Linux Foundation. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -17,12 +14,6 @@
  * PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR OTHER
  * TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
  * PERFORMANCE OF THIS SOFTWARE.
- */
-
-/*
- * This file was originally distributed by Qualcomm Atheros, Inc.
- * under proprietary terms before Copyright ownership was assigned
- * to the Linux Foundation.
  */
 
 /*===========================================================================
@@ -103,9 +94,10 @@ typedef enum eAniNlModuleTypes {
 	ANI_NL_MSG_PUMAC = ANI_NL_MSG_BASE + 0x01,      /* PTT Socket App */
 	ANI_NL_MSG_PTT = ANI_NL_MSG_BASE + 0x07,        /* Quarky GUI */
 	WLAN_NL_MSG_OEM = ANI_NL_MSG_BASE + 0x09,
-	WLAN_NL_MSG_SVC,
+	WLAN_NL_MSG_SVC = ANI_NL_MSG_BASE + 0x0a,
 	WLAN_NL_MSG_CNSS_DIAG = ANI_NL_MSG_BASE + 0x0B, /* Value needs to be 27 */
 	ANI_NL_MSG_LOG,
+	WLAN_NL_MSG_SPECTRAL_SCAN,
 	ANI_NL_MSG_MAX
 } tAniNlModTypes, tWlanNlModTypes;
 
@@ -252,8 +244,22 @@ struct wlan_core_minfreq {
 
 /* Indication to enable TCP delayed ack in TPUT indication */
 #define TCP_DEL_ACK_IND	(1 << 0)
+#define TCP_DEL_ACK_IND_MASK	0x1
 /* Indication to enable TCP advance window scaling in TPUT indication */
 #define TCP_ADV_WIN_SCL	(1 << 1)
+#define TCP_ADV_WIN_SCL_MASK	0x2
+
+/* TCP limit output bytes for low and high TPUT */
+#define TCP_LIMIT_OUTPUT_BYTES_LOW	506072
+#define TCP_LIMIT_OUTPUT_BYTES_HI	4048579
+
+/* TCP window scale for low and high TPUT */
+#define WIN_SCALE_LOW	2
+#define WIN_SCALE_HI	1
+
+/* TCP DEL ACK value for low and high TPUT */
+#define TCP_DEL_ACK_LOW		0
+#define TCP_DEL_ACK_HI		20
 
 /**
  * struct wlan_rx_tp_data - msg to TCP delayed ack and advance window scaling
@@ -264,6 +270,17 @@ struct wlan_core_minfreq {
 struct wlan_rx_tp_data {
 	enum wlan_tp_level level;
 	uint16_t rx_tp_flags;
+};
+
+/**
+ * struct wlan_tx_tp_data - msg to TCP for Tx Dir
+ * @level:            Throughput level.
+ * @tcp_limit_output: Tcp limit output flag.
+ *
+ */
+struct wlan_tx_tp_data {
+	enum wlan_tp_level level;
+	bool tcp_limit_output;
 };
 
 #endif /* WLAN_NLINK_COMMON_H__ */

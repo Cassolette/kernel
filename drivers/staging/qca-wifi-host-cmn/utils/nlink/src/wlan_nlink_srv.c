@@ -1,8 +1,5 @@
 /*
- * Copyright (c) 2012-2017 The Linux Foundation. All rights reserved.
- *
- * Previously licensed under the ISC license by Qualcomm Atheros, Inc.
- *
+ * Copyright (c) 2012-2021 The Linux Foundation. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -17,12 +14,6 @@
  * PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR OTHER
  * TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
  * PERFORMANCE OF THIS SOFTWARE.
- */
-
-/*
- * This file was originally distributed by Qualcomm Atheros, Inc.
- * under proprietary terms before Copyright ownership was assigned
- * to the Linux Foundation.
  */
 
 /******************************************************************************
@@ -44,6 +35,8 @@
 #include <qdf_trace.h>
 #include <qdf_module.h>
 
+#define WLAN_CLD80211_MAX_SIZE (SKB_WITH_OVERHEAD(8192UL) - NLMSG_HDRLEN)
+
 #if defined(CONFIG_CNSS_LOGGER)
 
 #include <net/cnss_logger.h>
@@ -55,6 +48,7 @@ static bool logger_initialized;
 /**
  * nl_srv_init() - wrapper function to register to cnss_logger
  * @wiphy:	the pointer to the wiphy structure
+ * @proto:	the host log netlink protocol
  *
  * The netlink socket is no longer initialized in the driver itself, instead
  * will be initialized in the cnss_logger module, the driver should register
@@ -67,7 +61,7 @@ static bool logger_initialized;
  *
  * Return: radio index for success and -EINVAL for failure
  */
-int nl_srv_init(void *wiphy)
+int nl_srv_init(void *wiphy, int proto)
 {
 	if (logger_initialized)
 		goto initialized;
@@ -202,7 +196,7 @@ int nl_srv_unregister(tWlanNlModTypes msg_type, nl_srv_msg_callback msg_handler)
 		return ret;
 
 	if ((msg_type >= WLAN_NL_MSG_BASE) && (msg_type < WLAN_NL_MSG_MAX) &&
-	    msg_handler != NULL) {
+	    msg_handler) {
 		ret = cnss_logger_event_unregister(radio_idx, msg_type,
 						   msg_handler);
 	} else {
@@ -233,7 +227,7 @@ int nl_srv_register(tWlanNlModTypes msg_type, nl_srv_msg_callback msg_handler)
 		return ret;
 
 	if ((msg_type >= WLAN_NL_MSG_BASE) && (msg_type < WLAN_NL_MSG_MAX) &&
-	    msg_handler != NULL) {
+	    msg_handler) {
 		ret = cnss_logger_event_register(radio_idx, msg_type,
 						 msg_handler);
 	} else {
@@ -267,121 +261,92 @@ qdf_export_symbol(nl_srv_is_initialized);
  * and the diagnotics netlink socket will not be available since this
  * diagnostics netlink socket can only be exposed by one instance of the driver.
  */
-#elif !defined(MULTI_IF_NAME)
-
-#ifdef CNSS_GENL
+#elif defined(CNSS_GENL)
 #include <qdf_mem.h>
 #include <wlan_nlink_common.h>
 #include <net/genetlink.h>
+#ifdef CONFIG_CNSS_OUT_OF_TREE
+#include "cnss_nl.h"
+#else
 #include <net/cnss_nl.h>
 #endif
 
-#define WLAN_CLD80211_MAX_SIZE (SKB_WITH_OVERHEAD(8192UL) - NLMSG_HDRLEN)
-
-/* Global variables */
-static DEFINE_MUTEX(nl_srv_sem);
-static struct sock *nl_srv_sock;
-static nl_srv_msg_callback nl_srv_msg_handler[NLINK_MAX_CALLBACKS];
-
-/* Forward declaration */
-static void nl_srv_rcv(struct sk_buff *sk);
-static void nl_srv_rcv_skb(struct sk_buff *skb);
-static void nl_srv_rcv_msg(struct sk_buff *skb, struct nlmsghdr *nlh);
-
-/*
- * Initialize the netlink service.
- * Netlink service is usable after this.
- */
-int nl_srv_init(void *wiphy)
+void cld80211_oem_send_reply(struct sk_buff *msg, void *hdr,
+				    struct nlattr *nest, int flags)
 {
-	int retcode = 0;
-	struct netlink_kernel_cfg cfg = {
-		.groups = WLAN_NLINK_MCAST_GRP_ID,
-		.input = nl_srv_rcv
-	};
+	struct genl_family *cld80211_fam = cld80211_get_genl_family();
 
-	nl_srv_sock = netlink_kernel_create(&init_net, WLAN_NLINK_PROTO_FAMILY,
-					    &cfg);
+	nla_nest_end(msg, nest);
+	genlmsg_end(msg, hdr);
 
-	if (nl_srv_sock != NULL) {
-		memset(nl_srv_msg_handler, 0, sizeof(nl_srv_msg_handler));
-	} else {
-		QDF_TRACE(QDF_MODULE_ID_HDD, QDF_TRACE_LEVEL_ERROR,
-			  "NLINK: netlink_kernel_create failed");
-		retcode = -ECONNREFUSED;
-	}
-	return retcode;
+	genlmsg_multicast_netns(cld80211_fam, &init_net, msg, 0,
+				CLD80211_MCGRP_OEM_MSGS, flags);
 }
 
-/*
- * Deinit the netlink service.
- * Netlink service is unusable after this.
- */
+struct sk_buff *
+cld80211_oem_rsp_alloc_skb(uint32_t portid, void **hdr, struct nlattr **nest,
+			   int *flags)
+{
+	struct sk_buff *msg;
+
+	if (in_interrupt() || irqs_disabled() || in_atomic())
+		*flags = GFP_ATOMIC;
+
+	msg = nlmsg_new(WLAN_CLD80211_MAX_SIZE, *flags);
+	if (!msg) {
+		QDF_TRACE(QDF_MODULE_ID_HDD, QDF_TRACE_LEVEL_ERROR,
+					"nlmsg malloc fails");
+		return NULL;
+	}
+
+	*hdr = nl80211hdr_put(msg, portid, 0, *flags, WLAN_NL_MSG_OEM);
+	if (*hdr == NULL) {
+		QDF_TRACE(QDF_MODULE_ID_HDD, QDF_TRACE_LEVEL_ERROR,
+					"nl80211 hdr put failed");
+		goto nla_put_failure;
+	}
+
+	*nest = nla_nest_start(msg, CLD80211_ATTR_VENDOR_DATA);
+	if (*nest == NULL) {
+		QDF_TRACE(QDF_MODULE_ID_HDD, QDF_TRACE_LEVEL_ERROR,
+					"nla_nest_start failed");
+		goto nla_put_failure;
+	}
+	return msg;
+nla_put_failure:
+	genlmsg_cancel(msg, *hdr);
+	nlmsg_free(msg);
+	return NULL;
+}
+
+/* For CNSS_GENL netlink sockets will be initialized by CNSS Kernel Module */
+int nl_srv_init(void *wiphy, int proto)
+{
+	return 0;
+}
+
 void nl_srv_exit(void)
 {
-	if (nl_srv_is_initialized() == 0)
-		netlink_kernel_release(nl_srv_sock);
-
-	nl_srv_sock = NULL;
 }
 
-/*
- * Register a message handler for a specified module.
- * Each module (e.g. WLAN_NL_MSG_BTC )will register a
- * handler to handle messages addressed to it.
- */
+int nl_srv_is_initialized(void)
+{
+	return 0;
+}
+
+/* Not implemented by CNSS kernel module */
 int nl_srv_register(tWlanNlModTypes msg_type, nl_srv_msg_callback msg_handler)
 {
-	int retcode = 0;
-
-	if ((msg_type >= WLAN_NL_MSG_BASE) && (msg_type < WLAN_NL_MSG_MAX) &&
-	    msg_handler != NULL) {
-		nl_srv_msg_handler[msg_type - WLAN_NL_MSG_BASE] = msg_handler;
-	} else {
-		QDF_TRACE(QDF_MODULE_ID_HDD, QDF_TRACE_LEVEL_WARN,
-			  "NLINK: nl_srv_register failed for msg_type %d",
-			  msg_type);
-		retcode = -EINVAL;
-	}
-
-	return retcode;
+	return 0;
 }
 
-/*
- * Unregister the message handler for a specified module.
- */
 int nl_srv_unregister(tWlanNlModTypes msg_type, nl_srv_msg_callback msg_handler)
 {
-	int retcode = 0;
-
-	if ((msg_type >= WLAN_NL_MSG_BASE) && (msg_type < WLAN_NL_MSG_MAX) &&
-	    (nl_srv_msg_handler[msg_type - WLAN_NL_MSG_BASE] == msg_handler)) {
-		nl_srv_msg_handler[msg_type - WLAN_NL_MSG_BASE] = NULL;
-	} else {
-		QDF_TRACE(QDF_MODULE_ID_HDD, QDF_TRACE_LEVEL_WARN,
-			  "NLINK: nl_srv_unregister failed for msg_type %d",
-			  msg_type);
-		retcode = -EINVAL;
-	}
-
-	return retcode;
+	return 0;
 }
 
-#ifdef CNSS_GENL
-/**
- * nl80211hdr_put() - API to fill genlmsg header
- * @skb: Sk buffer
- * @portid: Port ID
- * @seq: Sequence number
- * @flags: Flags
- * @cmd: Command id
- *
- * API to fill genl message header for brodcast events to user space
- *
- * Return: Pointer to user specific header/payload
- */
-static inline void *nl80211hdr_put(struct sk_buff *skb, uint32_t portid,
-					uint32_t seq, int flags, uint8_t cmd)
+void *nl80211hdr_put(struct sk_buff *skb, uint32_t portid,
+		     uint32_t seq, int flags, uint8_t cmd)
 {
 	struct genl_family *cld80211_fam = cld80211_get_genl_family();
 
@@ -555,7 +520,99 @@ int nl_srv_ucast(struct sk_buff *skb, int dst_pid, int flag,
 	dev_kfree_skb(skb);
 	return 0;
 }
-#else
+
+#elif !defined(MULTI_IF_NAME) || defined(MULTI_IF_LOG)
+
+/* Global variables */
+static DEFINE_MUTEX(nl_srv_sem);
+static struct sock *nl_srv_sock;
+static nl_srv_msg_callback nl_srv_msg_handler[NLINK_MAX_CALLBACKS];
+
+/* Forward declaration */
+static void nl_srv_rcv(struct sk_buff *sk);
+static void nl_srv_rcv_skb(struct sk_buff *skb);
+static void nl_srv_rcv_msg(struct sk_buff *skb, struct nlmsghdr *nlh);
+
+/*
+ * Initialize the netlink service.
+ * Netlink service is usable after this.
+ */
+int nl_srv_init(void *wiphy, int proto)
+{
+	int retcode = 0;
+	struct netlink_kernel_cfg cfg = {
+		.groups = WLAN_NLINK_MCAST_GRP_ID,
+		.input = nl_srv_rcv
+	};
+
+	nl_srv_sock = netlink_kernel_create(&init_net, proto,
+					    &cfg);
+
+	if (nl_srv_sock) {
+		memset(nl_srv_msg_handler, 0, sizeof(nl_srv_msg_handler));
+	} else {
+		QDF_TRACE(QDF_MODULE_ID_HDD, QDF_TRACE_LEVEL_ERROR,
+			  "NLINK: netlink_kernel_create failed");
+		retcode = -ECONNREFUSED;
+	}
+	return retcode;
+}
+
+/*
+ * Deinit the netlink service.
+ * Netlink service is unusable after this.
+ */
+void nl_srv_exit(void)
+{
+	if (nl_srv_is_initialized() == 0)
+		netlink_kernel_release(nl_srv_sock);
+
+	nl_srv_sock = NULL;
+}
+
+/*
+ * Register a message handler for a specified module.
+ * Each module (e.g. WLAN_NL_MSG_BTC )will register a
+ * handler to handle messages addressed to it.
+ */
+int nl_srv_register(tWlanNlModTypes msg_type, nl_srv_msg_callback msg_handler)
+{
+	int retcode = 0;
+
+	if ((msg_type >= WLAN_NL_MSG_BASE) && (msg_type < WLAN_NL_MSG_MAX) &&
+	    msg_handler) {
+		nl_srv_msg_handler[msg_type - WLAN_NL_MSG_BASE] = msg_handler;
+	} else {
+		QDF_TRACE(QDF_MODULE_ID_HDD, QDF_TRACE_LEVEL_WARN,
+			  "NLINK: nl_srv_register failed for msg_type %d",
+			  msg_type);
+		retcode = -EINVAL;
+	}
+
+	return retcode;
+}
+
+qdf_export_symbol(nl_srv_register);
+
+/*
+ * Unregister the message handler for a specified module.
+ */
+int nl_srv_unregister(tWlanNlModTypes msg_type, nl_srv_msg_callback msg_handler)
+{
+	int retcode = 0;
+
+	if ((msg_type >= WLAN_NL_MSG_BASE) && (msg_type < WLAN_NL_MSG_MAX) &&
+	    (nl_srv_msg_handler[msg_type - WLAN_NL_MSG_BASE] == msg_handler)) {
+		nl_srv_msg_handler[msg_type - WLAN_NL_MSG_BASE] = NULL;
+	} else {
+		QDF_TRACE(QDF_MODULE_ID_HDD, QDF_TRACE_LEVEL_WARN,
+			  "NLINK: nl_srv_unregister failed for msg_type %d",
+			  msg_type);
+		retcode = -EINVAL;
+	}
+
+	return retcode;
+}
 
 /*
  * Unicast the message to the process in user space identfied
@@ -610,7 +667,6 @@ int nl_srv_bcast(struct sk_buff *skb)
 	return err;
 }
 qdf_export_symbol(nl_srv_bcast);
-#endif
 
 /*
  *  Processes the Netlink socket input queue.
@@ -694,7 +750,7 @@ static void nl_srv_rcv_msg(struct sk_buff *skb, struct nlmsghdr *nlh)
 	type -= WLAN_NL_MSG_BASE;
 
 	/* dispatch to handler */
-	if (nl_srv_msg_handler[type] != NULL) {
+	if (nl_srv_msg_handler[type]) {
 		(nl_srv_msg_handler[type])(skb);
 	} else {
 		QDF_TRACE(QDF_MODULE_ID_HDD, QDF_TRACE_LEVEL_WARN,
@@ -722,7 +778,7 @@ qdf_export_symbol(nl_srv_is_initialized);
 
 #else
 
-int nl_srv_init(void *wiphy)
+int nl_srv_init(void *wiphy, int proto)
 {
 	return 0;
 }
@@ -783,4 +839,6 @@ void nl_srv_ucast_oem(struct sk_buff *skb, int dst_pid, int flag)
 {
 	nl_srv_ucast(skb, dst_pid, flag);
 }
+
+qdf_export_symbol(nl_srv_ucast_oem);
 #endif

@@ -1,8 +1,5 @@
 /*
- * Copyright (c) 2014-2017 The Linux Foundation. All rights reserved.
- *
- * Previously licensed under the ISC license by Qualcomm Atheros, Inc.
- *
+ * Copyright (c) 2014-2017, 2019 The Linux Foundation. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -17,12 +14,6 @@
  * PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR OTHER
  * TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
  * PERFORMANCE OF THIS SOFTWARE.
- */
-
-/*
- * This file was originally distributed by Qualcomm Atheros, Inc.
- * under proprietary terms before Copyright ownership was assigned
- * to the Linux Foundation.
  */
 
 /*========================================================================
@@ -85,7 +76,7 @@ void epping_refill(void *ctx, HTC_ENDPOINT_ID Endpoint)
 	for (RxBuffers = 0; RxBuffers < buffersToRefill; RxBuffers++) {
 		osBuf = qdf_nbuf_alloc(NULL, AR6000_BUFFER_SIZE,
 				       AR6000_MIN_HEAD_ROOM, 4, false);
-		if (NULL == osBuf) {
+		if (!osBuf) {
 			break;
 		}
 		/* the HTC packet wrapper is at the head of the reserved area
@@ -123,7 +114,8 @@ void epping_rx(void *ctx, HTC_PACKET *pPacket)
 
 	if (status != QDF_STATUS_SUCCESS) {
 		if (status != QDF_STATUS_E_CANCELED) {
-			printk("%s: RX ERR (%d)\n", __func__, status);
+			EPPING_LOG(QDF_TRACE_LEVEL_ERROR, "%s: RX ERR (%d)",
+				   __func__, status);
 		}
 		qdf_nbuf_free(pktSkb);
 		return;

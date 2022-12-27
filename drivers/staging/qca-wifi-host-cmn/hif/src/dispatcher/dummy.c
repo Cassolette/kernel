@@ -1,8 +1,5 @@
 /*
- * Copyright (c) 2016-2017 The Linux Foundation. All rights reserved.
- *
- * Previously licensed under the ISC license by Qualcomm Atheros, Inc.
- *
+ * Copyright (c) 2016-2021 The Linux Foundation. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -19,12 +16,6 @@
  * PERFORMANCE OF THIS SOFTWARE.
  */
 
-/*
- * This file was originally distributed by Qualcomm Atheros, Inc.
- * under proprietary terms before Copyright ownership was assigned
- * to the Linux Foundation.
- */
-
 #include "qdf_types.h"
 #include "dummy.h"
 #include "hif_debug.h"
@@ -39,7 +30,7 @@
  */
 void hif_dummy_bus_prevent_linkdown(struct hif_softc *scn, bool flag)
 {
-	HIF_DBG("wlan: %s pcie power collapse ignored",
+	hif_debug("wlan: %s pcie power collapse ignored",
 			(flag ? "disable" : "enable"));
 }
 
@@ -87,7 +78,7 @@ int hif_dummy_bus_resume(struct hif_softc *hif_ctx)
  * hif_dummy_suspend_noirq() - suspend the bus
  * @hif_ctx: hif context
  *
- * dummy for busses that don't need to syncronize
+ * dummy for busses that don't need to synchronize
  * with interrupt disable.
  *
  * Return: 0 for success and non-zero for failure
@@ -101,7 +92,7 @@ int hif_dummy_bus_suspend_noirq(struct hif_softc *hif_ctx)
  * hif_dummy_resume_noirq() - resume the bus
  * @hif_ctx: hif context
  *
- * dummy for busses that don't need to syncronize
+ * dummy for busses that don't need to synchronize
  * with interrupt disable.
  *
  * Return: 0 for success and non-zero for failure
@@ -163,7 +154,7 @@ void hif_dummy_nointrs(struct hif_softc *hif_sc)
  * hif_dummy_bus_configure - dummy call
  * hif_ctx: hif context
  *
- * Return: 0 for sucess
+ * Return: 0 for success
  */
 int hif_dummy_bus_configure(struct hif_softc *hif_sc)
 {
@@ -177,13 +168,13 @@ int hif_dummy_bus_configure(struct hif_softc *hif_sc)
  * @config: configuration value to set
  * @config_len: configuration length
  *
- * Return: 0 for sucess
+ * Return: QDF_STATUS_SUCCESS for success
  */
 QDF_STATUS
 hif_dummy_get_config_item(struct hif_softc *hif_sc,
 		     int opcode, void *config, uint32_t config_len)
 {
-	return 0;
+	return QDF_STATUS_SUCCESS;
 }
 
 /**
@@ -272,6 +263,16 @@ int hif_dummy_grp_irq_configure(struct hif_softc *hif_sc,
 }
 
 /**
+ * hif_dummy_grp_irq_deconfigure - dummy call
+ * hif_sc: hif context
+ *
+ * Return: none
+ */
+void hif_dummy_grp_irq_deconfigure(struct hif_softc *hif_sc)
+{
+}
+
+/**
  * hif_dummy_dump_registers - dummy call
  * hif_sc: hif context
  *
@@ -296,17 +297,29 @@ void hif_dummy_dump_target_memory(struct hif_softc *hif_sc, void *ramdump_base,
 {
 }
 
+uint32_t hif_dummy_bus_reg_read32(struct hif_softc *hif_sc,
+				  uint32_t offset)
+{
+	return 0;
+}
+
+void hif_dummy_bus_reg_write32(struct hif_softc *hif_sc,
+			       uint32_t offset,
+			       uint32_t value)
+{
+}
+
 /**
  * hif_dummy_ipa_get_ce_resource - dummy call
  * @scn: HIF context
- * @sr_base_paddr: source base address
+ * @ce_sr: copyengine source ring resource info
  * @sr_ring_size: source ring size
  * @reg_paddr: bus physical address
  *
  * Return: None
  */
 void hif_dummy_ipa_get_ce_resource(struct hif_softc *hif_sc,
-				   qdf_dma_addr_t *sr_base_paddr,
+				   qdf_shared_mem_t **ce_sr,
 				   uint32_t *sr_ring_size,
 				   qdf_dma_addr_t *reg_paddr)
 {
@@ -366,9 +379,80 @@ int hif_dummy_bus_reset_resume(struct hif_softc *hif_ctx)
 
 int hif_dummy_map_ce_to_irq(struct hif_softc *scn, int ce_id)
 {
-	HIF_ERROR("%s: hif_map_ce_to_irq is not implemented on this platform",
-		  __func__);
+	hif_err("hif_map_ce_to_irq is not implemented on this platform");
 	QDF_BUG(0);
 	return -(1);
 }
 
+int hif_dummy_addr_in_boundary(struct hif_softc *scn, uint32_t offset)
+{
+	return 0;
+}
+
+/**
+ * hif_dummy_config_irq_affinity - dummy call
+ * @scn: hif context
+ *
+ * Return: None
+ */
+void hif_dummy_config_irq_affinity(struct hif_softc *scn)
+{
+}
+
+/**
+ * hif_dummy_config_irq_by_ceid - dummy call
+ * @scn: hif context
+ * @ce_id : copy engine id
+ * Return: 0
+ */
+int hif_dummy_config_irq_by_ceid(struct hif_softc *scn, int ce_id)
+{
+	return 0;
+}
+
+/**
+ * hif_config_irq_clear_affinity() - dummy call
+ * @scn: HIF handle
+ * @intr_ctxt_id: interrupt group index
+ * @cpu: CPU core to clear
+ *
+ * Return: None
+ */
+void hif_dummy_config_irq_clear_cpu_affinity(struct hif_softc *scn,
+					     int intr_ctxt_id, int cpu)
+{
+}
+
+/**
+ * hif_dummy_log_bus_info - dummy call
+ * @scn: hif context
+ * @data: hang event data buffer
+ * @offset: offset at which data needs to be written
+ *
+ * Return: bool
+ */
+bool hif_dummy_log_bus_info(struct hif_softc *scn, uint8_t *data,
+			    unsigned int *offset)
+{
+	return false;
+}
+
+/**
+ * hif_dummy_enable_grp_irqs - dummy call
+ * @scn: hif context
+ * Return: EOPNOTSUPP
+ */
+int hif_dummy_enable_grp_irqs(struct hif_softc *scn)
+{
+	return -EOPNOTSUPP;
+}
+
+/**
+ * hif_dummy_disable_grp_irqs - dummy call
+ * @scn: hif context
+ * Return: EOPNOTSUPP
+ */
+int hif_dummy_disable_grp_irqs(struct hif_softc *scn)
+{
+	return -EOPNOTSUPP;
+}

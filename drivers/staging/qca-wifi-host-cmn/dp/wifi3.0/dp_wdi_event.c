@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017 The Linux Foundation. All rights reserved.
+ * Copyright (c) 2017-2021 The Linux Foundation. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -19,10 +19,13 @@
 
 #include "dp_internal.h"
 #include "qdf_mem.h"   /* qdf_mem_malloc,free */
+#ifdef WIFI_MONITOR_SUPPORT
+#include "dp_htt.h"
+#include <dp_mon.h>
+#endif
+#include <qdf_module.h>
 
-#if defined(CONFIG_WIN) && WDI_EVENT_ENABLE
-
-
+#ifdef WDI_EVENT_ENABLE
 /*
  * dp_wdi_event_next_sub() - Return handle for Next WDI event
  * @wdi_sub: WDI Event handle
@@ -36,7 +39,7 @@ dp_wdi_event_next_sub(wdi_event_subscribe *wdi_sub)
 {
 	if (!wdi_sub) {
 		QDF_TRACE(QDF_MODULE_ID_DP, QDF_TRACE_LEVEL_ERROR,
-			"Invalid subscriber in %s\n", __func__);
+			"Invalid subscriber in %s", __func__);
 		return NULL;
 	}
 	return wdi_sub->priv.next;
@@ -60,7 +63,7 @@ dp_wdi_event_del_subs(wdi_event_subscribe *wdi_sub, int event_index)
 
 /*
  * dp_wdi_event_iter_sub() - Iterate through all WDI event in the list
- * and pass WDI event to callback funtion
+ * and pass WDI event to callback function
  * @pdev: DP pdev handle
  * @event_index: Event index in list
  * @wdi_event: WDI event handle
@@ -107,7 +110,7 @@ dp_wdi_event_iter_sub(
 void
 dp_wdi_event_handler(
 	enum WDI_EVENT event,
-	void *soc,
+	struct dp_soc *soc,
 	void *data,
 	uint16_t peer_id,
 	int status, uint8_t pdev_id)
@@ -116,16 +119,16 @@ dp_wdi_event_handler(
 	wdi_event_subscribe *wdi_sub;
 	struct dp_pdev *txrx_pdev;
 	struct dp_soc *soc_t = (struct dp_soc *)soc;
-	txrx_pdev = (struct dp_pdev *)soc_t->pdev_list[pdev_id];
+	txrx_pdev = dp_get_pdev_for_mac_id(soc_t, pdev_id);
 
 	if (!event) {
 		QDF_TRACE(QDF_MODULE_ID_DP, QDF_TRACE_LEVEL_ERROR,
-			"Invalid WDI event in %s\n", __func__);
+			"Invalid WDI event in %s", __func__);
 		return;
 	}
-	if (!txrx_pdev) {
+	if (!txrx_pdev || txrx_pdev->pdev_deinit) {
 		QDF_TRACE(QDF_MODULE_ID_DP, QDF_TRACE_LEVEL_ERROR,
-			"Invalid pdev in WDI event handler\n");
+			"Invalid pdev in WDI event handler");
 		return;
 	}
 
@@ -134,11 +137,8 @@ dp_wdi_event_handler(
 	 *  Subscribers must do the sanity based on the requirements
 	 */
 	event_index = event - WDI_EVENT_BASE;
-	if (!(txrx_pdev->wdi_event_list[event_index]) &&
-		(event == WDI_EVENT_RX_DESC)) {
-		/* WDI_EVEN_RX_DESC is indicated for RX_LITE also */
-		event_index = WDI_EVENT_LITE_RX - WDI_EVENT_BASE;
-	}
+
+	DP_STATS_INC(txrx_pdev, wdi_event[event_index], 1);
 	wdi_sub = txrx_pdev->wdi_event_list[event_index];
 
 	/* Find the subscriber */
@@ -146,10 +146,12 @@ dp_wdi_event_handler(
 			peer_id, status);
 }
 
+qdf_export_symbol(dp_wdi_event_handler);
 
 /*
  * dp_wdi_event_sub() - Subscribe WDI event
- * @txrx_pdev_handle: cdp_pdev handle
+ * @soc: soc handle
+ * @pdev_id: id of pdev
  * @event_cb_sub_handle: subcribe evnet handle
  * @event: Event to be subscribe
  *
@@ -157,13 +159,16 @@ dp_wdi_event_handler(
  */
 int
 dp_wdi_event_sub(
-	struct cdp_pdev *txrx_pdev_handle,
-	void *event_cb_sub_handle,
+	struct cdp_soc_t *soc, uint8_t pdev_id,
+	wdi_event_subscribe *event_cb_sub_handle,
 	uint32_t event)
 {
 	uint32_t event_index;
 	wdi_event_subscribe *wdi_sub;
-	struct dp_pdev *txrx_pdev = (struct dp_pdev *)txrx_pdev_handle;
+	wdi_event_subscribe *wdi_sub_itr;
+	struct dp_pdev *txrx_pdev =
+		dp_get_pdev_from_soc_pdev_id_wifi3((struct dp_soc *)soc,
+						   pdev_id);
 	wdi_event_subscribe *event_cb_sub =
 		(wdi_event_subscribe *) event_cb_sub_handle;
 
@@ -182,7 +187,8 @@ dp_wdi_event_sub(
 			"Invalid event in %s", __func__);
 		return -EINVAL;
 	}
-	dp_set_pktlog_wifi3(txrx_pdev, event, true);
+
+	dp_monitor_set_pktlog_wifi3(txrx_pdev, event, true);
 	event_index = event - WDI_EVENT_BASE;
 	wdi_sub = txrx_pdev->wdi_event_list[event_index];
 
@@ -196,6 +202,17 @@ dp_wdi_event_sub(
 		txrx_pdev->wdi_event_list[event_index] = wdi_sub;
 		return 0;
 	}
+
+	/* Check if event is already subscribed */
+	wdi_sub_itr = wdi_sub;
+	do {
+		if (wdi_sub_itr == event_cb_sub) {
+			QDF_TRACE(QDF_MODULE_ID_DP, QDF_TRACE_LEVEL_INFO,
+				  "Duplicate wdi subscribe event detected %s", __func__);
+			return 0;
+		}
+	} while ((wdi_sub_itr = dp_wdi_event_next_sub(wdi_sub_itr)));
+
 	event_cb_sub->priv.next = wdi_sub;
 	event_cb_sub->priv.prev = NULL;
 	wdi_sub->priv.prev = event_cb_sub;
@@ -206,7 +223,8 @@ dp_wdi_event_sub(
 
 /*
  * dp_wdi_event_unsub() - WDI event unsubscribe
- * @txrx_pdev_handle: cdp_pdev handle
+ * @soc: soc handle
+ * @pdev_id: id of pdev
  * @event_cb_sub_handle: subscribed event handle
  * @event: Event to be unsubscribe
  *
@@ -215,22 +233,24 @@ dp_wdi_event_sub(
  */
 int
 dp_wdi_event_unsub(
-	struct cdp_pdev *txrx_pdev_handle,
-	void *event_cb_sub_handle,
+	struct cdp_soc_t *soc, uint8_t pdev_id,
+	wdi_event_subscribe *event_cb_sub_handle,
 	uint32_t event)
 {
 	uint32_t event_index = event - WDI_EVENT_BASE;
-	struct dp_pdev *txrx_pdev = (struct dp_pdev *)txrx_pdev_handle;
+	struct dp_pdev *txrx_pdev =
+		dp_get_pdev_from_soc_pdev_id_wifi3((struct dp_soc *)soc,
+						   pdev_id);
 	wdi_event_subscribe *event_cb_sub =
 		(wdi_event_subscribe *) event_cb_sub_handle;
 
-	if (!event_cb_sub) {
+	if (!txrx_pdev || !event_cb_sub) {
 		QDF_TRACE(QDF_MODULE_ID_DP, QDF_TRACE_LEVEL_ERROR,
-			"Invalid callback in %s", __func__);
+			"Invalid callback or pdev in %s", __func__);
 		return -EINVAL;
 	}
 
-	dp_set_pktlog_wifi3(txrx_pdev, event, false);
+	dp_monitor_set_pktlog_wifi3(txrx_pdev, event, false);
 
 	if (!event_cb_sub->priv.prev) {
 		txrx_pdev->wdi_event_list[event_index] = event_cb_sub->priv.next;
@@ -240,6 +260,10 @@ dp_wdi_event_unsub(
 	if (event_cb_sub->priv.next) {
 		event_cb_sub->priv.next->priv.prev = event_cb_sub->priv.prev;
 	}
+
+	/* Reset susbscribe event list elems */
+	event_cb_sub->priv.next = NULL;
+	event_cb_sub->priv.prev = NULL;
 
 	return 0;
 }
@@ -256,7 +280,7 @@ dp_wdi_event_attach(struct dp_pdev *txrx_pdev)
 {
 	if (!txrx_pdev) {
 		QDF_TRACE(QDF_MODULE_ID_DP, QDF_TRACE_LEVEL_ERROR,
-			"Invalid device in %s\nWDI event attach failed\n",
+			"Invalid device in %s\nWDI event attach failed",
 			__func__);
 		return -EINVAL;
 	}
@@ -266,7 +290,7 @@ dp_wdi_event_attach(struct dp_pdev *txrx_pdev)
 			sizeof(wdi_event_subscribe *) * WDI_NUM_EVENTS);
 	if (!txrx_pdev->wdi_event_list) {
 		QDF_TRACE(QDF_MODULE_ID_DP, QDF_TRACE_LEVEL_ERROR,
-			"Insufficient memory for the WDI event lists\n");
+			"Insufficient memory for the WDI event lists");
 		return -EINVAL;
 	}
 	return 0;
@@ -297,9 +321,7 @@ dp_wdi_event_detach(struct dp_pdev *txrx_pdev)
 		/* Delete all the subscribers */
 		dp_wdi_event_del_subs(wdi_sub, i);
 	}
-	if (txrx_pdev->wdi_event_list) {
-		qdf_mem_free(txrx_pdev->wdi_event_list);
-	}
+	qdf_mem_free(txrx_pdev->wdi_event_list);
 	return 0;
 }
 #endif /* CONFIG_WIN */

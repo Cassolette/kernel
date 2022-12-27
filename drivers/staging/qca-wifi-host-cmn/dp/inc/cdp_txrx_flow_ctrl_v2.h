@@ -1,8 +1,5 @@
 /*
- * Copyright (c) 2016-2017 The Linux Foundation. All rights reserved.
- *
- * Previously licensed under the ISC license by Qualcomm Atheros, Inc.
- *
+ * Copyright (c) 2016-2019,2021 The Linux Foundation. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -19,11 +16,6 @@
  * PERFORMANCE OF THIS SOFTWARE.
  */
 
-/*
- * This file was originally distributed by Qualcomm Atheros, Inc.
- * under proprietary terms before Copyright ownership was assigned
- * to the Linux Foundation.
- */
 /**
  * @file cdp_txrx_flow_ctrl_v2.h
  * @brief Define the host data path flow control version 2 API
@@ -32,6 +24,7 @@
 #ifndef _CDP_TXRX_FC_V2_H_
 #define _CDP_TXRX_FC_V2_H_
 #include <cdp_txrx_ops.h>
+#include <cdp_txrx_cmn.h>
 
 /**
  * cdp_register_pause_cb() - Register flow control callback function pointer
@@ -46,16 +39,18 @@ static inline QDF_STATUS
 cdp_register_pause_cb(ol_txrx_soc_handle soc,
 		tx_pause_callback pause_cb)
 {
-	if (!soc || !soc->ops || !soc->ops->flowctl_ops) {
-		QDF_TRACE(QDF_MODULE_ID_DP, QDF_TRACE_LEVEL_FATAL,
-			"%s invalid instance", __func__);
+	if (!soc || !soc->ops) {
+		dp_cdp_debug("invalid instance");
+		QDF_BUG(0);
 		return QDF_STATUS_E_INVAL;
 	}
 
-	if (soc->ops->flowctl_ops->register_pause_cb)
-		return soc->ops->flowctl_ops->register_pause_cb(soc, pause_cb);
+	if (!soc->ops->flowctl_ops ||
+	    !soc->ops->flowctl_ops->register_pause_cb)
+		return QDF_STATUS_SUCCESS;
 
-	return QDF_STATUS_SUCCESS;
+	return soc->ops->flowctl_ops->register_pause_cb(soc, pause_cb);
+
 }
 
 /**
@@ -71,17 +66,18 @@ static inline void
 cdp_set_desc_global_pool_size(ol_txrx_soc_handle soc,
 		uint32_t num_msdu_desc)
 {
-	if (!soc || !soc->ops || !soc->ops->flowctl_ops) {
-		QDF_TRACE(QDF_MODULE_ID_DP, QDF_TRACE_LEVEL_FATAL,
-			"%s invalid instance", __func__);
+	if (!soc || !soc->ops) {
+		dp_cdp_debug("invalid instance");
+		QDF_BUG(0);
 		return;
 	}
 
-	if (soc->ops->flowctl_ops->set_desc_global_pool_size)
-		return soc->ops->flowctl_ops->set_desc_global_pool_size(
-			num_msdu_desc);
+	if (!soc->ops->flowctl_ops ||
+	    !soc->ops->flowctl_ops->set_desc_global_pool_size)
+		return;
 
-	return;
+	soc->ops->flowctl_ops->set_desc_global_pool_size(
+			num_msdu_desc);
 }
 
 /**
@@ -95,19 +91,39 @@ cdp_set_desc_global_pool_size(ol_txrx_soc_handle soc,
 static inline void
 cdp_dump_flow_pool_info(struct cdp_soc_t *soc)
 {
-	void *dp_soc = (void *)soc;
-
-	if (!soc || !soc->ops || !soc->ops->flowctl_ops) {
-		QDF_TRACE(QDF_MODULE_ID_DP, QDF_TRACE_LEVEL_FATAL,
-			"%s invalid instance", __func__);
+	if (!soc || !soc->ops) {
+		dp_cdp_debug("invalid instance");
+		QDF_BUG(0);
 		return;
 	}
 
+	if (!soc->ops->flowctl_ops ||
+	    !soc->ops->flowctl_ops->dump_flow_pool_info)
+		return;
 
-	if (soc->ops->flowctl_ops->dump_flow_pool_info)
-		return soc->ops->flowctl_ops->dump_flow_pool_info(dp_soc);
-
-	return;
+	soc->ops->flowctl_ops->dump_flow_pool_info(soc);
 }
 
+/**
+ * cdp_tx_desc_thresh_reached() - Check if avail tx desc meet threshold
+ * @soc: data path soc handle
+ * @vdev_id: vdev_id corresponding to vdev start
+ *
+ * Return: true if threshold is met, false if not
+ */
+static inline bool
+cdp_tx_desc_thresh_reached(struct cdp_soc_t *soc, uint8_t vdev_id)
+{
+	if (!soc || !soc->ops) {
+		dp_cdp_debug("invalid instance");
+		QDF_BUG(0);
+		return false;
+	}
+
+	if (!soc->ops->flowctl_ops ||
+	    !soc->ops->flowctl_ops->tx_desc_thresh_reached)
+		return false;
+
+	return soc->ops->flowctl_ops->tx_desc_thresh_reached(soc, vdev_id);
+}
 #endif /* _CDP_TXRX_FC_V2_H_ */

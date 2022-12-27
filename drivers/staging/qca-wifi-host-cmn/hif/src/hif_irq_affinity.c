@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015-2017 The Linux Foundation. All rights reserved.
+ * Copyright (c) 2015-2021 The Linux Foundation. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -31,15 +31,12 @@
 #include <linux/cpu.h>
 #include <linux/topology.h>
 #include <linux/interrupt.h>
-#include <linux/irq.h>
-#ifdef CONFIG_SCHED_CORE_CTL
-#include <linux/sched/core_ctl.h>
-#endif
 #include <linux/pm.h>
 #include <hif_napi.h>
 #include <hif_irq_affinity.h>
 #include <hif_exec.h>
 #include <hif_main.h>
+#include "qdf_irq.h"
 
 #if defined(FEATURE_NAPI_DEBUG) && defined(HIF_IRQ_AFFINITY)
 /*
@@ -192,6 +189,8 @@ int hif_exec_event(struct hif_opaque_softc *hif_ctx, enum qca_napi_event event,
 	}
 	case NAPI_EVT_USR_NORMAL: {
 		NAPI_DEBUG("%s: User forced DE-SERIALIZATION", __func__);
+		if (!napid->user_cpu_affin_mask)
+			blacklist_pending = BLACKLIST_OFF_PENDING;
 		/*
 		 * Deserialization timeout is handled at hdd layer;
 		 * just mark current mode to uninitialized to ensure
@@ -201,8 +200,8 @@ int hif_exec_event(struct hif_opaque_softc *hif_ctx, enum qca_napi_event event,
 		break;
 	}
 	default: {
-		HIF_ERROR("%s: unknown event: %d (data=0x%0lx)",
-			  __func__, event, (unsigned long) data);
+		hif_err("Unknown event: %d (data=0x%0lx)",
+			event, (unsigned long) data);
 		break;
 	} /* default */
 	}; /* switch */
@@ -226,61 +225,8 @@ int hif_exec_event(struct hif_opaque_softc *hif_ctx, enum qca_napi_event event,
 	NAPI_DEBUG("<--[rc=%d]", rc);
 	return rc;
 }
+
 #endif
-
-/**
- * hif_napi_correct_cpu() - correct the interrupt affinity for napi if needed
- * @napi_info: pointer to qca_napi_info for the napi instance
- *
- * Return: true  => interrupt already on correct cpu, no correction needed
- *         false => interrupt on wrong cpu, correction done for cpu affinity
- *                   of the interrupt
- */
-static inline
-bool hif_exec_correct_cpu(struct hif_exec_context *exec_ctx)
-{
-	bool right_cpu = true;
-	int rc = 0;
-	cpumask_t cpumask;
-	int cpu;
-	struct hif_softc *hif_softc = HIF_GET_SOFTC(exec_ctx->hif);
-	struct qca_napi_data *napid;
-	int ind;
-
-	napid = &hif_softc->napi_data;
-
-	if (!(napid->flags & QCA_NAPI_FEATURE_CPU_CORRECTION))
-		goto done;
-
-	cpu = qdf_get_cpu();
-	if (likely((cpu == exec_ctx->cpu) ||
-		    hif_exec_cpu_blacklist(napid, BLACKLIST_QUERY) == 0))
-		goto done;
-
-	right_cpu = false;
-
-	NAPI_DEBUG("interrupt on wrong CPU, correcting");
-	cpumask.bits[0] = (0x01 << exec_ctx->cpu);
-
-	for (ind = 0; ind < exec_ctx->numirq; ind++) {
-		if (exec_ctx->os_irq[ind]) {
-			irq_modify_status(exec_ctx->os_irq[ind],
-					  IRQ_NO_BALANCING, 0);
-			rc = irq_set_affinity_hint(exec_ctx->os_irq[ind],
-						   &cpumask);
-			irq_modify_status(exec_ctx->os_irq[ind], 0,
-					  IRQ_NO_BALANCING);
-
-			if (rc)
-				HIF_ERROR("error setting irq affinity hint: %d",
-					  rc);
-			else
-				exec_ctx->stats[cpu].cpu_corrected++;
-		}
-	}
-done:
-	return right_cpu;
-}
 
 /**
  * hncm_migrate_to() - migrates a NAPI to a CPU
@@ -299,25 +245,26 @@ static int hncm_exec_migrate_to(struct qca_napi_data *napid, uint8_t ctx_id,
 				int didx)
 {
 	struct hif_exec_context *exec_ctx;
+	struct qdf_cpu_mask *cpumask;
 	int rc = 0;
 	int status = 0;
 	int ind;
-	cpumask_t cpumask;
 
+	NAPI_DEBUG("-->%s(napi_cd=%d, didx=%d)", __func__, ctx_id, didx);
 
-	NAPI_DEBUG("-->%s(napi_cd=%d, didx=%d)", __func__, napi_ce, didx);
-
-	cpumask.bits[0] = (1 << didx);
 	exec_ctx = hif_exec_get_ctx(&napid->hif_softc->osc, ctx_id);
-	if (exec_ctx == NULL)
+	if (!exec_ctx)
 		return -EINVAL;
+
+	exec_ctx->cpumask.bits[0] = (1 << didx);
 
 	for (ind = 0; ind < exec_ctx->numirq; ind++) {
 		if (exec_ctx->os_irq[ind]) {
-			irq_modify_status(exec_ctx->os_irq[ind],
-					  IRQ_NO_BALANCING, 0);
-			rc = irq_set_affinity_hint(exec_ctx->os_irq[ind],
-						   &cpumask);
+			qdf_dev_modify_irq_status(exec_ctx->os_irq[ind],
+						  QDF_IRQ_NO_BALANCING, 0);
+			cpumask = (struct qdf_cpu_mask *)&exec_ctx->cpumask;
+			rc = qdf_dev_set_irq_affinity(exec_ctx->os_irq[ind],
+						      cpumask);
 			if (rc)
 				status = rc;
 		}
@@ -454,8 +401,6 @@ int hif_exec_cpu_migrate(struct qca_napi_data *napid, int cpu, int action)
 				/* find a destination CPU */
 				dind = hncm_dest_cpu(napid, action);
 				if (dind >= 0) {
-					NAPI_DEBUG("Migrating NAPI ce%d to %d",
-						   i, dind);
 					rc = hncm_exec_migrate_to(napid, i,
 								  dind);
 				} else {
@@ -506,28 +451,17 @@ static inline void hif_exec_bl_irq(struct qca_napi_data *napid, bool bl_flag)
 
 		if (bl_flag == true)
 			for (j = 0; j < exec_ctx->numirq; j++)
-				irq_modify_status(exec_ctx->os_irq[j],
-						  0, IRQ_NO_BALANCING);
+				qdf_dev_modify_irq_status(exec_ctx->os_irq[j],
+							  0,
+							  QDF_IRQ_NO_BALANCING);
 		else
 			for (j = 0; j < exec_ctx->numirq; j++)
-				irq_modify_status(exec_ctx->os_irq[j],
-						  IRQ_NO_BALANCING, 0);
-		HIF_DBG("%s: bl_flag %d CE %d", __func__, bl_flag, i);
+				qdf_dev_modify_irq_status(exec_ctx->os_irq[j],
+							  QDF_IRQ_NO_BALANCING,
+							  0);
+		hif_debug("bl_flag %d CE %d", bl_flag, i);
 	}
 }
-
-#ifdef CONFIG_SCHED_CORE_CTL
-/* Enable this API only if kernel feature - CONFIG_SCHED_CORE_CTL is defined */
-static inline int hif_napi_core_ctl_set_boost(bool boost)
-{
-	return core_ctl_set_boost(boost);
-}
-#else
-static inline int hif_napi_core_ctl_set_boost(bool boost)
-{
-	return 0;
-}
-#endif
 
 /**
  * hif_napi_cpu_blacklist() - en(dis)ables blacklisting for NAPI RX interrupts.

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011-2012, 2016-2017 The Linux Foundation. All rights reserved.
+ * Copyright (c) 2011-2012, 2016-2018 The Linux Foundation. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for any
  * purpose with or without fee is hereby granted, provided that the above
@@ -42,38 +42,6 @@ enum {
 };
 
 /**
- * struct wlan_dfs_caps - DFS capability structure.
- * @wlan_dfs_ext_chan_ok:          Can radar be detected on the extension chan?
- * @wlan_dfs_combined_rssi_ok:     Can use combined radar RSSI?
- * @wlan_dfs_use_enhancement:      This flag is used to indicate if radar
- *                                detection scheme should use enhanced chirping
- *                                detection algorithm. This flag also determines
- *                                if certain radar data should be discarded to
- *                                minimize false detection of radar.
- * @wlan_strong_signal_diversiry:  Strong Signal fast diversity count.
- * @wlan_chip_is_bb_tlv:           Chip is BB TLV?
- * @wlan_chip_is_over_sampled:     Is Over sampled.
- * @wlan_chip_is_ht160:            IS VHT160?
- * @wlan_chip_is_false_detect:     Is False detected?
- * @wlan_fastdiv_val:              Goes with wlan_strong_signal_diversiry: If we
- *                                have fast diversity capability, read off
- *                                Strong Signal fast diversity count set in the
- *                                ini file, and store so we can restore the
- *                                value when radar is disabled.
- */
-struct wlan_dfs_caps {
-	uint32_t wlan_dfs_ext_chan_ok:1,
-			 wlan_dfs_combined_rssi_ok:1,
-			 wlan_dfs_use_enhancement:1,
-			 wlan_strong_signal_diversiry:1,
-			 wlan_chip_is_bb_tlv:1,
-			 wlan_chip_is_over_sampled:1,
-			 wlan_chip_is_ht160:1,
-			 wlan_chip_is_false_detect:1;
-	uint32_t wlan_fastdiv_val;
-};
-
-/**
  * struct dfs_pulse - DFS pulses.
  * @rp_numpulses:         Num of pulses in radar burst.
  * @rp_pulsedur:          Duration of each pulse in usecs.
@@ -93,6 +61,16 @@ struct wlan_dfs_caps {
  *                        rssi 3dBm. lower than in non TURBO mode. This
  *                        will be used to offset that diff.
  * @rp_ignore_pri_window: Ignore PRI window.
+ * @rp_sidx_spread:       To reduce false detection use sidx spread. For HT160,
+ *                        for consistency, push all pulses at center of the
+ *                        channel to 80MHz ext when both segments are DFS.
+ *                        Maximum SIDX value spread in a matched sequence
+ *                        excluding FCC Bin 5.
+ * @rp_check_delta_peak:  This is mainly used for ETSI Type 4 5MHz chirp pulses
+ *                        which HW cnanot identify.
+ *                        Reliably as chirping but can correctly characterize
+ *                        these with delta_peak non-zero.
+ *                        Is delta_peak check required for this filter.
  * @rp_pulseid:           Unique ID for identifying filter.
  */
 struct dfs_pulse {
@@ -109,7 +87,9 @@ struct dfs_pulse {
 	uint32_t  rp_meanoffset;
 	int32_t   rp_rssimargin;
 	uint32_t  rp_ignore_pri_window;
-	uint32_t  rp_pulseid;
+	uint16_t  rp_sidx_spread;
+	int8_t    rp_check_delta_peak;
+	uint16_t  rp_pulseid;
 };
 
 /**
@@ -128,51 +108,6 @@ struct dfs_bin5pulse {
 	uint32_t  b5_timewindow;
 	uint32_t  b5_rssithresh;
 	uint32_t  b5_rssimargin;
-};
-
-/**
- * struct dfs_nol_chan_entry - DFS NOL representation.
- * @nol_chfreq:      Centre frequency, MHz .
- * @nol_chwidth:     Width, MHz.
- * @nol_start_ticks: Start ticks, OS specific.
- * @nol_timeout_ms:  Timeout, ms
- */
-struct dfs_nol_chan_entry {
-	uint32_t      nol_chfreq;
-	uint32_t      nol_chwidth;
-	unsigned long nol_start_ticks;
-	uint32_t      nol_timeout_ms;
-};
-
-/**
- * struct wlan_dfs_phyerr_param - DFS Phyerr structure.
- * @pe_firpwr:     FIR pwr out threshold.
- * @pe_rrssi:      Radar rssi thresh.
- * @pe_height:     Pulse height thresh.
- * @pe_prssi:      Pulse rssi thresh.
- * @pe_inband:     Inband thresh.
- * @pe_relpwr:     Relative power threshold in 0.5dB steps.
- * @pe_relstep:    Pulse Relative step threshold in 0.5dB steps.
- * @pe_maxlen:     Max length of radar sign in 0.8us units.
- * @pe_usefir128:  Use the average in-band power measured over 128 cycles.
- * @pe_blockradar: Enable to block radar check if pkt detect is done via OFDM
- *                 weak signal detect or pkt is detected immediately after tx
- *                 to rx transition.
- * @pe_enmaxrssi:  Enable to use the max rssi instead of the last rssi during
- *                 fine gain changes for radar detection.
- */
-struct wlan_dfs_phyerr_param {
-	int32_t    pe_firpwr;
-	int32_t    pe_rrssi;
-	int32_t    pe_height;
-	int32_t    pe_prssi;
-	int32_t    pe_inband;
-	uint32_t   pe_relpwr;
-	uint32_t   pe_relstep;
-	uint32_t   pe_maxlen;
-	bool       pe_usefir128;
-	bool       pe_blockradar;
-	bool       pe_enmaxrssi;
 };
 
 /**

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017 The Linux Foundation. All rights reserved.
+ * Copyright (c) 2017-2019 The Linux Foundation. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -29,8 +29,8 @@ QDF_STATUS wlan_scan_psoc_created_notification(struct wlan_objmgr_psoc *psoc,
 	struct wlan_scan_obj *scan_obj;
 	QDF_STATUS status = QDF_STATUS_SUCCESS;
 
-	scan_obj = qdf_mem_malloc(sizeof(struct wlan_scan_obj));
-	if (scan_obj == NULL) {
+	scan_obj = qdf_mem_malloc_atomic(sizeof(struct wlan_scan_obj));
+	if (!scan_obj) {
 		scm_err("Failed to allocate memory");
 		return QDF_STATUS_E_NOMEM;
 	}
@@ -42,7 +42,7 @@ QDF_STATUS wlan_scan_psoc_created_notification(struct wlan_objmgr_psoc *psoc,
 	if (QDF_IS_STATUS_ERROR(status))
 		scm_err("Failed to attach psoc scan component");
 	else
-		scm_info("Scan object attach to psoc successful");
+		scm_debug("Scan object attach to psoc successful");
 
 	return status;
 }
@@ -78,8 +78,8 @@ QDF_STATUS wlan_scan_vdev_created_notification(struct wlan_objmgr_vdev *vdev,
 	struct scan_vdev_obj *scan_vdev_obj;
 	QDF_STATUS status = QDF_STATUS_SUCCESS;
 
-	scan_vdev_obj = qdf_mem_malloc(sizeof(struct scan_vdev_obj));
-	if (scan_vdev_obj == NULL) {
+	scan_vdev_obj = qdf_mem_malloc_atomic(sizeof(struct scan_vdev_obj));
+	if (!scan_vdev_obj) {
 		scm_err("Failed to allocate memory");
 		return QDF_STATUS_E_NOMEM;
 	}
@@ -92,7 +92,7 @@ QDF_STATUS wlan_scan_vdev_created_notification(struct wlan_objmgr_vdev *vdev,
 		scm_err("Failed to attach vdev scan component");
 		qdf_mem_free(scan_vdev_obj);
 	} else {
-		scm_info("vdev scan object attach successful");
+		scm_debug("vdev scan object attach successful");
 	}
 
 	return status;

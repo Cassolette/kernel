@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2016-2017 The Linux Foundation. All rights reserved.
+ * Copyright (c) 2016-2018,2020 The Linux Foundation. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -28,6 +28,26 @@
 #include <wlan_objmgr_cmn.h>
 #include <wlan_objmgr_psoc_obj.h>
 #include <wlan_objmgr_global_obj.h>
+
+/**
+ * struct dispatcher_spectral_ops - Spectral ops table
+ * @spectral_pdev_open_handler: Spectral pdev open handler
+ * @spectral_psoc_open_handler: Spectral psoc open handler
+ * @spectral_psoc_close_handler: Spectral psoc close handler
+ * @spectral_psoc_enable_handler: Spectral psoc enable handler
+ * @spectral_psoc_disable_handler: Spectral psoc disable handler
+ */
+struct dispatcher_spectral_ops {
+	QDF_STATUS(*spectral_pdev_open_handler)(struct wlan_objmgr_pdev *pdev);
+	QDF_STATUS(*spectral_psoc_open_handler)(
+					struct wlan_objmgr_psoc *psoc);
+	QDF_STATUS(*spectral_psoc_close_handler)(
+					struct wlan_objmgr_psoc *psoc);
+	QDF_STATUS(*spectral_psoc_enable_handler)(
+					struct wlan_objmgr_psoc *psoc);
+	QDF_STATUS(*spectral_psoc_disable_handler)(
+					struct wlan_objmgr_psoc *psoc);
+};
 
 /**
  * dispatcher_init(): API to init all new components
@@ -60,6 +80,26 @@ QDF_STATUS dispatcher_init(void);
  * Return: none
  */
 QDF_STATUS dispatcher_deinit(void);
+
+/**
+ * dispatcher_enable(): global (above psoc) level component start
+ *
+ * Prepare components to service requests. Must only be called after
+ * dispatcher_init().
+ *
+ * Return: QDF_STATUS
+ */
+QDF_STATUS dispatcher_enable(void);
+
+/**
+ * dispatcher_disable(): global (above psoc) level component stop
+ *
+ * Stop components from servicing requests. Must be called before
+ * scheduler_deinit().
+ *
+ * Return: QDF_STATUS
+ */
+QDF_STATUS dispatcher_disable(void);
 
 /**
  * dispatcher_psoc_open(): API to trigger PSOC open for all new components
@@ -135,4 +175,38 @@ QDF_STATUS dispatcher_psoc_enable(struct wlan_objmgr_psoc *psoc);
  */
 QDF_STATUS dispatcher_psoc_disable(struct wlan_objmgr_psoc *psoc);
 
+/**
+ * dispatcher_pdev_open(): API to trigger PDEV open for all new components
+ * @pdev: pdev context
+ *
+ * This API calls all new components PDEV OPEN APIs. This is invoked from
+ * during PDEV object is created.
+ *
+ * Return: none
+ */
+QDF_STATUS dispatcher_pdev_open(struct wlan_objmgr_pdev *pdev);
+
+/**
+ * dispatcher_pdev_close(): API to trigger PDEV close for all new components
+ * @pdev: pdev context
+ *
+ * This API calls all new components PDEV CLOSE APIs. This is invoked from
+ * during driver unload sequence.
+ *
+ * Return: none
+ */
+QDF_STATUS dispatcher_pdev_close(struct wlan_objmgr_pdev *pdev);
+
+/**
+ * dispatcher_register_spectral_ops_handler(): API to register spectral
+ * operations
+ * @sops: pointer to Spectral ops table
+ *
+ * This API registers spectral pdev open handler, psoc enable handler and
+ * psoc disable handler, psoc open handler and psoc close handler.
+ *
+ * Return: QDF_STATUS
+ */
+QDF_STATUS
+dispatcher_register_spectral_ops_handler(struct dispatcher_spectral_ops *sops);
 #endif /* End of  !defined(__DISPATCHER_INIT_H) */

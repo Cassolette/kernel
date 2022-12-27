@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017 The Linux Foundation. All rights reserved.
+ * Copyright (c) 2017-2021 The Linux Foundation. All rights reserved.
  *
  *
  * Permission to use, copy, modify, and/or distribute this software for
@@ -25,47 +25,31 @@
 #ifndef __REG_DB_H
 #define __REG_DB_H
 
-#define REGULATORY_CHAN_DISABLED     (1<<0)
-#define REGULATORY_CHAN_NO_IR        (1<<1)
-#define REGULATORY_CHAN_RADAR        (1<<3)
-#define REGULATORY_CHAN_NO_OFDM      (1<<6)
-#define REGULATORY_CHAN_INDOOR_ONLY  (1<<9)
-
-#define REGULATORY_CHAN_NO_HT40      (1<<4)
-#define REGULATORY_CHAN_NO_80MHZ     (1<<7)
-#define REGULATORY_CHAN_NO_160MHZ    (1<<8)
-#define REGULATORY_CHAN_NO_20MHZ     (1<<11)
-#define REGULATORY_CHAN_NO_10MHZ     (1<<12)
-
-#define REGULATORY_PHYMODE_NO11A     (1<<0)
-#define REGULATORY_PHYMODE_NO11B     (1<<1)
-#define REGULATORY_PHYMODE_NO11G     (1<<2)
-#define REGULATORY_CHAN_NO11N        (1<<3)
-#define REGULATORY_PHYMODE_NO11AC    (1<<4)
-#define REGULATORY_PHYMODE_NO11AX    (1<<5)
-
-#define MAX_REG_RULES 10
-#define REG_ALPHA2_LEN 2
-
-/**
- * enum dfs_reg - DFS region
- * @DFS_UNINIT_REG: un-initialized region
- * @DFS_FCC_REG: FCC region
- * @DFS_ETSI_REG: ETSI region
- * @DFS_MKK_REG: MKK region
- * @DFS_CN_REG: China region
- * @DFS_KR_REG: Korea region
- * @DFS_UNDEF_REG: Undefined region
+/*
+ * If COMPILE_REGDB_6G and CONFIG_BAND_6GHZ are defined, then
+ * reg_6ghz_super_dmn_id and max_bw_6g are part of the
+ * country_code_to_reg_domain table for a country
+ * entry. If COMPILE_REGDB_6G and CONFIG_BAND_6GHZ are not defined, then they
+ * are absent.
+ *
+ * COMPILE_REGDB_6G is not defined for the Partial offload platform.
+ *
+ * CE:- country entry
  */
-enum dfs_reg {
-	DFS_UNINIT_REG = 0,
-	DFS_FCC_REG = 1,
-	DFS_ETSI_REG = 2,
-	DFS_MKK_REG = 3,
-	DFS_CN_REG = 4,
-	DFS_KR_REG = 5,
-	DFS_UNDEF_REG
-};
+#if defined(CONFIG_BAND_6GHZ) && defined(COMPILE_REGDB_6G)
+#define CE(country_code, reg_dmn_pair_id, reg_6ghz_super_dmn_id,         \
+	   alpha2, max_bw_2g, max_bw_5g, max_bw_6g, phymode_bitmap)      \
+	{CTRY_ ## country_code, reg_dmn_pair_id, reg_6ghz_super_dmn_id,  \
+	 #alpha2, max_bw_2g, max_bw_5g, max_bw_6g, phymode_bitmap}
+#else
+#define CE(country_code, reg_dmn_pair_id, reg_6ghz_super_dmn_id, alpha2, \
+	   max_bw_2g, max_bw_5g, max_bw_6g, phymode_bitmap)              \
+	{CTRY_ ## country_code, reg_dmn_pair_id, #alpha2, max_bw_2g,     \
+	 max_bw_5g, phymode_bitmap}
+#endif
+
+/* Alpha2 code for world reg domain */
+#define REG_WORLD_ALPHA2 "00"
 
 /**
  * struct regulatory_rule
@@ -83,11 +67,32 @@ struct regulatory_rule {
 	uint16_t flags;
 };
 
+#if defined(CONFIG_BAND_6GHZ) && defined(COMPILE_REGDB_6G)
+/**
+ * struct regulatory_rule_ext
+ * @start_freq: start frequency in MHz
+ * @end_freq: end frequency in MHz
+ * @max_bw: maximum bandwidth in MHz
+ * @eirp_power: EIRP power in dBm
+ * @psd_power: Max PSD power in dBm per MHz
+ * @flags: regulatory flags
+ */
+struct regulatory_rule_ext {
+	uint16_t start_freq;
+	uint16_t end_freq;
+	uint16_t max_bw;
+	uint8_t eirp_power;
+	int8_t psd_power;
+	uint16_t flags;
+};
+#endif
+
 /**
  * struct regdomain
  * @ctl_val: CTL value
  * @dfs_region: dfs region
  * @min_bw: minimum bandwidth
+ * @max_bw: maximum bandwidth
  * @num_reg_rules: number of regulatory rules
  * @reg_rules_id: regulatory rule index
  */
@@ -95,28 +100,53 @@ struct regdomain   {
 	uint8_t ctl_val;
 	enum dfs_reg dfs_region;
 	uint16_t min_bw;
+	uint16_t max_bw;
 	uint8_t ant_gain;
 	uint8_t num_reg_rules;
 	uint8_t reg_rule_id[MAX_REG_RULES];
 };
 
+#if defined(CONFIG_BAND_6GHZ) && defined(COMPILE_REGDB_6G)
+#define REG_MAX_PSD (0x7F) /* 127=63.5 dBm/MHz */
+
+/**
+ * struct sub_6g_regdomain
+ * @min_bw: Minimum bandwidth in MHz
+ * @max_bw: Maximum bandwidth in MHz
+ * @num_reg_rules: number of regulatory rules
+ * @reg_rules_id: regulatory rule index
+ */
+struct sub_6g_regdomain   {
+	uint16_t min_bw;
+	uint16_t max_bw;
+	uint8_t num_reg_rules;
+	uint8_t sixg_reg_rule_id[MAX_REG_RULES];
+};
+#endif
+
 /**
  * struct country_code_to_reg_domain
  * @country_code: country code
  * @reg_dmn_pair_id: reg domainpair id
- * @alpha2: internal alpha2(unique)
- * @alpha2_11d: iso-3166 alpha2
- * @max_bw_2g: maximum 2g bandwidth
- * @max_bw_5g: maximum 5g bandwidth
+ * @reg_6ghz_super_dmn_id: 6GHz super domain id
+ * @alpha2: iso-3166 alpha2
+ * @max_bw_2g: maximum 2g bandwidth in MHz
+ * @max_bw_5g: maximum 5g bandwidth in MHz
+ * @max_bw_6g: maximum 6g bandwidth in MHz
  * @phymode_bitmap: phymodes not supported
  */
 struct country_code_to_reg_domain   {
 	uint16_t country_code;
 	uint16_t reg_dmn_pair_id;
+#if defined(CONFIG_BAND_6GHZ) && defined(COMPILE_REGDB_6G)
+	uint16_t reg_6ghz_super_dmn_id;
+#endif
 	uint8_t alpha2[REG_ALPHA2_LEN + 1];
-	uint8_t alpha2_11d[REG_ALPHA2_LEN + 1];
 	uint16_t max_bw_2g;
 	uint16_t max_bw_5g;
+#if defined(CONFIG_BAND_6GHZ) && defined(COMPILE_REGDB_6G)
+	uint16_t max_bw_6g;
+#endif
 	uint16_t phymode_bitmap;
 };
 
@@ -132,25 +162,47 @@ struct reg_domain_pair {
 	uint8_t dmn_id_2g;
 };
 
+#if defined(CONFIG_BAND_6GHZ)
 /**
- * enum ctl_value - CTL value
- * @CTL_FCC: CTL FCC
- * @CTL_MKK: CTL MKK
- * @CTL_ETSI: CTL ETSI
- * @CTL_KOR: CTL KOR
- * @CTL_CHN: CTL CHINA
- * @CTL_USER_DEF: CTL USER_DEF
- * @CTL_NONE: CTL NONE
+ * enum reg_super_domain_6g - 6G Super Domain enumeration
+ * @FCC1_6G_01: Super domain FCC1_6G_01 for US
+ * @ETSI1_6G_02: Super domain ETSI1_6G_02 for EU
+ * @ETSI2_6G_03: Super domain ETSI2_6G_03 for UK
+ * @APL1_6G_04: Super domain APL1_6G_04 for Korea
+ * @FCC1_6G_05: Super domain FCC1_6G_05 for Chile
+ * @APL2_6G_06: Super domain APL2_6G_06 for Guatemala
  */
-enum ctl_value {
-	CTL_FCC = 0x10,
-	CTL_ETSI = 0x30,
-	CTL_MKK = 0x40,
-	CTL_KOR = 0x50,
-	CTL_CHN = 0x60,
-	CTL_USER_DEF = 0x70,
-	CTL_NONE = 0xff
+enum reg_super_domain_6g {
+	FCC1_6G_01 = 0x01,
+	ETSI1_6G_02 = 0x02,
+	ETSI2_6G_03 = 0x03,
+	APL1_6G_04 = 0x04,
+	FCC1_6G_05 = 0x05,
+	APL2_6G_06 = 0x06,
 };
+
+#if defined(COMPILE_REGDB_6G)
+/**
+ * struct sixghz_super_to_subdomains
+ * @reg_6ghz_super_dmn_id: 6G super domain id.
+ * @reg_domain_6g_id_ap_lpi: 6G domain id for LPI AP.
+ * @reg_domain_6g_id_ap_sp: 6G domain id for SP AP.
+ * @reg_domain_6g_id_ap_vlp: 6G domain id for VLP AP.
+ * @reg_domain_6g_id_client_lpi: 6G domain id for clients of the LPI AP.
+ * @reg_domain_6g_id_client_sp: 6G domain id for clients of the SP AP.
+ * @reg_domain_6g_id_client_vlp: 6G domain id for clients of the VLP AP.
+ */
+struct sixghz_super_to_subdomains {
+	uint16_t reg_6ghz_super_dmn_id;
+	uint8_t reg_domain_6g_id_ap_lpi;
+	uint8_t reg_domain_6g_id_ap_sp;
+	uint8_t reg_domain_6g_id_ap_vlp;
+	uint8_t reg_domain_6g_id_client_lpi[REG_MAX_CLIENT_TYPE];
+	uint8_t reg_domain_6g_id_client_sp[REG_MAX_CLIENT_TYPE];
+	uint8_t reg_domain_6g_id_client_vlp[REG_MAX_CLIENT_TYPE];
+};
+#endif
+#endif
 
 QDF_STATUS reg_get_num_countries(int *num_countries);
 
@@ -158,4 +210,27 @@ QDF_STATUS reg_get_num_reg_dmn_pairs(int *num_reg_dmn);
 
 QDF_STATUS reg_get_default_country(uint16_t *default_country);
 
+/**
+ * reg_etsi13_regdmn () - Checks if the reg domain is ETSI13 or not
+ * @reg_dmn: reg domain
+ *
+ * Return: true or false
+ */
+bool reg_etsi13_regdmn(uint8_t reg_dmn);
+
+/**
+ * reg_fcc_regdmn () - Checks if the reg domain is FCC3/FCC8/FCC15/FCC16 or not
+ * @reg_dmn: reg domain
+ *
+ * Return: true or false
+ */
+bool reg_fcc_regdmn(uint8_t reg_dmn);
+
+/**
+ * reg_en302_502_regdmn() - Check if the reg domain is en302_502 applicable.
+ * @reg_dmn: Regulatory domain pair ID.
+ *
+ * Return: True if EN302_502 applicable, else false.
+ */
+bool reg_en302_502_regdmn(uint16_t reg_dmn);
 #endif

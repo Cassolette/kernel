@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013, 2016-2017 The Linux Foundation. All rights reserved.
+ * Copyright (c) 2013, 2016-2020 The Linux Foundation. All rights reserved.
  * Copyright (c) 2002-2010, Atheros Communications Inc.
  * Permission to use, copy, modify, and/or distribute this software for any
  * purpose with or without fee is hereby granted, provided that the above
@@ -20,20 +20,26 @@
 #include "../dfs.h"
 #include "wlan_dfs_lmac_api.h"
 
+#if defined(WLAN_DFS_PARTIAL_OFFLOAD)
 void dfs_print_delayline(struct wlan_dfs *dfs, struct dfs_delayline *dl)
 {
 	int i = 0, index;
 	struct dfs_delayelem *de;
 
-	index = dl->dl_lastelem;
+	index = dl->dl_firstelem;
 	for (i = 0; i < dl->dl_numelems; i++) {
 		de = &dl->dl_elems[index];
 		dfs_debug(dfs, WLAN_DEBUG_DFS2,
-			"Elem %d: ts = %u (0x%x) dur=%u",
-			i, de->de_time, de->de_time, de->de_dur);
-		index = (index - 1) & DFS_MAX_DL_MASK;
+				"Elem %u: ts=%llu diff_ts=%u (0x%x) dur=%u, seg_id=%d sidx=%d delta_peak=%d psidx_diff=%d seq_num=%d",
+				i, de->de_ts, de->de_time, de->de_time,
+				de->de_dur, de->de_seg_id, de->de_sidx,
+				de->de_delta_peak, de->de_psidx_diff,
+				de->de_seq_num);
+
+		index = (index + 1) & DFS_MAX_DL_MASK;
 	}
 }
+#endif
 
 void dfs_print_filter(struct wlan_dfs *dfs, struct dfs_filter *rf)
 {
@@ -57,7 +63,7 @@ static void dfs_print_filtertype(
 	struct dfs_filter *rf;
 
 	for (j = 0; j < ft->ft_numfilters; j++) {
-		rf = &(ft->ft_filters[j]);
+		rf = ft->ft_filters[j];
 		dfs_debug(dfs, WLAN_DEBUG_DFS2,
 				"filter[%d] filterID = %d rf_numpulses=%u; rf->rf_minpri=%u; rf->rf_maxpri=%u; rf->rf_threshold=%u; rf->rf_filterlen=%u; rf->rf_mindur=%u; rf->rf_maxdur=%u",
 				j, rf->rf_pulseid, rf->rf_numpulses,
@@ -78,7 +84,7 @@ void dfs_print_filters(struct wlan_dfs *dfs)
 	}
 
 	for (i = 0; i < DFS_MAX_RADAR_TYPES; i++) {
-		if (dfs->dfs_radarf[i] != NULL) {
+		if (dfs->dfs_radarf[i]) {
 			ft = dfs->dfs_radarf[i];
 			if ((ft->ft_numfilters > DFS_MAX_NUM_RADAR_FILTERS) ||
 					(!ft->ft_numfilters)) {

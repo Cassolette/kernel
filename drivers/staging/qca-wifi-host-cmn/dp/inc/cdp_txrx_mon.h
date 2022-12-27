@@ -1,8 +1,5 @@
 /*
- * Copyright (c) 2016-2017 The Linux Foundation. All rights reserved.
- *
- * Previously licensed under the ISC license by Qualcomm Atheros, Inc.
- *
+ * Copyright (c) 2016-2021 The Linux Foundation. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -19,11 +16,6 @@
  * PERFORMANCE OF THIS SOFTWARE.
  */
 
-/*
- * This file was originally distributed by Qualcomm Atheros, Inc.
- * under proprietary terms before Copyright ownership was assigned
- * to the Linux Foundation.
- */
 /**
  * @file cdp_txrx_mon.h
  * @brief Define the monitor mode API functions
@@ -33,60 +25,47 @@
 #ifndef _CDP_TXRX_MON_H_
 #define _CDP_TXRX_MON_H_
 #include "cdp_txrx_handle.h"
-static inline void cdp_monitor_set_filter_ucast_data
-	(ol_txrx_soc_handle soc, struct cdp_pdev *pdev, u_int8_t val)
+#include <cdp_txrx_cmn.h>
+
+static inline QDF_STATUS cdp_reset_monitor_mode(ol_txrx_soc_handle soc,
+						uint8_t pdev_id,
+						u_int8_t smart_monitor)
 {
-	if (soc->ops->mon_ops->txrx_monitor_set_filter_ucast_data)
-		return soc->ops->mon_ops->txrx_monitor_set_filter_ucast_data
-			(pdev, val);
-	return;
-}
-static inline void cdp_monitor_set_filter_mcast_data
-	(ol_txrx_soc_handle soc, struct cdp_pdev *pdev, u_int8_t val)
-{
-	if (soc->ops->mon_ops->txrx_monitor_set_filter_mcast_data)
-		return soc->ops->mon_ops->txrx_monitor_set_filter_mcast_data
-			(pdev, val);
-	return;
-}
-static inline void cdp_monitor_set_filter_non_data
-	(ol_txrx_soc_handle soc, struct cdp_pdev *pdev, u_int8_t val)
-{
-	if (soc->ops->mon_ops->txrx_monitor_set_filter_non_data)
-		return soc->ops->mon_ops->txrx_monitor_set_filter_non_data
-			(pdev, val);
-	return;
+	if (!soc || !soc->ops) {
+		dp_cdp_debug("Invalid Instance");
+		QDF_BUG(0);
+		return 0;
+	}
+
+	if (!soc->ops->mon_ops ||
+	    !soc->ops->mon_ops->txrx_reset_monitor_mode)
+		return 0;
+
+	return soc->ops->mon_ops->txrx_reset_monitor_mode(soc, pdev_id,
+							  smart_monitor);
 }
 
-static inline u_int8_t cdp_monitor_get_filter_ucast_data(ol_txrx_soc_handle soc,
-			struct cdp_vdev *vdev_txrx_handle)
+/**
+ * cdp_deliver_tx_mgmt() - Deliver mgmt frame for tx capture
+ * @soc: Datapath SOC handle
+ * @pdev_id: id of datapath PDEV handle
+ * @nbuf: Management frame buffer
+ */
+static inline QDF_STATUS
+cdp_deliver_tx_mgmt(ol_txrx_soc_handle soc, uint8_t pdev_id,
+		    qdf_nbuf_t nbuf)
 {
-	if (soc->ops->mon_ops->txrx_monitor_get_filter_ucast_data)
-		return soc->ops->mon_ops->txrx_monitor_get_filter_ucast_data
-			(vdev_txrx_handle);
-	return 0;
+	if (!soc || !soc->ops) {
+		dp_cdp_debug("Invalid Instance");
+		QDF_BUG(0);
+		return QDF_STATUS_E_FAILURE;
+	}
+
+	if (!soc->ops->mon_ops ||
+	    !soc->ops->mon_ops->txrx_deliver_tx_mgmt)
+		return QDF_STATUS_E_FAILURE;
+
+	return soc->ops->mon_ops->txrx_deliver_tx_mgmt(soc, pdev_id, nbuf);
 }
-static inline u_int8_t cdp_monitor_get_filter_mcast_data(ol_txrx_soc_handle soc,
-				struct cdp_vdev *vdev_txrx_handle)
-{
-	if (soc->ops->mon_ops->txrx_monitor_get_filter_mcast_data)
-		return soc->ops->mon_ops->txrx_monitor_get_filter_mcast_data
-			(vdev_txrx_handle);
-	return 0;
-}
-static inline u_int8_t cdp_monitor_get_filter_non_data(ol_txrx_soc_handle soc,
-				struct cdp_vdev *vdev_txrx_handle)
-{
-	if (soc->ops->mon_ops->txrx_monitor_get_filter_non_data)
-		return soc->ops->mon_ops->txrx_monitor_get_filter_non_data
-			(vdev_txrx_handle);
-	return 0;
-}
-static inline int cdp_reset_monitor_mode
-(ol_txrx_soc_handle soc, struct cdp_pdev *pdev)
-{
-	if (soc->ops->mon_ops->txrx_reset_monitor_mode)
-		return soc->ops->mon_ops->txrx_reset_monitor_mode(pdev);
-	return 0;
-}
+
 #endif

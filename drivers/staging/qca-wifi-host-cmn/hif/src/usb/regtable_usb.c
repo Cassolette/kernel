@@ -1,8 +1,5 @@
 /*
- * Copyright (c) 2014-2016 The Linux Foundation. All rights reserved.
- *
- * Previously licensed under the ISC license by Qualcomm Atheros, Inc.
- *
+ * Copyright (c) 2014-2018, 2020 The Linux Foundation. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -19,13 +16,7 @@
  * PERFORMANCE OF THIS SOFTWARE.
  */
 
-/*
- * This file was originally distributed by Qualcomm Atheros, Inc.
- * under proprietary terms before Copyright ownership was assigned
- * to the Linux Foundation.
- */
-
-#include "bmi_msg.h"
+#include "target_type.h"
 #include "targaddrs.h"
 #include "regtable_usb.h"
 #include "ar9888def.h"
@@ -47,7 +38,7 @@ void target_register_tbl_attach(struct hif_softc *scn,
 		scn->targetdef = &ar6320v2_targetdef;
 		break;
 	default:
-		HIF_ERROR("%s: unknown target_type %u", __func__, target_type);
+		hif_err("Unknown target_type: %u", target_type);
 		break;
 	}
 }
@@ -64,7 +55,7 @@ void hif_register_tbl_attach(struct hif_softc *scn, uint32_t hif_type)
 		scn->hostdef = &ar6320v2_hostdef;
 		break;
 	default:
-		HIF_ERROR("%s: unknown hif_type %u", __func__, hif_type);
+		hif_err("Unknown hif_type: %u", hif_type);
 		break;
 	}
 }

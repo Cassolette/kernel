@@ -1,8 +1,5 @@
 /*
- * Copyright (c) 2016-2017 The Linux Foundation. All rights reserved.
- *
- * Previously licensed under the ISC license by Qualcomm Atheros, Inc.
- *
+ * Copyright (c) 2016-2021 The Linux Foundation. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -19,11 +16,6 @@
  * PERFORMANCE OF THIS SOFTWARE.
  */
 
-/*
- * This file was originally distributed by Qualcomm Atheros, Inc.
- * under proprietary terms before Copyright ownership was assigned
- * to the Linux Foundation.
- */
 /**
  * @file cdp_txrx_me.h
  * @brief Define the host data path mcast enhance API functions
@@ -35,81 +27,57 @@
 #include <cdp_txrx_ops.h>
 /* TODO: adf need to be replaced with qdf */
 #include "cdp_txrx_handle.h"
+#include <cdp_txrx_cmn.h>
 
-static inline u_int16_t
-cdp_tx_desc_alloc_and_mark_for_mcast_clone(ol_txrx_soc_handle soc,
-	struct cdp_pdev *pdev, u_int16_t buf_count)
+static inline void
+cdp_tx_me_alloc_descriptor(ol_txrx_soc_handle soc, uint8_t pdev_id)
 {
-	if (soc->ops->me_ops->tx_desc_alloc_and_mark_for_mcast_clone)
-		return soc->ops->me_ops->
-			tx_desc_alloc_and_mark_for_mcast_clone
-			(pdev, buf_count);
-	return 0;
-}
+	if (!soc || !soc->ops) {
+		dp_cdp_debug("Invalid Instance");
+		QDF_BUG(0);
+		return;
+	}
 
-static inline u_int16_t
-cdp_tx_desc_free_and_unmark_for_mcast_clone(ol_txrx_soc_handle soc,
-	struct cdp_pdev *pdev, u_int16_t buf_count)
-{
-	if (soc->ops->me_ops->tx_desc_free_and_unmark_for_mcast_clone)
-		return soc->ops->me_ops->
-			tx_desc_free_and_unmark_for_mcast_clone
-			(pdev, buf_count);
-	return 0;
-}
+	if (!soc->ops->me_ops ||
+	    !soc->ops->me_ops->tx_me_alloc_descriptor)
+		return;
 
-static inline u_int16_t
-cdp_tx_get_mcast_buf_allocated_marked(ol_txrx_soc_handle soc,
-	struct cdp_pdev *pdev)
-{
-	if (soc->ops->me_ops->tx_get_mcast_buf_allocated_marked)
-		return soc->ops->me_ops->tx_get_mcast_buf_allocated_marked
-			(pdev);
-	return 0;
+	soc->ops->me_ops->tx_me_alloc_descriptor(soc, pdev_id);
 }
 
 static inline void
-cdp_tx_me_alloc_descriptor(ol_txrx_soc_handle soc, struct cdp_pdev *pdev)
+cdp_tx_me_free_descriptor(ol_txrx_soc_handle soc, uint8_t pdev_id)
 {
-	if (soc->ops->me_ops->tx_me_alloc_descriptor)
-		return soc->ops->me_ops->tx_me_alloc_descriptor(pdev);
-	return;
-}
+	if (!soc || !soc->ops) {
+		dp_cdp_debug("Invalid Instance");
+		QDF_BUG(0);
+		return;
+	}
 
-static inline void
-cdp_tx_me_free_descriptor(ol_txrx_soc_handle soc, struct cdp_pdev *pdev)
-{
-	if (soc->ops->me_ops->tx_me_free_descriptor)
-		return soc->ops->me_ops->tx_me_free_descriptor(pdev);
-	return;
+	if (!soc->ops->me_ops ||
+	    !soc->ops->me_ops->tx_me_free_descriptor)
+		return;
+
+	soc->ops->me_ops->tx_me_free_descriptor(soc, pdev_id);
 }
 
 static inline uint16_t
-cdp_tx_me_convert_ucast(ol_txrx_soc_handle soc, struct cdp_vdev *vdev,
-	qdf_nbuf_t wbuf, u_int8_t newmac[][6], uint8_t newmaccnt)
+cdp_tx_me_convert_ucast(ol_txrx_soc_handle soc, uint8_t vdev_id,
+			qdf_nbuf_t wbuf, u_int8_t newmac[][6],
+			uint8_t newmaccnt, uint8_t tid, bool is_igmp)
 {
-	if (soc->ops->me_ops->tx_me_convert_ucast)
-		return soc->ops->me_ops->tx_me_convert_ucast
-			(vdev, wbuf, newmac, newmaccnt);
-	return 0;
-}
-/* Should be a function pointer in ol_txrx_osif_ops{} */
-/**
- * @brief notify mcast frame indication from FW.
- * @details
- *      This notification will be used to convert
- *      multicast frame to unicast.
- *
- * @param pdev - handle to the ctrl SW's physical device object
- * @param vdev_id - ID of the virtual device received the special data
- * @param msdu - the multicast msdu returned by FW for host inspect
- */
+	if (!soc || !soc->ops) {
+		dp_cdp_debug("Invalid Instance");
+		QDF_BUG(0);
+		return 0;
+	}
 
-static inline int cdp_mcast_notify(ol_txrx_soc_handle soc,
-		struct cdp_pdev *pdev, u_int8_t vdev_id, qdf_nbuf_t msdu)
-{
-	if (soc->ops->me_ops->mcast_notify)
-		return soc->ops->me_ops->mcast_notify(pdev, vdev_id, msdu);
-	return 0;
+	if (!soc->ops->me_ops ||
+	    !soc->ops->me_ops->tx_me_convert_ucast)
+		return 0;
+
+	return soc->ops->me_ops->tx_me_convert_ucast
+			(soc, vdev_id, wbuf, newmac, newmaccnt, tid, is_igmp);
 }
+
 #endif

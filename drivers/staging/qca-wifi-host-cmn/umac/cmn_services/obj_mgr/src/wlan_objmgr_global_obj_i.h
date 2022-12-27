@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2016-2017 The Linux Foundation. All rights reserved.
+ * Copyright (c) 2016-2019, 2021 The Linux Foundation. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -22,6 +22,11 @@
 #define _WLAN_OBJMGR_GLOBAL_OBJ_I_H_
 
 #include "wlan_objmgr_cmn.h"
+#ifdef WLAN_FEATURE_11BE_MLO
+#include "wlan_mlo_mgr_public_structs.h"
+#endif
+
+struct wlan_objmgr_debug_info;
 /**
  *  struct wlan_objmgr_global - Global object definition
  *  @psoc[]:                    Array of PSOCs to maintain PSOC's list,
@@ -42,6 +47,7 @@
  *  @vdev_create_handler_arg[]: VDEV create handler args array
  *  @vdev_destroy_handler[]:     VDEV destroy handler array
  *  @vdev_destroy_handler_arg[]: VDEV destroy handler args array
+ *  @vdev_peer_free_notify_handler[]: VDEV peer free notify handler array
  *  @vdev_status_handler[]:     VDEV status handler array
  *  @vdev_status_handler_arg[]: VDEV status handler args array
  *  @peer_create_handler[]:     PEER create handler array
@@ -50,10 +56,14 @@
  *  @peer_destroy_handler_arg[]: PEER destroy handler args array
  *  @peer_status_handler[]:     PEER status handler array
  *  @peer_status_handler_arg[]: PEER status handler args array
+ *  @debug_info:                Objmgr debug information
  *  @global_lock:               Global lock
  */
 struct wlan_objmgr_global {
 	struct wlan_objmgr_psoc *psoc[WLAN_OBJMGR_MAX_DEVICES];
+#ifdef WLAN_FEATURE_11BE_MLO
+	struct mlo_mgr_context *mlo_ctx;
+#endif
 	wlan_objmgr_psoc_create_handler
 		psoc_create_handler[WLAN_UMAC_MAX_COMPONENTS];
 	void *psoc_create_handler_arg[WLAN_UMAC_MAX_COMPONENTS];
@@ -78,6 +88,8 @@ struct wlan_objmgr_global {
 	wlan_objmgr_vdev_destroy_handler
 		vdev_destroy_handler[WLAN_UMAC_MAX_COMPONENTS];
 	void *vdev_destroy_handler_arg[WLAN_UMAC_MAX_COMPONENTS];
+	wlan_objmgr_vdev_peer_free_notify_handler
+		vdev_peer_free_notify_handler[WLAN_UMAC_MAX_COMPONENTS];
 	wlan_objmgr_vdev_status_handler
 		vdev_status_handler[WLAN_UMAC_MAX_COMPONENTS];
 	void *vdev_status_handler_arg[WLAN_UMAC_MAX_COMPONENTS];
@@ -90,6 +102,7 @@ struct wlan_objmgr_global {
 	wlan_objmgr_peer_status_handler
 		peer_status_handler[WLAN_UMAC_MAX_COMPONENTS];
 	void *peer_status_handler_arg[WLAN_UMAC_MAX_COMPONENTS];
+	struct wlan_objmgr_debug_info *debug_info;
 	qdf_spinlock_t	global_lock;
 };
 
@@ -124,10 +137,12 @@ QDF_STATUS wlan_objmgr_psoc_object_detach(
 /**
  * wlan_objmgr_print_ref_ids() - Print ref counts of modules
  * @id - array of ref debug
+ * @log_level - log level
  *
  * Itertes through array, and prints the ref count debug
  *
  * Return: nothing
  */
-void wlan_objmgr_print_ref_ids(qdf_atomic_t *id);
+void wlan_objmgr_print_ref_ids(qdf_atomic_t *id,
+				QDF_TRACE_LEVEL log_level);
 #endif /* _WLAN_OBJMGR_GLOBAL_OBJ_I_H_ */

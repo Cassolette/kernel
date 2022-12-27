@@ -1,8 +1,5 @@
 /*
- * Copyright (c) 2013-2014 The Linux Foundation. All rights reserved.
- *
- * Previously licensed under the ISC license by Qualcomm Atheros, Inc.
- *
+ * Copyright (c) 2013-2014, 2021 The Linux Foundation. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -17,12 +14,6 @@
  * PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR OTHER
  * TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
  * PERFORMANCE OF THIS SOFTWARE.
- */
-
-/*
- * This file was originally distributed by Qualcomm Atheros, Inc.
- * under proprietary terms before Copyright ownership was assigned
- * to the Linux Foundation.
  */
 
 #ifndef HTC_DEBUG_H_
@@ -47,4 +38,6 @@
 	QDF_TRACE(QDF_MODULE_ID_HTC, QDF_TRACE_LEVEL_INFO, ## args)
 #define HTC_TRACE(args ...) \
 	QDF_TRACE(QDF_MODULE_ID_HTC, QDF_TRACE_LEVEL_DEBUG, ## args)
+#define HTC_NOFL_INFO(args...) \
+	QDF_TRACE_INFO_NO_FL(QDF_MODULE_ID_HTC, ## args)
 #endif /*HTC_DEBUG_H_ */

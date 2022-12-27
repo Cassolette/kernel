@@ -1,8 +1,5 @@
 /*
- * Copyright (c) 2014-2017 The Linux Foundation. All rights reserved.
- *
- * Previously licensed under the ISC license by Qualcomm Atheros, Inc.
- *
+ * Copyright (c) 2014-2019,2021 The Linux Foundation. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -17,12 +14,6 @@
  * PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR OTHER
  * TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
  * PERFORMANCE OF THIS SOFTWARE.
- */
-
-/*
- * This file was originally distributed by Qualcomm Atheros, Inc.
- * under proprietary terms before Copyright ownership was assigned
- * to the Linux Foundation.
  */
 
 #ifndef EVENT_DEFS_H
@@ -393,6 +384,8 @@ typedef enum {
 	 * 5 - Devide Inserted
 	 * 6 - Driver Unloaded
 	 * 7 - Driver Loaded
+	 * 8 - bus/link down
+	 * 9 - chip temperature high
 	 *
 	 * driverVersion: offset: 2 length: 10
 	 *
@@ -895,6 +888,49 @@ typedef enum {
 	 */
 
 	EVENT_WLAN_SSR_SHUTDOWN_SUBSYSTEM = 0xB3D,
+	EVENT_WLAN_ACS_REQ = 0xC4A,
+	EVENT_WLAN_ACS_SCAN_START = 0xC4B,
+	EVENT_WLAN_ACS_SCAN_DONE = 0xC4C,
+	EVENT_WLAN_ACS_CHANNEL_SPECTRAL_WEIGHT = 0xC4D,
+	EVENT_WLAN_ACS_BEST_CHANNEL = 0xC4E,
+	EVENT_WLAN_HOST_MGMT_TX_V2 = 0xC52,
+	EVENT_WLAN_HOST_MGMT_RX_V2 = 0xC53,
+	EVENT_WLAN_CONN_STATS_V2 = 0xC56,
+
+	/*
+	 * <diag_event>
+	 * EVENT_WLAN_RSN_INFO
+	 * @akm_suite: Gives information about akm suites used in assoc request
+	 * @ucast_cipher: Unicast cipher used in assoc request
+	 * @mcast_cipher: Multi cast cipher used in assoc request
+	 * @group_mgmt: Requested group mgmt cipher suite
+	 *
+	 * This event is used to send RSN information used
+	 * in assoc request.
+	 *
+	 * Supported Feature: STA
+	 *
+	 * </diag_event>
+	 */
+
+	EVENT_WLAN_RSN_INFO = 0xC5B,
+
+	/*
+	 * <diag_event>
+	 * EVENT_WLAN_AUTH_INFO
+	 * @auth_algo_num: Gives information about algo num used in auth request
+	 * @auth_transaction_seq_num: seq num of auth request
+	 * @auth_status_code: status code of auth request
+	 *
+	 * This event is used to send algo num, seq num and status code
+	 * for auth request
+	 *
+	 * Supported Feature: STA
+	 *
+	 * </diag_event>
+	 */
+
+	EVENT_WLAN_AUTH_INFO = 0xC92,
 
 	EVENT_MAX_ID = 0x0FFF
 } event_id_enum_type;

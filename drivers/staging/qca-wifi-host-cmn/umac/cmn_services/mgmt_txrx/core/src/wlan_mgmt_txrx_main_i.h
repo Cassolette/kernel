@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2016-2017 The Linux Foundation. All rights reserved.
+ * Copyright (c) 2016-2021 The Linux Foundation. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -28,13 +28,33 @@
 
 #include "wlan_mgmt_txrx_utils_api.h"
 #include "wlan_objmgr_cmn.h"
+#include "wlan_objmgr_psoc_obj.h"
+#include "wlan_lmac_if_def.h"
 #include "qdf_list.h"
+#ifdef WLAN_MGMT_RX_REO_SUPPORT
+#include "wlan_mgmt_txrx_rx_reo_i.h"
+#endif
 
 
-#define IEEE80211_ADDR_LEN  6  /* size of 802.11 address */
 #define IEEE80211_FC0_TYPE_MASK             0x0c
 #define IEEE80211_FC0_SUBTYPE_MASK          0xf0
 #define IEEE80211_FC0_TYPE_MGT              0x00
+#define IEEE80211_FC0_TYPE_CTL              0x04
+
+/* for TYPE_MGT */
+#define IEEE80211_FC0_SUBTYPE_ASSOC_REQ     0x00
+#define IEEE80211_FC0_SUBTYPE_ASSOC_RESP    0x10
+#define IEEE80211_FC0_SUBTYPE_REASSOC_REQ   0x20
+#define IEEE80211_FC0_SUBTYPE_REASSOC_RESP  0x30
+#define IEEE80211_FC0_SUBTYPE_PROBE_REQ     0x40
+#define IEEE80211_FC0_SUBTYPE_PROBE_RESP    0x50
+#define IEEE80211_FC0_SUBTYPE_BEACON        0x80
+#define IEEE80211_FC0_SUBTYPE_ATIM          0x90
+#define IEEE80211_FC0_SUBTYPE_DISASSOC      0xa0
+#define IEEE80211_FC0_SUBTYPE_AUTH          0xb0
+#define IEEE80211_FC0_SUBTYPE_DEAUTH        0xc0
+#define IEEE80211_FC0_SUBTYPE_ACTION        0xd0
+#define IEEE80211_FCO_SUBTYPE_ACTION_NO_ACK 0xe0
 
 /**
  * mgmt_wakelock_reason - reasons mgmt_txrx might hold a wakelock
@@ -55,14 +75,14 @@ struct ieee80211_frame {
 	uint8_t i_dur[2];
 	union {
 		struct {
-			uint8_t i_addr1[IEEE80211_ADDR_LEN];
-			uint8_t i_addr2[IEEE80211_ADDR_LEN];
-			uint8_t i_addr3[IEEE80211_ADDR_LEN];
+			uint8_t i_addr1[QDF_MAC_ADDR_SIZE];
+			uint8_t i_addr2[QDF_MAC_ADDR_SIZE];
+			uint8_t i_addr3[QDF_MAC_ADDR_SIZE];
 		};
-		uint8_t i_addr_all[3 * IEEE80211_ADDR_LEN];
+		uint8_t i_addr_all[3 * QDF_MAC_ADDR_SIZE];
 	};
 	uint8_t i_seq[2];
-	/* possibly followed by addr4[IEEE80211_ADDR_LEN]; */
+	/* possibly followed by addr4[QDF_MAC_ADDR_SIZE]; */
 	/* see below */
 } __packed;
 
@@ -118,7 +138,7 @@ struct mgmt_rx_handler {
 /**
  * struct txrx_stats - txrx stats for mgmt frames
  * @pkts_success:       no. of packets successfully txed/rcvd
- * @pkts_fail:          no. of packets unsuccessfullt txed/rcvd
+ * @pkts_fail:          no. of packets unsuccessfully txed/rcvd
  * @bytes_success:      no. of bytes successfully txed/rcvd
  * @bytes_fail:         no. of bytes successfully txed/rcvd
  * @assoc_req_rcvd:     no. of assoc requests rcvd
@@ -170,50 +190,63 @@ struct mgmt_txrx_stats_t {
 };
 
 /**
- * struct mgmt_txrx_priv_context - mgmt txrx private context
- * @psoc_context:     psoc context
- * @mgmt_rx_comp_cb:  array of pointers of mgmt rx cbs
+ * struct mgmt_txrx_priv_psoc_context - mgmt txrx private psoc context
+ * @psoc:                psoc context
+ * @mgmt_rx_comp_cb:     array of pointers of mgmt rx cbs
+ * @mgmt_txrx_psoc_ctx_lock:  mgmt txrx psoc ctx lock
+ */
+struct mgmt_txrx_priv_psoc_context {
+	struct wlan_objmgr_psoc *psoc;
+	struct mgmt_rx_handler *mgmt_rx_comp_cb[MGMT_MAX_FRAME_TYPE];
+	qdf_spinlock_t mgmt_txrx_psoc_ctx_lock;
+};
+
+/**
+ * struct mgmt_txrx_priv_context_dev - mgmt txrx private context
+ * @pdev:     pdev context
  * @mgmt_desc_pool:   pointer to mgmt desc. pool
  * @mgmt_txrx_stats:  pointer to mgmt txrx stats
  * @wakelock_tx_cmp:  mgmt tx complete wake lock
+ * @wakelock_tx_runtime_cmp: mgmt tx runtime complete wake lock
+ * @mgmt_rx_reo_pdev_ctx: pointer to pdev object of MGMT Rx REO module
  */
-struct mgmt_txrx_priv_context {
-	struct wlan_objmgr_psoc *psoc;
-	struct mgmt_rx_handler *mgmt_rx_comp_cb[MGMT_MAX_FRAME_TYPE];
+struct mgmt_txrx_priv_pdev_context {
+	struct wlan_objmgr_pdev *pdev;
 	struct mgmt_desc_pool_t mgmt_desc_pool;
 	struct mgmt_txrx_stats_t *mgmt_txrx_stats;
-	qdf_spinlock_t mgmt_txrx_ctx_lock;
 	qdf_wake_lock_t wakelock_tx_cmp;
+	qdf_runtime_lock_t wakelock_tx_runtime_cmp;
+#ifdef WLAN_MGMT_RX_REO_SUPPORT
+	struct mgmt_rx_reo_pdev_info *mgmt_rx_reo_pdev_ctx;
+#endif
 };
 
 
 /**
  * wlan_mgmt_txrx_desc_pool_init() - initializes mgmt. desc. pool
- * @mgmt_txrx_ctx: mgmt txrx context
- * @pool_size: desc. pool size
+ * @mgmt_txrx_pdev_ctx: mgmt txrx pdev context
  *
  * This function initializes the mgmt descriptor pool.
  *
  * Return: QDF_STATUS_SUCCESS - in case of success
  */
 QDF_STATUS wlan_mgmt_txrx_desc_pool_init(
-			struct mgmt_txrx_priv_context *mgmt_txrx_ctx,
-			uint32_t pool_size);
+			struct mgmt_txrx_priv_pdev_context *mgmt_txrx_pdev_ctx);
 
 /**
  * wlan_mgmt_txrx_desc_pool_deinit() - deinitializes mgmt. desc. pool
- * @mgmt_txrx_ctx: mgmt txrx context
+ * @mgmt_txrx_pdev_ctx: mgmt txrx pdev context
  *
  * This function deinitializes the mgmt descriptor pool.
  *
  * Return: void
  */
 void wlan_mgmt_txrx_desc_pool_deinit(
-			struct mgmt_txrx_priv_context *mgmt_txrx_ctx);
+			struct mgmt_txrx_priv_pdev_context *mgmt_txrx_pdev_ctx);
 
 /**
  * wlan_mgmt_txrx_desc_get() - gets mgmt. descriptor from freelist
- * @mgmt_txrx_ctx: mgmt txrx context
+ * @mgmt_txrx_pdev_ctx: mgmt txrx pdev context
  *
  * This function retrieves the mgmt. descriptor for mgmt. tx frames
  * from the mgmt. descriptor freelist.
@@ -221,18 +254,32 @@ void wlan_mgmt_txrx_desc_pool_deinit(
  * Return: mgmt. descriptor retrieved.
  */
 struct mgmt_txrx_desc_elem_t *wlan_mgmt_txrx_desc_get(
-			struct mgmt_txrx_priv_context *mgmt_txrx_ctx);
+			struct mgmt_txrx_priv_pdev_context *mgmt_txrx_pdev_ctx);
 
 /**
  * wlan_mgmt_txrx_desc_put() - puts mgmt. descriptor back in freelist
- * @mgmt_txrx_ctx: mgmt txrx context
+ * @mgmt_txrx_pdev_ctx: mgmt txrx pdev context
  * @desc_id: mgmt txrx descriptor id
  *
  * This function puts the mgmt. descriptor back in to the freelist.
  *
  * Return: void
  */
-void wlan_mgmt_txrx_desc_put(struct mgmt_txrx_priv_context *mgmt_txrx_ctx,
-			     uint32_t desc_id);
+void wlan_mgmt_txrx_desc_put(
+			struct mgmt_txrx_priv_pdev_context *mgmt_txrx_pdev_ctx,
+			uint32_t desc_id);
 
+/**
+ * iot_sim_mgmt_tx_update - invokes iot_sim callback to modify the frame
+ * @psoc: psoc common object
+ * @vdev: vdev object
+ * @buf: frame buffer
+ *
+ * This function puts invokes iot_sim callback to modify the frame.
+ *
+ * Return: QDF_STATUS
+ */
+QDF_STATUS iot_sim_mgmt_tx_update(struct wlan_objmgr_psoc *psoc,
+				  struct wlan_objmgr_vdev *vdev,
+				  qdf_nbuf_t buf);
 #endif

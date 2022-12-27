@@ -1,8 +1,5 @@
 /*
- * Copyright (c) 2014-2017 The Linux Foundation. All rights reserved.
- *
- * Previously licensed under the ISC license by Qualcomm Atheros, Inc.
- *
+ * Copyright (c) 2014-2020 The Linux Foundation. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -19,19 +16,13 @@
  * PERFORMANCE OF THIS SOFTWARE.
  */
 
-/*
- * This file was originally distributed by Qualcomm Atheros, Inc.
- * under proprietary terms before Copyright ownership was assigned
- * to the Linux Foundation.
- */
-
 /**
  * DOC: qdf_status
  * QCA driver framework (QDF) status codes
  * Basic status codes/definitions used by QDF
  */
 
-#if !defined(__QDF_STATUS_H)
+#ifndef __QDF_STATUS_H
 #define __QDF_STATUS_H
 
 /**
@@ -52,7 +43,7 @@
  * @QDF_STATUS_E_EMPTY: empty condition
  * @QDF_STATUS_E_EXISTS: existence failure
  * @QDF_STATUS_E_TIMEOUT: operation timeout
- * @QDF_STATUS_E_FAILURE: unknown reason do not use unless nothign else applies
+ * @QDF_STATUS_E_FAILURE: unknown reason do not use unless nothing else applies
  * @QDF_STATUS_E_NOENT: No such file or directory
  * @QDF_STATUS_E_E2BIG: Arg list too long
  * @QDF_STATUS_E_NOSPC: no space left on device
@@ -66,11 +57,6 @@
  * @QDF_STATUS_E_PROTO: protocol error
  * @QDF_STATUS_NOT_INITIALIZED: resource not initialized
  * @QDF_STATUS_E_NULL_VALUE: request is null
- * @QDF_STATUS_PMC_PENDING: request pendign in pmc
- * @QDF_STATUS_PMC_DISABLED: pmc is disabled
- * @QDF_STATUS_PMC_NOT_NOW: pmc not ready now
- * @QDF_STATUS_PMC_AC_POWER: pmc ac power
- * @QDF_STATUS_PMC_SYS_ERROR: pmc system error
  * @QDF_STATUS_HEARTBEAT_TMOUT: hearbeat timeout error
  * @QDF_STATUS_NTH_BEACON_DELIVERY: Nth beacon delivery
  * @QDF_STATUS_CSR_WRONG_STATE: csr in wrong state
@@ -86,6 +72,8 @@
  * @QDF_STATUS_CRYPTO_MIC_FAILURE: MIC failure in received frame
  * @QDF_STATUS_CRYPTO_ENCRYPT_FAILED: encryption failed
  * @QDF_STATUS_CRYPTO_DECRYPT_FAILED: decryption failed
+ * @QDF_STATUS_E_RANGE: result/parameter/operation was out of range
+ * @QDF_STATUS_E_GRO_DROP: return code for GRO drop
  * @QDF_STATUS_MAX: not a realy value just a place holder for max
  */
 typedef enum {
@@ -119,11 +107,6 @@ typedef enum {
 	QDF_STATUS_E_PROTO,
 	QDF_STATUS_NOT_INITIALIZED,
 	QDF_STATUS_E_NULL_VALUE,
-	QDF_STATUS_PMC_PENDING,
-	QDF_STATUS_PMC_DISABLED,
-	QDF_STATUS_PMC_NOT_NOW,
-	QDF_STATUS_PMC_AC_POWER,
-	QDF_STATUS_PMC_SYS_ERROR,
 	QDF_STATUS_HEARTBEAT_TMOUT,
 	QDF_STATUS_NTH_BEACON_DELIVERY,
 	QDF_STATUS_CSR_WRONG_STATE,
@@ -140,10 +123,29 @@ typedef enum {
 	QDF_STATUS_CRYPTO_ENCRYPT_FAILED,
 	QDF_STATUS_CRYPTO_DECRYPT_FAILED,
 	QDF_STATUS_E_DEFRAG_ERROR,
+	QDF_STATUS_E_RANGE,
+	QDF_STATUS_E_GRO_DROP,
 	QDF_STATUS_MAX
 } QDF_STATUS;
 
 #define QDF_IS_STATUS_SUCCESS(status) (QDF_STATUS_SUCCESS == (status))
 #define QDF_IS_STATUS_ERROR(status) (QDF_STATUS_SUCCESS != (status))
 
-#endif /* if !defined __QDF_STATUS_H */
+/**
+ * qdf_status_to_os_return() - map a QDF_STATUS into an OS specific return code
+ * @status: QDF_STATUS to map
+ *
+ * Return: an OS specific error code
+ */
+int qdf_status_to_os_return(QDF_STATUS status);
+
+/**
+ * qdf_status_from_os_return() - map an OS specific return code to a QDF_STATUS
+ * @rc: the input return code to map
+ *
+ * Return: QDF_STATUS
+ */
+QDF_STATUS qdf_status_from_os_return(int rc);
+
+#endif /* __QDF_STATUS_H */
+

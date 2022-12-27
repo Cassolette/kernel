@@ -1,8 +1,5 @@
 /*
- * Copyright (c) 2014-2017 The Linux Foundation. All rights reserved.
- *
- * Previously licensed under the ISC license by Qualcomm Atheros, Inc.
- *
+ * Copyright (c) 2014-2020 The Linux Foundation. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -17,12 +14,6 @@
  * PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR OTHER
  * TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
  * PERFORMANCE OF THIS SOFTWARE.
- */
-
-/*
- * This file was originally distributed by Qualcomm Atheros, Inc.
- * under proprietary terms before Copyright ownership was assigned
- * to the Linux Foundation.
  */
 
 #ifndef EPPING_INTERNAL_H
@@ -69,6 +60,10 @@
 #define EPPING_MAX_ADAPTERS             1
 
 #define EPPING_LOG(level, args ...) QDF_TRACE(QDF_MODULE_ID_HDD, level, ## args)
+#define EPPING_HEX_DUMP(level, data, len) qdf_trace_hex_dump( \
+						QDF_MODULE_ID_HDD, \
+						level, \
+						data, buf_len)
 
 struct epping_cookie {
 	HTC_PACKET HtcPkt;      /* HTC packet wrapper */
@@ -88,7 +83,7 @@ typedef enum {
 #define MAX_COOKIE_SLOT_SIZE 512
 #define MAX_TX_PKT_DUP_NUM   4
 
-#ifdef HIF_PCI
+#if defined(HIF_PCI) || defined(HIF_IPCI)
 #define WLAN_EPPING_DELAY_TIMEOUT_US     10
 #define EPPING_MAX_CE_NUMS               8
 #define EPPING_MAX_WATER_MARK            8
@@ -119,7 +114,7 @@ typedef struct epping_context {
 	unsigned int kperf_num_tx_acks[EPPING_MAX_NUM_EPIDS];
 	unsigned int total_rx_recv;
 	unsigned int total_tx_acks;
-#ifdef HIF_PCI
+#if defined(HIF_PCI) || defined(HIF_IPCI)
 	epping_poll_t epping_poll[EPPING_MAX_NUM_EPIDS];
 #endif
 	struct epping_cookie *cookie_list;
@@ -135,7 +130,7 @@ typedef enum {
 
 typedef struct epping_adapter_s {
 	epping_context_t *pEpping_ctx;
-	enum tQDF_ADAPTER_MODE device_mode;
+	enum QDF_OPMODE device_mode;
 	/** Handle to the network device */
 	struct net_device *dev;
 	struct qdf_mac_addr macAddressCurrent;
@@ -163,11 +158,11 @@ void epping_log_packet(epping_adapter_t *adapter,
 		       EPPING_HEADER *eppingHdr, int ret, const char *str);
 void epping_log_stats(epping_adapter_t *adapter, const char *str);
 void epping_set_kperf_flag(epping_adapter_t *adapter,
-			   HTC_ENDPOINT_ID eid, A_UINT8 kperf_flag);
+			   HTC_ENDPOINT_ID eid, uint8_t kperf_flag);
 
 /* epping_tx signatures */
 void epping_tx_timer_expire(epping_adapter_t *adapter);
-void epping_tx_complete_multiple(void *ctx, HTC_PACKET_QUEUE *pPacketQueue);
+void epping_tx_complete(void *ctx, HTC_PACKET *htc_pkt);
 int epping_tx_send(qdf_nbuf_t skb, epping_adapter_t *adapter);
 
 #ifdef HIF_SDIO
@@ -186,15 +181,16 @@ void epping_refill(void *ctx, HTC_ENDPOINT_ID Endpoint);
 /* epping_txrx signatures */
 epping_adapter_t *epping_add_adapter(epping_context_t *pEpping_ctx,
 				     tSirMacAddr macAddr,
-				     enum tQDF_ADAPTER_MODE device_mode);
+				     enum QDF_OPMODE device_mode,
+				     bool rtnl_held);
 void epping_destroy_adapter(epping_adapter_t *adapter);
 int epping_connect_service(epping_context_t *pEpping_ctx);
-#ifdef HIF_PCI
+#if defined(HIF_PCI) || defined(HIF_IPCI)
 void epping_register_tx_copier(HTC_ENDPOINT_ID eid,
 			       epping_context_t *pEpping_ctx);
 void epping_unregister_tx_copier(HTC_ENDPOINT_ID eid,
 				 epping_context_t *pEpping_ctx);
 void epping_tx_copier_schedule(epping_context_t *pEpping_ctx,
 			       HTC_ENDPOINT_ID eid, qdf_nbuf_t skb);
-#endif /* HIF_PCI */
+#endif /* HIF_PCI || HIF_IPCI */
 #endif /* end #ifndef EPPING_INTERNAL_H */

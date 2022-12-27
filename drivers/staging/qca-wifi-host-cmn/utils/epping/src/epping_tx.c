@@ -1,8 +1,5 @@
 /*
- * Copyright (c) 2014-2017 The Linux Foundation. All rights reserved.
- *
- * Previously licensed under the ISC license by Qualcomm Atheros, Inc.
- *
+ * Copyright (c) 2014-2019 The Linux Foundation. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -17,12 +14,6 @@
  * PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR OTHER
  * TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
  * PERFORMANCE OF THIS SOFTWARE.
- */
-
-/*
- * This file was originally distributed by Qualcomm Atheros, Inc.
- * under proprietary terms before Copyright ownership was assigned
- * to the Linux Foundation.
  */
 
 /*========================================================================
@@ -63,7 +54,7 @@ void epping_tx_dup_pkt(epping_adapter_t *adapter,
 	qdf_nbuf_t new_skb;
 
 	cookie = epping_alloc_cookie(adapter->pEpping_ctx);
-	if (cookie == NULL) {
+	if (!cookie) {
 		EPPING_LOG(QDF_TRACE_LEVEL_FATAL,
 			   "%s: epping_alloc_cookie returns no resource\n",
 			   __func__);
@@ -104,7 +95,7 @@ static int epping_tx_send_int(qdf_nbuf_t skb, epping_adapter_t *adapter)
 	EPPING_HEADER *eppingHdr = (EPPING_HEADER *) qdf_nbuf_data(skb);
 	HTC_ENDPOINT_ID eid = ENDPOINT_UNUSED;
 	struct epping_cookie *cookie = NULL;
-	A_UINT8 ac = 0;
+	uint8_t ac = 0;
 	QDF_STATUS ret = QDF_STATUS_SUCCESS;
 	int skb_len;
 	EPPING_HEADER tmpHdr = *eppingHdr;
@@ -112,7 +103,7 @@ static int epping_tx_send_int(qdf_nbuf_t skb, epping_adapter_t *adapter)
 	/* allocate resource for this packet */
 	cookie = epping_alloc_cookie(adapter->pEpping_ctx);
 	/* no resource */
-	if (cookie == NULL) {
+	if (!cookie) {
 		EPPING_LOG(QDF_TRACE_LEVEL_FATAL,
 			   "%s: epping_alloc_cookie returns no resource\n",
 			   __func__);
@@ -219,7 +210,7 @@ int epping_tx_send(qdf_nbuf_t skb, epping_adapter_t *adapter)
 {
 	qdf_nbuf_t nodrop_skb;
 	EPPING_HEADER *eppingHdr;
-	A_UINT8 ac = 0;
+	uint8_t ac = 0;
 
 	eppingHdr = (EPPING_HEADER *) qdf_nbuf_data(skb);
 
@@ -315,7 +306,7 @@ enum htc_send_full_action epping_tx_queue_full(void *Context,
 	return HTC_SEND_FULL_KEEP;
 }
 #endif /* HIF_SDIO */
-void epping_tx_complete_multiple(void *ctx, HTC_PACKET_QUEUE *pPacketQueue)
+void epping_tx_complete(void *ctx, HTC_PACKET *htc_pkt)
 {
 	epping_context_t *pEpping_ctx = (epping_context_t *) ctx;
 	epping_adapter_t *adapter = pEpping_ctx->epping_adapter;
@@ -326,75 +317,72 @@ void epping_tx_complete_multiple(void *ctx, HTC_PACKET_QUEUE *pPacketQueue)
 	struct epping_cookie *cookie;
 	A_BOOL flushing = false;
 	qdf_nbuf_queue_t skb_queue;
-	HTC_PACKET *htc_pkt;
+
+	if (!htc_pkt)
+		return;
 
 	qdf_nbuf_queue_init(&skb_queue);
 
 	qdf_spin_lock_bh(&adapter->data_lock);
 
-	while (!HTC_QUEUE_EMPTY(pPacketQueue)) {
-		htc_pkt = htc_packet_dequeue(pPacketQueue);
-		if (htc_pkt == NULL)
-			break;
-		status = htc_pkt->Status;
-		eid = htc_pkt->Endpoint;
-		pktSkb = GET_HTC_PACKET_NET_BUF_CONTEXT(htc_pkt);
-		cookie = htc_pkt->pPktContext;
+	status = htc_pkt->Status;
+	eid = htc_pkt->Endpoint;
+	pktSkb = GET_HTC_PACKET_NET_BUF_CONTEXT(htc_pkt);
+	cookie = htc_pkt->pPktContext;
 
-		if (!pktSkb) {
+	if (!pktSkb) {
+		EPPING_LOG(QDF_TRACE_LEVEL_ERROR,
+			   "%s: NULL skb from hc packet", __func__);
+		QDF_BUG(0);
+	} else {
+		if (htc_pkt->pBuffer != qdf_nbuf_data(pktSkb)) {
 			EPPING_LOG(QDF_TRACE_LEVEL_ERROR,
-				 "%s: NULL skb from hc packet", __func__);
+				   "%s: htc_pkt buffer not equal to skb->data",
+				   __func__);
 			QDF_BUG(0);
-		} else {
-			if (htc_pkt->pBuffer != qdf_nbuf_data(pktSkb)) {
+		}
+		/* add this to the list, use faster non-lock API */
+		qdf_nbuf_queue_add(&skb_queue, pktSkb);
+
+		if (QDF_IS_STATUS_SUCCESS(status)) {
+			if (htc_pkt->ActualLength !=
+				qdf_nbuf_len(pktSkb)) {
 				EPPING_LOG(QDF_TRACE_LEVEL_ERROR,
-				  "%s: htc_pkt buffer not equal to skb->data",
-				  __func__);
+					   "%s: htc_pkt length not equal to skb->len",
+					   __func__);
 				QDF_BUG(0);
 			}
-			/* add this to the list, use faster non-lock API */
-			qdf_nbuf_queue_add(&skb_queue, pktSkb);
-
-			if (QDF_IS_STATUS_SUCCESS(status)) {
-				if (htc_pkt->ActualLength !=
-						qdf_nbuf_len(pktSkb)) {
-					EPPING_LOG(QDF_TRACE_LEVEL_ERROR,
-					  "%s: htc_pkt length not equal to skb->len",
-					  __func__);
-					QDF_BUG(0);
-				}
-			}
 		}
-
-		EPPING_LOG(QDF_TRACE_LEVEL_INFO,
-			   "%s skb=%pK data=%pK len=0x%x eid=%d ",
-			   __func__, pktSkb, htc_pkt->pBuffer,
-			   htc_pkt->ActualLength, eid);
-
-		if (QDF_IS_STATUS_ERROR(status)) {
-			if (status == QDF_STATUS_E_CANCELED) {
-				/* a packet was flushed  */
-				flushing = true;
-			}
-			if (status != QDF_STATUS_E_RESOURCES) {
-				printk("%s() -TX ERROR, status: 0x%x\n",
-				       __func__, status);
-			}
-		} else {
-			EPPING_LOG(QDF_TRACE_LEVEL_INFO, "%s: OK\n", __func__);
-			flushing = false;
-		}
-
-		epping_free_cookie(adapter->pEpping_ctx, cookie);
 	}
 
+	EPPING_LOG(QDF_TRACE_LEVEL_INFO,
+		   "%s skb=%pK data=%pK len=0x%x eid=%d ",
+		   __func__, pktSkb, htc_pkt->pBuffer,
+		   htc_pkt->ActualLength, eid);
+
+	if (QDF_IS_STATUS_ERROR(status)) {
+		if (status == QDF_STATUS_E_CANCELED) {
+			/* a packet was flushed  */
+			flushing = true;
+		}
+		if (status != QDF_STATUS_E_RESOURCES) {
+			EPPING_LOG(QDF_TRACE_LEVEL_ERROR,
+				   "%s() -TX ERROR, status: 0x%x",
+				   __func__, status);
+		}
+	} else {
+		EPPING_LOG(QDF_TRACE_LEVEL_INFO, "%s: OK\n", __func__);
+		flushing = false;
+	}
+
+	epping_free_cookie(adapter->pEpping_ctx, cookie);
 	qdf_spin_unlock_bh(&adapter->data_lock);
 
 	/* free all skbs in our local list */
 	while (qdf_nbuf_queue_len(&skb_queue)) {
 		/* use non-lock version */
 		pktSkb = qdf_nbuf_queue_remove(&skb_queue);
-		if (pktSkb == NULL)
+		if (!pktSkb)
 			break;
 		qdf_nbuf_tx_free(pktSkb, QDF_NBUF_PKT_ERROR);
 		pEpping_ctx->total_tx_acks++;

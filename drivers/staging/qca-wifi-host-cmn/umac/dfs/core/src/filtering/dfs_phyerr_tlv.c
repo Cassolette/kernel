@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012, 2016-2017 The Linux Foundation. All rights reserved.
+ * Copyright (c) 2012, 2016-2021 The Linux Foundation. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for any
  * purpose with or without fee is hereby granted, provided that the above
@@ -295,6 +295,7 @@ static inline void dfs_check_for_false_detection(
  * @len: Phyerr buflen.
  * @rssi: RSSI.
  * @first_short_fft_peak_mag: first short FFT peak_mag.
+ * @psidx_diff: Pointer to psidx diff.
  *
  * This routine parses each TLV, prints out what's going on and calls an
  * appropriate sub-function. Since the TLV format doesn't _specify_ all TLV
@@ -307,13 +308,17 @@ static int dfs_tlv_parse_frame(struct wlan_dfs *dfs,
 		const char *buf,
 		size_t len,
 		uint8_t rssi,
-		int *first_short_fft_peak_mag)
+		int *first_short_fft_peak_mag,
+		int16_t *psidx_diff)
 {
 	int i = 0;
 	uint32_t tlv_hdr[1];
-	bool first_tlv = true;
 	bool false_detect = false;
+	/* total search FFT reports including short and long */
+	int8_t sfr_count = 0;
+	int16_t first_short_fft_psidx = 0;
 
+	*psidx_diff = 0;
 	dfs_debug(dfs, WLAN_DEBUG_DFS_PHYERR,
 			"total length = %zu bytes", len);
 	while ((i < len) && (false_detect == false)) {
@@ -363,6 +368,7 @@ static int dfs_tlv_parse_frame(struct wlan_dfs *dfs,
 					rssi);
 			break;
 		case TAG_ID_SEARCH_FFT_REPORT:
+			sfr_count++;
 			dfs_radar_fft_search_report_parse(dfs, buf + i,
 					MS(tlv_hdr[TLV_REG], TLV_LEN), rsfr);
 
@@ -372,8 +378,10 @@ static int dfs_tlv_parse_frame(struct wlan_dfs *dfs,
 			 * BB_srch_fft_ctrl_4.radar_fft_short_rpt_scl is set to
 			 * 0.
 			 */
-			if (first_tlv)
+			if (sfr_count == 1) {
 				*first_short_fft_peak_mag = rsfr->peak_mag;
+				first_short_fft_psidx = rsfr->peak_sidx;
+			}
 
 			/*
 			 * Check for possible false detection on Peregrine.
@@ -391,7 +399,8 @@ static int dfs_tlv_parse_frame(struct wlan_dfs *dfs,
 			 * RSSI estimate, but value indicated by HW for RF
 			 * saturation event.
 			 */
-			if (PERE_IS_OVERSAMPLING(dfs) && (first_tlv == true) &&
+			if (PERE_IS_OVERSAMPLING(dfs) &&
+				(sfr_count == 1) &&
 				(rssi == dfs->wlan_dfs_false_rssi_thres) &&
 				(rsfr->peak_mag < (2 * dfs->wlan_dfs_peak_mag))
 				) {
@@ -399,6 +408,21 @@ static int dfs_tlv_parse_frame(struct wlan_dfs *dfs,
 				dfs_debug(dfs, WLAN_DEBUG_DFS_PHYERR,
 					"setting false_detect to TRUE because of false_rssi_thres");
 			}
+
+			/*
+			 * The first FFT report indicated by (sfr_count == 1)
+			 * should correspond to the first short FFT report from
+			 * HW and the second FFT report indicated by
+			 * (sfr_count == 2) should correspond to the first long
+			 * FFT report from HW for the same pulse. The short and
+			 * log FFT reports have a factor of 4 difference in
+			 * resolution; hence the need to multiply by 4 when
+			 * computing the psidx_diff.
+			 */
+			if (sfr_count == 2)
+				*psidx_diff = rsfr->peak_sidx -
+					      4 * first_short_fft_psidx;
+
 			break;
 		default:
 			dfs_debug(dfs, WLAN_DEBUG_DFS_PHYERR,
@@ -408,7 +432,6 @@ static int dfs_tlv_parse_frame(struct wlan_dfs *dfs,
 
 		/* Skip the payload. */
 		i += MS(tlv_hdr[TLV_REG], TLV_LEN);
-		first_tlv = false;
 	}
 	dfs_debug(dfs, WLAN_DEBUG_DFS_PHYERR, "done");
 
@@ -422,8 +445,9 @@ static int dfs_tlv_parse_frame(struct wlan_dfs *dfs,
  *
  * Return: Returns the channel center.
  */
+#ifdef CONFIG_CHAN_FREQ_API
 static int dfs_tlv_calc_freq_info(struct wlan_dfs *dfs,
-		struct rx_radar_status *rs)
+				  struct rx_radar_status *rs)
 {
 	uint32_t chan_centre;
 	uint32_t chan_width;
@@ -437,15 +461,13 @@ static int dfs_tlv_calc_freq_info(struct wlan_dfs *dfs,
 		 * For now, the only 11ac channel with freq1/freq2 setup is
 		 * VHT80. Should have a flag macro to check this!
 		 */
-	} else if (IEEE80211_IS_CHAN_11AC_VHT80(dfs->dfs_curchan)) {
+	} else if (WLAN_IS_CHAN_11AC_VHT80(dfs->dfs_curchan)) {
 		/*
 		 * 11AC, so cfreq1/cfreq2 are setup.
 		 * If it's 80+80 this won't work - need to use seg
 		 * appropriately!
 		 */
-		chan_centre = dfs_mlme_ieee2mhz(dfs->dfs_pdev_obj,
-				dfs->dfs_curchan->dfs_ch_vhtop_ch_freq_seg1,
-				dfs->dfs_curchan->dfs_ch_flags);
+		chan_centre = dfs->dfs_curchan->dfs_ch_mhz_freq_seg1;
 	} else {
 		/*
 		 * HT20/HT40.
@@ -455,16 +477,14 @@ static int dfs_tlv_calc_freq_info(struct wlan_dfs *dfs,
 		chan_width = 20;
 
 		/* Grab default channel centre. */
-		chan_centre = dfs_ieee80211_chan2freq(dfs->dfs_curchan);
+		chan_centre = dfs->dfs_curchan->dfs_ch_freq;
 
 		/* Calculate offset based on HT40U/HT40D and VHT40U/VHT40D. */
-		if (IEEE80211_IS_CHAN_11N_HT40PLUS(dfs->dfs_curchan) ||
-			dfs->dfs_curchan->dfs_ch_flags &
-			IEEE80211_CHAN_VHT40PLUS)
+		if (WLAN_IS_CHAN_11N_HT40PLUS(dfs->dfs_curchan) ||
+		    WLAN_IS_CHAN_VHT40PLUS(dfs->dfs_curchan))
 			chan_offset = chan_width;
-		else if (IEEE80211_IS_CHAN_11N_HT40MINUS(dfs->dfs_curchan) ||
-			dfs->dfs_curchan->dfs_ch_flags &
-			IEEE80211_CHAN_VHT40MINUS)
+		else if (WLAN_IS_CHAN_11N_HT40MINUS(dfs->dfs_curchan) ||
+			  WLAN_IS_CHAN_VHT40MINUS(dfs->dfs_curchan))
 			chan_offset = -chan_width;
 		else
 			chan_offset = 0;
@@ -476,6 +496,8 @@ static int dfs_tlv_calc_freq_info(struct wlan_dfs *dfs,
 	/* Return ev_chan_centre in MHz. */
 	return chan_centre;
 }
+#endif
+
 
 /**
  * dfs_tlv_calc_event_freq_pulse() - Calculate the centre frequency and
@@ -649,6 +671,7 @@ int dfs_process_phyerr_bb_tlv(struct wlan_dfs *dfs,
 	struct rx_radar_status rs;
 	struct rx_search_fft_report rsfr;
 	int first_short_fft_peak_mag = 0;
+	int16_t psidx_diff;
 
 	qdf_mem_zero(&rs, sizeof(rs));
 	qdf_mem_zero(&rsfr, sizeof(rsfr));
@@ -663,14 +686,14 @@ int dfs_process_phyerr_bb_tlv(struct wlan_dfs *dfs,
 
 	/* Try parsing the TLV set. */
 	if (!dfs_tlv_parse_frame(dfs, &rs, &rsfr, buf, datalen, rssi,
-				&first_short_fft_peak_mag))
+				&first_short_fft_peak_mag, &psidx_diff))
 		return 0;
 
 	/* For debugging, print what we have parsed. */
 	dfs_radar_summary_print(dfs, &rs);
 
 	/* Populate dfs_phy_err from rs. */
-	qdf_mem_set(e, 0, sizeof(*e));
+	qdf_mem_zero(e, sizeof(*e));
 	e->rssi = rs.rssi;
 	e->dur = rs.pulse_duration;
 	e->is_pri = 1; /* Always PRI for now */
@@ -702,6 +725,9 @@ int dfs_process_phyerr_bb_tlv(struct wlan_dfs *dfs,
 	e->total_gain = rs.agc_total_gain;
 	e->mb_gain = rs.agc_mb_gain;
 	e->relpwr_db = rsfr.relpwr_db;
+	e->pulse_delta_peak = rs.delta_peak;
+	e->pulse_psidx_diff = psidx_diff;
+	e->pulse_delta_diff = rs.delta_diff;
 
 	dfs_debug(dfs, WLAN_DEBUG_DFS_PHYERR_SUM,
 		"fbin=%d, freq=%d.%d MHz, raw tsf=%u, offset=%d, cooked tsf=%u, rssi=%d, dur=%d, is_chirp=%d, fulltsf=%llu, freq=%d.%d MHz, freq_lo=%d.%dMHz, freq_hi=%d.%d MHz",
@@ -714,12 +740,15 @@ int dfs_process_phyerr_bb_tlv(struct wlan_dfs *dfs,
 		(int) abs(e->freq_hi) % 1000);
 
 	dfs_debug(dfs, WLAN_DEBUG_DFS_FALSE_DET,
-		"ts=%u, dur=%d, rssi=%d, freq_offset=%d.%dMHz, is_chirp=%d, seg_id=%d, peak_mag=%d, total_gain=%d, mb_gain=%d, relpwr_db=%d",
+		"ts=%u, dur=%d, rssi=%d, freq_offset=%d.%dMHz, is_chirp=%d, seg_id=%d, peak_mag=%d, total_gain=%d, mb_gain=%d, relpwr_db=%d, delta_peak=%d, delta_diff=%d, psidx_diff=%d",
 		e->rs_tstamp, rs.pulse_duration, rs.rssi,
 		(int)e->freq_offset_khz / 1000,
 		(int)abs(e->freq_offset_khz) % 1000, (int)rs.is_chirp,
 		rsfr.seg_id, rsfr.peak_mag, rs.agc_total_gain, rs.agc_mb_gain,
-		rsfr.relpwr_db);
+		rsfr.relpwr_db,
+		rs.delta_peak,
+		rs.delta_diff,
+		psidx_diff);
 
 	return 1;
 }

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2016-2017 The Linux Foundation. All rights reserved.
+ * Copyright (c) 2016-2021 The Linux Foundation. All rights reserved.
  * Copyright (c) 2002-2010, Atheros Communications Inc.
  *
  * Permission to use, copy, modify, and/or distribute this software for any
@@ -23,6 +23,7 @@
  */
 
 #include "../dfs.h"
+#include "../dfs_zero_cac.h"
 #include "../dfs_channel.h"
 #include "wlan_dfs_mlme_api.h"
 #include "../dfs_internal.h"
@@ -81,9 +82,9 @@ static inline uint16_t dfs_get_event_freqcentre(struct wlan_dfs *dfs,
 	 */
 	chan_width = dfs_get_event_freqwidth(dfs);
 
-	if (IEEE80211_IS_CHAN_11N_HT40PLUS(dfs->dfs_curchan))
+	if (WLAN_IS_CHAN_11N_HT40PLUS(dfs->dfs_curchan))
 		chan_offset = chan_width;
-	else if (IEEE80211_IS_CHAN_11N_HT40MINUS(dfs->dfs_curchan))
+	else if (WLAN_IS_CHAN_11N_HT40MINUS(dfs->dfs_curchan))
 		chan_offset = -chan_width;
 	else
 		chan_offset = 0;
@@ -94,7 +95,7 @@ static inline uint16_t dfs_get_event_freqcentre(struct wlan_dfs *dfs,
 	 */
 	if (is_dc) {
 		/* XXX TODO: Should DC events be considered 40MHz wide here? */
-		return dfs_ieee80211_chan2freq(
+		return dfs_chan2freq(
 				dfs->dfs_curchan) + (chan_offset / 2);
 	}
 
@@ -103,12 +104,12 @@ static inline uint16_t dfs_get_event_freqcentre(struct wlan_dfs *dfs,
 	 * The centre frequency for pri events is still dfs_ch_freq.
 	 */
 	if (is_pri)
-		return dfs_ieee80211_chan2freq(dfs->dfs_curchan);
+		return dfs_chan2freq(dfs->dfs_curchan);
 
 	if (is_ext)
-		return dfs_ieee80211_chan2freq(dfs->dfs_curchan) + chan_width;
+		return dfs_chan2freq(dfs->dfs_curchan) + chan_width;
 
-	return dfs_ieee80211_chan2freq(dfs->dfs_curchan);
+	return dfs_chan2freq(dfs->dfs_curchan);
 }
 
 int dfs_process_phyerr_owl(struct wlan_dfs *dfs,
@@ -136,12 +137,13 @@ int dfs_process_phyerr_owl(struct wlan_dfs *dfs,
 		dur = ((uint8_t *) cbuf)[0];
 
 	/* This is a spurious event; toss. */
-	if (rssi == 0 && dur == 0)
+	if (rssi == 0 && dur == 0) {
 		dfs->wlan_dfs_stats.datalen_discards++;
-	return 0;
+		return 0;
+	}
 
 	/* Fill out dfs_phy_err with the information we have at hand. */
-	qdf_mem_set(e, 0, sizeof(*e));
+	qdf_mem_zero(e, sizeof(*e));
 	e->rssi = rssi;
 	e->dur = dur;
 	e->is_pri = 1;
@@ -279,7 +281,7 @@ int dfs_process_phyerr_sowl(struct wlan_dfs *dfs,
 		rssi = ext_rssi;
 
 	/* Fill out the rssi/duration fields from above. */
-	qdf_mem_set(e, 0, sizeof(*e));
+	qdf_mem_zero(e, sizeof(*e));
 	e->rssi = rssi;
 	e->dur = dur;
 	e->is_pri = pri_found;
@@ -409,7 +411,7 @@ static void dfs_dump_phyerr_contents(const char *d, int len)
 
 		n += snprintf(buf + n, bufsize - n, "%02x ", d[i] & 0xff);
 		if (i % 16 == 15) {
-			dfs_info(NULL, WLAN_DEBUG_DFS_ALWAYS, "%s", buf);
+			dfs_debug(NULL, WLAN_DEBUG_DFS_ALWAYS, "%s", buf);
 			n = 0;
 			buf[0] = '\0';
 		}
@@ -417,7 +419,7 @@ static void dfs_dump_phyerr_contents(const char *d, int len)
 
 	/* Print the final line if we didn't print it above. */
 	if (n != 0)
-		dfs_info(NULL, WLAN_DEBUG_DFS_ALWAYS, "%s", buf);
+		dfs_debug(NULL, WLAN_DEBUG_DFS_ALWAYS, "%s", buf);
 }
 
 /**
@@ -480,28 +482,6 @@ static inline void dfs_filter_short_pulses(
 }
 
 /**
- * dfs_is_second_seg_radar_disabled() - Check for second segment radar disabled.
- * @dfs: Pointer to wlan_dfs structure.
- * @seg_id: Segment id.
- *
- * Return: true if the second segment RADAR is enabled else false.
- */
-static inline bool dfs_is_second_seg_radar_disabled(
-		struct wlan_dfs *dfs,
-		int seg_id)
-{
-	if ((seg_id == SEG_ID_SECONDARY) &&
-			!(dfs->dfs_proc_phyerr &
-				DFS_SECOND_SEGMENT_RADAR_EN)) {
-		dfs_debug(dfs, WLAN_DEBUG_DFS3,
-				"Do not process PHY error data from Second segment, DFS_SECOND_SEGMENT_RADAR_EN is not enabled");
-		return true;
-	}
-
-	return false;
-}
-
-/**
  * dfs_set_chan_index() - Set channel index.
  * @dfs: Pointer to wlan_dfs structure.
  * @e: Pointer to dfs_phy_err structure.
@@ -521,6 +501,26 @@ static inline void dfs_set_chan_index(
 				(event->re_chanindex == -1) ?
 				"- phyerr on ext channel" : "");
 	}
+}
+
+/**
+ * dfs_is_second_seg_radar_disabled() - Check for second segment radar disabled.
+ * @dfs: Pointer to wlan_dfs structure.
+ * @seg_id: Segment id.
+ *
+ * Return: true if the second segment RADAR is enabled else false.
+ */
+static bool dfs_is_second_seg_radar_disabled(
+		struct wlan_dfs *dfs, int seg_id)
+{
+	if ((seg_id == SEG_ID_SECONDARY) &&
+			!(dfs->dfs_proc_phyerr & DFS_SECOND_SEGMENT_RADAR_EN)) {
+		dfs_debug(dfs, WLAN_DEBUG_DFS3,
+				"Second segment radar detection is disabled");
+		return true;
+	}
+
+	return false;
 }
 
 void dfs_process_phyerr(struct wlan_dfs *dfs, void *buf, uint16_t datalen,
@@ -571,12 +571,12 @@ void dfs_process_phyerr(struct wlan_dfs *dfs, void *buf, uint16_t datalen,
 	if (dfs->dfs_debug_mask & WLAN_DEBUG_DFS_PHYERR_PKT)
 		dfs_dump_phyerr_contents(buf, datalen);
 
-	if (IEEE80211_IS_CHAN_RADAR(dfs->dfs_curchan)) {
+	if (WLAN_IS_CHAN_RADAR(dfs, dfs->dfs_curchan)) {
 		dfs_debug(dfs, WLAN_DEBUG_DFS1,
 			"Radar already found in the channel, do not queue radar data");
 		return;
 	}
-
+	dfs->dfs_phyerr_count++;
 	dfs->wlan_dfs_stats.total_phy_errors++;
 	dfs_debug(dfs, WLAN_DEBUG_DFS2, "phyerr %d len %d",
 		dfs->wlan_dfs_stats.total_phy_errors, datalen);
@@ -591,7 +591,7 @@ void dfs_process_phyerr(struct wlan_dfs *dfs, void *buf, uint16_t datalen,
 	if (r_ext_rssi & 0x80)
 		r_ext_rssi = 0;
 
-	qdf_mem_set(&e, 0, sizeof(e));
+	qdf_mem_zero(&e, sizeof(e));
 
 	/*
 	 * This is a bit evil - instead of just passing in the chip version, the
@@ -655,7 +655,8 @@ void dfs_process_phyerr(struct wlan_dfs *dfs, void *buf, uint16_t datalen,
 		 * BIN 5 chirping pulses are only for FCC or Japan MMK4 domain
 		 */
 		if (((dfs->dfsdomain == DFS_FCC_DOMAIN) ||
-			    (dfs->dfsdomain == DFS_MKK4_DOMAIN)) &&
+			    (dfs->dfsdomain == DFS_MKK4_DOMAIN) ||
+			    (dfs->dfsdomain == DFS_MKKN_DOMAIN)) &&
 			(e.dur >= MAYBE_BIN5_DUR) && (e.dur < MAX_BIN5_DUR)) {
 			int add_dur;
 			int slope = 0, dc_found = 0;
@@ -693,7 +694,8 @@ void dfs_process_phyerr(struct wlan_dfs *dfs, void *buf, uint16_t datalen,
 			 * MAX_BIN5_DUR or less than MAYBE_BIN5_DUR
 			 */
 			if ((dfs->dfsdomain == DFS_FCC_DOMAIN) ||
-					(dfs->dfsdomain == DFS_MKK4_DOMAIN)) {
+					(dfs->dfsdomain == DFS_MKK4_DOMAIN) ||
+					(dfs->dfsdomain == DFS_MKKN_DOMAIN)) {
 				/*
 				 * Would this result in very large pulses
 				 * wrapping around to become short pulses?
@@ -725,7 +727,7 @@ void dfs_process_phyerr(struct wlan_dfs *dfs, void *buf, uint16_t datalen,
 	 * If the channel is a turbo G channel, then the event is for the
 	 * adaptive radio (AR) pattern matching rather than radar detection.
 	 */
-	if ((dfs->dfs_curchan->dfs_ch_flags & CHANNEL_108G) == CHANNEL_108G) {
+	if (WLAN_IS_CHAN_108G(dfs->dfs_curchan)) {
 		if (!(dfs->dfs_proc_phyerr & DFS_AR_EN)) {
 			dfs_debug(dfs, WLAN_DEBUG_DFS2,
 				"DFS_AR_EN not enabled");
@@ -761,10 +763,10 @@ void dfs_process_phyerr(struct wlan_dfs *dfs, void *buf, uint16_t datalen,
 		STAILQ_INSERT_TAIL(&(dfs->dfs_arq), event, re_list);
 		WLAN_ARQ_UNLOCK(dfs);
 	} else {
-		if ((IEEE80211_IS_CHAN_DFS(dfs->dfs_curchan) ||
-		    ((IEEE80211_IS_CHAN_11AC_VHT160(dfs->dfs_curchan) ||
-		      IEEE80211_IS_CHAN_11AC_VHT80_80(dfs->dfs_curchan)) &&
-		     IEEE80211_IS_CHAN_DFS_CFREQ2(dfs->dfs_curchan))) ||
+		if ((WLAN_IS_CHAN_DFS(dfs->dfs_curchan) ||
+		    ((WLAN_IS_CHAN_11AC_VHT160(dfs->dfs_curchan) ||
+		      WLAN_IS_CHAN_11AC_VHT80_80(dfs->dfs_curchan)) &&
+		     WLAN_IS_CHAN_DFS_CFREQ2(dfs->dfs_curchan))) ||
 			(dfs_is_precac_timer_running(dfs))) {
 
 			int retval = 0;
@@ -809,6 +811,11 @@ void dfs_process_phyerr(struct wlan_dfs *dfs, void *buf, uint16_t datalen,
 			event->re_total_gain = e.total_gain;
 			event->re_mb_gain = e.mb_gain;
 			event->re_relpwr_db = e.relpwr_db;
+			event->re_delta_diff = e.pulse_delta_diff;
+			event->re_delta_peak = e.pulse_delta_peak;
+			event->re_psidx_diff = e.pulse_psidx_diff;
+			event->re_flags = 0;
+			event->re_flags |= DFS_EVENT_VALID_PSIDX_DIFF;
 			/* Handle chirp flags. */
 			if (e.do_check_chirp) {
 				event->re_flags |= DFS_EVENT_CHECKCHIRP;
@@ -842,4 +849,147 @@ void dfs_process_phyerr(struct wlan_dfs *dfs, void *buf, uint16_t datalen,
 #undef EXT_CH_RADAR_FOUND
 #undef PRI_CH_RADAR_FOUND
 #undef EXT_CH_RADAR_EARLY_FOUND
+}
+
+#ifdef MOBILE_DFS_SUPPORT
+void dfs_process_phyerr_filter_offload(struct wlan_dfs *dfs,
+	struct radar_event_info *wlan_radar_event)
+{
+	struct dfs_event *event;
+	int empty;
+	int do_check_chirp = 0;
+	int is_hw_chirp = 0;
+	int is_sw_chirp = 0;
+	int is_pri = 0;
+
+	if (!dfs) {
+		dfs_err(dfs, WLAN_DEBUG_DFS_ALWAYS,  "dfs is NULL");
+		return;
+	}
+
+	if (dfs->dfs_ignore_dfs) {
+		dfs_debug(dfs, WLAN_DEBUG_DFS1, "ignoring dfs");
+		return;
+	}
+
+	if (!(dfs->dfs_proc_phyerr & DFS_RADAR_EN)) {
+		dfs_debug(dfs, WLAN_DEBUG_DFS1,
+			"DFS_RADAR_EN not set in dfs->dfs_proc_phyerr");
+		return;
+	}
+
+	if (WLAN_IS_CHAN_RADAR(dfs, dfs->dfs_curchan)) {
+		dfs_debug(dfs, WLAN_DEBUG_DFS1,
+			"Radar already found in the channel, do not queue radar data");
+		return;
+	}
+
+	dfs->wlan_dfs_stats.total_phy_errors++;
+	if (dfs->dfs_caps.wlan_chip_is_bb_tlv) {
+		do_check_chirp = 1;
+		is_pri = 1;
+		is_hw_chirp = wlan_radar_event->pulse_is_chirp;
+
+		if ((uint32_t) dfs->dfs_phyerr_freq_min >
+		    wlan_radar_event->pulse_center_freq) {
+			dfs->dfs_phyerr_freq_min =
+				(int)wlan_radar_event->pulse_center_freq;
+		}
+
+		if (dfs->dfs_phyerr_freq_max <
+		    (int)wlan_radar_event->pulse_center_freq) {
+			dfs->dfs_phyerr_freq_max =
+				(int)wlan_radar_event->pulse_center_freq;
+		}
+	}
+
+	/*
+	 * Now, add the parsed, checked and filtered
+	 * radar phyerror event radar pulse event list.
+	 * This event will then be processed by
+	 * dfs_radar_processevent() to see if the pattern
+	 * of pulses in radar pulse list match any radar
+	 * singnature in the current regulatory domain.
+	 */
+
+	WLAN_DFSEVENTQ_LOCK(dfs);
+	empty = STAILQ_EMPTY(&(dfs->dfs_eventq));
+	WLAN_DFSEVENTQ_UNLOCK(dfs);
+	if (empty)
+		return;
+	/*
+	 * Add the event to the list, if there's space.
+	 */
+	WLAN_DFSEVENTQ_LOCK(dfs);
+	event = STAILQ_FIRST(&(dfs->dfs_eventq));
+	if (!event) {
+		WLAN_DFSEVENTQ_UNLOCK(dfs);
+		dfs_err(dfs, WLAN_DEBUG_DFS_ALWAYS,
+			"No more space left for queuing DFS Phyerror events");
+		return;
+	}
+	STAILQ_REMOVE_HEAD(&(dfs->dfs_eventq), re_list);
+	WLAN_DFSEVENTQ_UNLOCK(dfs);
+	dfs->dfs_phyerr_queued_count++;
+	dfs->dfs_phyerr_w53_counter++;
+	event->re_dur = (uint8_t) wlan_radar_event->pulse_duration;
+	event->re_rssi = wlan_radar_event->rssi;
+	event->re_ts = wlan_radar_event->pulse_detect_ts & DFS_TSMASK;
+	event->re_full_ts = (((uint64_t) wlan_radar_event->upload_fullts_high)
+				<< 32) | wlan_radar_event->upload_fullts_low;
+
+	/*
+	 * Index of peak magnitude
+	 */
+	event->re_sidx = wlan_radar_event->peak_sidx;
+	event->re_delta_diff = wlan_radar_event->delta_diff;
+	event->re_delta_peak = wlan_radar_event->delta_peak;
+	event->re_flags = 0;
+	if (wlan_radar_event->is_psidx_diff_valid) {
+		event->re_flags |= DFS_EVENT_VALID_PSIDX_DIFF;
+		event->re_psidx_diff = wlan_radar_event->psidx_diff;
+	}
+
+	/*
+	 * Handle chirp flags.
+	 */
+	if (do_check_chirp) {
+		event->re_flags |= DFS_EVENT_CHECKCHIRP;
+		if (is_hw_chirp)
+			event->re_flags |= DFS_EVENT_HW_CHIRP;
+		if (is_sw_chirp)
+			event->re_flags |= DFS_EVENT_SW_CHIRP;
+	}
+	/*
+	 * Correctly set which channel is being reported on
+	 */
+	if (is_pri) {
+		event->re_chanindex = (uint8_t) dfs->dfs_curchan_radindex;
+	} else {
+		if (dfs->dfs_extchan_radindex == -1)
+			dfs_debug(dfs, WLAN_DEBUG_DFS1,
+				 "phyerr on ext channel");
+		event->re_chanindex = (uint8_t) dfs->dfs_extchan_radindex;
+		dfs_debug(dfs, WLAN_DEBUG_DFS1,
+			"New extension channel event is added to queue");
+	}
+
+	WLAN_DFSQ_LOCK(dfs);
+
+	STAILQ_INSERT_TAIL(&(dfs->dfs_radarq), event, re_list);
+
+	empty = STAILQ_EMPTY(&dfs->dfs_radarq);
+
+	WLAN_DFSQ_UNLOCK(dfs);
+
+	if (!empty && !dfs->wlan_radar_tasksched) {
+		dfs->wlan_radar_tasksched = 1;
+		qdf_timer_mod(&dfs->wlan_dfs_task_timer, 0);
+	}
+}
+#endif
+
+void dfs_is_radar_enabled(struct wlan_dfs *dfs, int *ignore_dfs)
+{
+	*ignore_dfs = dfs->dfs_ignore_dfs;
 }
