@@ -786,6 +786,8 @@ struct hif_exec_context *hif_exec_get_ctx(struct hif_opaque_softc *softc,
 	return NULL;
 }
 
+qdf_export_symbol(hif_exec_get_ctx);
+
 int32_t hif_get_int_ctx_irq_num(struct hif_opaque_softc *softc,
 				uint8_t id)
 {
