@@ -61,8 +61,15 @@ static inline void ol_tx_desc_reset_timestamp(struct ol_tx_desc_t *tx_desc)
 {
 	tx_desc->entry_timestamp_ticks = 0xffffffff;
 }
-#endif
-#else
+#else /* QCA_COMPUTE_TX_DELAY */
+static inline void ol_tx_desc_compute_delay(struct ol_tx_desc_t *tx_desc)
+{
+}
+static inline void ol_tx_desc_reset_timestamp(struct ol_tx_desc_t *tx_desc)
+{
+}
+#endif /* QCA_COMPUTE_TX_DELAY */
+#else /* QCA_SUPPORT_TXDESC_SANITY_CHECKS */
 static inline void ol_tx_desc_sanity_checks(struct ol_txrx_pdev_t *pdev,
 						struct ol_tx_desc_t *tx_desc)
 {
@@ -70,13 +77,7 @@ static inline void ol_tx_desc_sanity_checks(struct ol_txrx_pdev_t *pdev,
 static inline void ol_tx_desc_reset_pkt_type(struct ol_tx_desc_t *tx_desc)
 {
 }
-static inline void ol_tx_desc_compute_delay(struct ol_tx_desc_t *tx_desc)
-{
-}
-static inline void ol_tx_desc_reset_timestamp(struct ol_tx_desc_t *tx_desc)
-{
-}
-#endif
+#endif /* QCA_SUPPORT_TXDESC_SANITY_CHECKS */
 
 #ifdef DESC_TIMESTAMP_DEBUG_INFO
 static inline void ol_tx_desc_update_tx_ts(struct ol_tx_desc_t *tx_desc)
