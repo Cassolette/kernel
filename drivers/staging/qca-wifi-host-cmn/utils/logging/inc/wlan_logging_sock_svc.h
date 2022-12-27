@@ -96,6 +96,7 @@ static inline QDF_STATUS wlan_logging_wait_for_flush_log_completion(void)
 }
 static inline void wlan_flush_host_logs_for_fatal(void) {}
 static inline void wlan_logging_set_per_pkt_stats(void) {}
+static inline void wlan_logging_set_connectivity_log(void) {}
 static inline void wlan_logging_set_fw_flush_complete(void) {}
 static inline void wlan_logging_set_active(bool active) {}
 static inline void wlan_set_console_log_levels(uint32_t console_log_levels) {}
