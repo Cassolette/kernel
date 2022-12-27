@@ -1,8 +1,6 @@
 /*
- * Copyright (c) 2015-2017 The Linux Foundation. All rights reserved.
- *
- * Previously licensed under the ISC license by Qualcomm Atheros, Inc.
- *
+ * Copyright (c) 2015-2017, 2019, 2021 The Linux Foundation.
+ * All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -17,12 +15,6 @@
  * PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR OTHER
  * TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
  * PERFORMANCE OF THIS SOFTWARE.
- */
-
-/*
- * This file was originally distributed by Qualcomm Atheros, Inc.
- * under proprietary terms before Copyright ownership was assigned
- * to the Linux Foundation.
  */
 
 #ifndef __WLAN_HDD_DRIVER_OPS_H__
@@ -85,12 +77,14 @@ int wlan_hdd_bus_suspend_noirq(void);
 /**
  * wlan_hdd_bus_resume() - wake up the bus
  *
+ * @type: WoW suspend type
+ *
  * This function is called by the platform driver to resume wlan
  * bus
  *
  * Return: 0 for success and negative errno if failure
  */
-int wlan_hdd_bus_resume(void);
+int wlan_hdd_bus_resume(enum qdf_suspend_type type);
 
 /**
  * wlan_hdd_bus_resume_noirq() - handle bus resume no irq
@@ -127,4 +121,57 @@ void hdd_hif_close(struct hdd_context *hdd_ctx, void *hif_ctx);
 int hdd_hif_open(struct device *dev, void *bdev, const struct hif_bus_id *bid,
 		 enum qdf_bus_type bus_type, bool reinit);
 
+/**
+ * hdd_soc_idle_restart_lock() - Takes wakelock for idle restart
+ * @dev: wlan device structure
+ *
+ * This function takes wakelock to prevent suspend during idle restart
+ *
+ * Return: 0 for success and non zero for error
+ */
+int hdd_soc_idle_restart_lock(struct device *dev);
+
+/**
+ * hdd_soc_idle_restart_unlock() - Releases wakelock for idle restart
+ *
+ * This function releases wakelock to allow suspend after idle restart
+ *
+ * Return: none
+ */
+void hdd_soc_idle_restart_unlock(void);
+
+#ifdef FORCE_WAKE
+/**
+ * hdd_set_hif_init_phase() - Enable/disable the
+ * init_phase flag
+ * @hif_ctx: hif opaque handle
+ * @hal_init_phase: init phase flag
+ *
+ * Return: None
+ */
+void hdd_set_hif_init_phase(struct hif_opaque_softc *hif_ctx,
+			    bool init_phase);
+#else
+static inline
+void hdd_set_hif_init_phase(struct hif_opaque_softc *hif_ctx,
+			    bool init_phase)
+{
+}
+#endif /* FORCE_WAKE */
+
+#ifdef HIF_DETECTION_LATENCY_ENABLE
+/**
+ * hdd_hif_set_enable_detection() - enable detection
+ * @hif_ctx: hif opaque handle
+ * @value: enable/disable
+ *
+ * Return: None
+ */
+void hdd_hif_set_enable_detection(struct hif_opaque_softc *hif_ctx, bool value);
+#else
+static inline
+void hdd_hif_set_enable_detection(struct hif_opaque_softc *hif_ctx, bool value)
+{
+}
+#endif /* HIF_DETECTION_LATENCY_ENABLE */
 #endif /* __WLAN_HDD_DRIVER_OPS_H__ */

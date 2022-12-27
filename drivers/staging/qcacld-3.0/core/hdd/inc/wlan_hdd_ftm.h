@@ -1,8 +1,5 @@
 /*
- * Copyright (c) 2013-2017 The Linux Foundation. All rights reserved.
- *
- * Previously licensed under the ISC license by Qualcomm Atheros, Inc.
- *
+ * Copyright (c) 2013-2018 The Linux Foundation. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -17,12 +14,6 @@
  * PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR OTHER
  * TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
  * PERFORMANCE OF THIS SOFTWARE.
- */
-
-/*
- * This file was originally distributed by Qualcomm Atheros, Inc.
- * under proprietary terms before Copyright ownership was assigned
- * to the Linux Foundation.
  */
 
 #ifndef WLAN_HDD_FTM_H
@@ -42,12 +33,14 @@
 
 struct hdd_context;
 
-int hdd_update_cds_config_ftm(struct hdd_context *hdd_ctx);
-void hdd_ftm_mc_process_msg(void *message);
 #if  defined(QCA_WIFI_FTM)
-QDF_STATUS wlan_hdd_ftm_testmode_cmd(void *data, int len);
 int wlan_hdd_qcmbr_unified_ioctl(struct hdd_adapter *adapter,
 				 struct ifreq *ifr);
-#endif
-
-#endif
+int hdd_update_cds_config_ftm(struct hdd_context *hdd_ctx);
+#else
+static inline int hdd_update_cds_config_ftm(struct hdd_context *hdd_ctx)
+{
+	return 0;
+}
+#endif /* QCA_WIFI_FTM */
+#endif /* WLAN_HDD_FTM_H */

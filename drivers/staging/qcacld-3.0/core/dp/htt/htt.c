@@ -1,8 +1,5 @@
 /*
- * Copyright (c) 2011, 2014-2017 The Linux Foundation. All rights reserved.
- *
- * Previously licensed under the ISC license by Qualcomm Atheros, Inc.
- *
+ * Copyright (c) 2011, 2014-2019-2020 The Linux Foundation. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -17,12 +14,6 @@
  * PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR OTHER
  * TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
  * PERFORMANCE OF THIS SOFTWARE.
- */
-
-/*
- * This file was originally distributed by Qualcomm Atheros, Inc.
- * under proprietary terms before Copyright ownership was assigned
- * to the Linux Foundation.
  */
 
 /**
@@ -47,6 +38,7 @@
 #include <cds_api.h>
 #include "hif.h"
 #include <cdp_txrx_handle.h>
+#include <ol_txrx_peer_find.h>
 
 #define HTT_HTC_PKT_POOL_INIT_SIZE 100  /* enough for a large A-MPDU */
 
@@ -78,13 +70,12 @@ struct htt_htc_pkt *htt_htc_pkt_alloc(struct htt_pdev_t *pdev)
 	}
 	HTT_TX_MUTEX_RELEASE(&pdev->htt_tx_mutex);
 
-	if (pkt == NULL)
+	if (!pkt)
 		pkt = qdf_mem_malloc(sizeof(*pkt));
 
-	if (!pkt) {
-		qdf_print("%s: HTC packet allocation failed\n", __func__);
+	if (!pkt)
 		return NULL;
-	}
+
 	htc_packet_set_magic_cookie(&(pkt->u.pkt.htc_pkt), 0);
 	return &pkt->u.pkt;     /* not actually a dereference */
 }
@@ -94,7 +85,7 @@ void htt_htc_pkt_free(struct htt_pdev_t *pdev, struct htt_htc_pkt *pkt)
 	struct htt_htc_pkt_union *u_pkt = (struct htt_htc_pkt_union *)pkt;
 
 	if (!u_pkt) {
-		qdf_print("%s: HTC packet is NULL\n", __func__);
+		qdf_print("HTC packet is NULL");
 		return;
 	}
 
@@ -109,13 +100,16 @@ void htt_htc_pkt_pool_free(struct htt_pdev_t *pdev)
 {
 	struct htt_htc_pkt_union *pkt, *next;
 
+	HTT_TX_MUTEX_ACQUIRE(&pdev->htt_tx_mutex);
 	pkt = pdev->htt_htc_pkt_freelist;
+	pdev->htt_htc_pkt_freelist = NULL;
+	HTT_TX_MUTEX_RELEASE(&pdev->htt_tx_mutex);
+
 	while (pkt) {
 		next = pkt->u.next;
 		qdf_mem_free(pkt);
 		pkt = next;
 	}
-	pdev->htt_htc_pkt_freelist = NULL;
 }
 
 #ifdef ATH_11AC_TXCOMPACT
@@ -175,12 +169,16 @@ void htt_htc_misc_pkt_pool_free(struct htt_pdev_t *pdev)
 	struct htt_htc_pkt_union *pkt, *next;
 	qdf_nbuf_t netbuf;
 
+	HTT_TX_MUTEX_ACQUIRE(&pdev->htt_tx_mutex);
 	pkt = pdev->htt_htc_pkt_misclist;
+	pdev->htt_htc_pkt_misclist = NULL;
+	HTT_TX_MUTEX_RELEASE(&pdev->htt_tx_mutex);
 
 	while (pkt) {
 		next = pkt->u.next;
 		if (htc_packet_get_magic_cookie(&(pkt->u.pkt.htc_pkt)) !=
 				HTC_PACKET_MAGIC_COOKIE) {
+			QDF_ASSERT(0);
 			pkt = next;
 			continue;
 		}
@@ -191,7 +189,6 @@ void htt_htc_misc_pkt_pool_free(struct htt_pdev_t *pdev)
 		qdf_mem_free(pkt);
 		pkt = next;
 	}
-	pdev->htt_htc_pkt_misclist = NULL;
 }
 #endif
 
@@ -222,8 +219,8 @@ htt_htc_tx_htt2_service_start(struct htt_pdev_t *pdev,
 {
 	QDF_STATUS status;
 
-	qdf_mem_set(connect_req, 0, sizeof(struct htc_service_connect_req));
-	qdf_mem_set(connect_resp, 0, sizeof(struct htc_service_connect_resp));
+	qdf_mem_zero(connect_req, sizeof(struct htc_service_connect_req));
+	qdf_mem_zero(connect_resp, sizeof(struct htc_service_connect_resp));
 
 	/* The same as HTT service but no RX. */
 	connect_req->EpCallbacks.pContext = pdev;
@@ -328,17 +325,53 @@ void htt_clear_bundle_stats(htt_pdev_handle pdev)
  *
  * Return: 0 for success or error code.
  */
+
+#if defined(QCN7605_SUPPORT) && defined(IPA_OFFLOAD)
+
+/* In case of QCN7605 with IPA offload only 2 CE
+ * are used for RFS
+ */
 static int
 htt_htc_attach_all(struct htt_pdev_t *pdev)
 {
 	if (htt_htc_attach(pdev, HTT_DATA_MSG_SVC))
-		return -EIO;
+		goto flush_endpoint;
+
 	if (htt_htc_attach(pdev, HTT_DATA2_MSG_SVC))
-		return -EIO;
-	if (htt_htc_attach(pdev, HTT_DATA3_MSG_SVC))
-		return -EIO;
+		goto flush_endpoint;
+
 	return 0;
+
+flush_endpoint:
+	htc_flush_endpoint(pdev->htc_pdev, ENDPOINT_0, HTC_TX_PACKET_TAG_ALL);
+
+	return -EIO;
 }
+
+#else
+
+static int
+htt_htc_attach_all(struct htt_pdev_t *pdev)
+{
+	if (htt_htc_attach(pdev, HTT_DATA_MSG_SVC))
+		goto flush_endpoint;
+
+	if (htt_htc_attach(pdev, HTT_DATA2_MSG_SVC))
+		goto flush_endpoint;
+
+	if (htt_htc_attach(pdev, HTT_DATA3_MSG_SVC))
+		goto flush_endpoint;
+
+	return 0;
+
+flush_endpoint:
+	htc_flush_endpoint(pdev->htc_pdev, ENDPOINT_0, HTC_TX_PACKET_TAG_ALL);
+
+	return -EIO;
+}
+
+#endif
+
 #else
 /**
  * htt_htc_attach_all() - Connect to HTC service for HTT
@@ -389,19 +422,29 @@ htt_pdev_alloc(ol_txrx_pdev_handle txrx_pdev,
 
 	/* for efficiency, store a local copy of the is_high_latency flag */
 	pdev->cfg.is_high_latency = ol_cfg_is_high_latency(pdev->ctrl_pdev);
+	/*
+	 * Credit reporting through HTT_T2H_MSG_TYPE_TX_CREDIT_UPDATE_IND
+	 * enabled or not.
+	 */
+	pdev->cfg.credit_update_enabled =
+		ol_cfg_is_credit_update_enabled(pdev->ctrl_pdev);
+
+	pdev->cfg.request_tx_comp = cds_is_ptp_rx_opt_enabled() ||
+		cds_is_packet_log_enabled();
+
 	pdev->cfg.default_tx_comp_req =
 			!ol_cfg_tx_free_at_download(pdev->ctrl_pdev);
 
 	pdev->cfg.is_full_reorder_offload =
 			ol_cfg_is_full_reorder_offload(pdev->ctrl_pdev);
-	QDF_TRACE(QDF_MODULE_ID_HTT, QDF_TRACE_LEVEL_INFO,
-		  "is_full_reorder_offloaded? %d",
+	QDF_TRACE(QDF_MODULE_ID_HTT, QDF_TRACE_LEVEL_INFO_LOW,
+		  "full_reorder_offloaded %d",
 		  (int)pdev->cfg.is_full_reorder_offload);
 
 	pdev->cfg.ce_classify_enabled =
 		ol_cfg_is_ce_classify_enabled(ctrl_pdev);
-	QDF_TRACE(QDF_MODULE_ID_HTT, QDF_TRACE_LEVEL_INFO,
-		  "ce_classify_enabled? %d",
+	QDF_TRACE(QDF_MODULE_ID_HTT, QDF_TRACE_LEVEL_INFO_LOW,
+		  "ce_classify %d",
 		  pdev->cfg.ce_classify_enabled);
 
 	if (pdev->cfg.is_high_latency) {
@@ -424,6 +467,9 @@ htt_pdev_alloc(ol_txrx_pdev_handle txrx_pdev,
 	 * since htt_rx_attach involves sending a rx ring configure
 	 * message to the target.
 	 */
+	HTT_TX_MUTEX_INIT(&pdev->htt_tx_mutex);
+	HTT_TX_NBUF_QUEUE_MUTEX_INIT(pdev);
+	HTT_TX_MUTEX_INIT(&pdev->credit_mutex);
 	if (htt_htc_attach_all(pdev))
 		goto htt_htc_attach_fail;
 	if (hif_ce_fastpath_cb_register(osc, htt_t2h_msg_handler_fast, pdev))
@@ -433,6 +479,9 @@ success:
 	return pdev;
 
 htt_htc_attach_fail:
+	HTT_TX_MUTEX_DESTROY(&pdev->credit_mutex);
+	HTT_TX_MUTEX_DESTROY(&pdev->htt_tx_mutex);
+	HTT_TX_NBUF_QUEUE_MUTEX_DESTROY(pdev);
 	qdf_mem_free(pdev);
 
 fail1:
@@ -453,6 +502,17 @@ htt_attach(struct htt_pdev_t *pdev, int desc_pool_size)
 	int i;
 	int ret = 0;
 
+	pdev->is_ipa_uc_enabled = false;
+	if (ol_cfg_ipa_uc_offload_enabled(pdev->ctrl_pdev))
+		pdev->is_ipa_uc_enabled = true;
+
+	pdev->new_htt_format_enabled = false;
+	if (ol_cfg_is_htt_new_format_enabled(pdev->ctrl_pdev))
+		pdev->new_htt_format_enabled = true;
+
+	htc_enable_hdr_length_check(pdev->htc_pdev,
+				    pdev->new_htt_format_enabled);
+
 	ret = htt_tx_attach(pdev, desc_pool_size);
 	if (ret)
 		goto fail1;
@@ -460,10 +520,6 @@ htt_attach(struct htt_pdev_t *pdev, int desc_pool_size)
 	ret = htt_rx_attach(pdev);
 	if (ret)
 		goto fail2;
-
-	HTT_TX_MUTEX_INIT(&pdev->htt_tx_mutex);
-	HTT_TX_NBUF_QUEUE_MUTEX_INIT(pdev);
-	HTT_TX_MUTEX_INIT(&pdev->credit_mutex);
 
 	/* pre-allocate some HTC_PACKET objects */
 	for (i = 0; i < HTT_HTC_PKT_POOL_INIT_SIZE; i++) {
@@ -483,7 +539,8 @@ htt_attach(struct htt_pdev_t *pdev, int desc_pool_size)
 		 */
 		pdev->download_len = 5000;
 
-		if (ol_cfg_tx_free_at_download(pdev->ctrl_pdev))
+		if (ol_cfg_tx_free_at_download(pdev->ctrl_pdev) &&
+		    !pdev->cfg.request_tx_comp)
 			pdev->tx_send_complete_part2 =
 						ol_tx_download_done_hl_free;
 		else
@@ -514,6 +571,13 @@ htt_attach(struct htt_pdev_t *pdev, int desc_pool_size)
 		ol_tx_target_credit_update(
 				pdev->txrx_pdev, ol_cfg_target_tx_credit(
 					pdev->ctrl_pdev));
+		DPTRACE(qdf_dp_trace_credit_record(QDF_HTT_ATTACH,
+			QDF_CREDIT_INC,
+			ol_cfg_target_tx_credit(pdev->ctrl_pdev),
+			qdf_atomic_read(&pdev->txrx_pdev->target_tx_credit),
+			qdf_atomic_read(&pdev->txrx_pdev->txq_grps[0].credit),
+			qdf_atomic_read(&pdev->txrx_pdev->txq_grps[1].credit)));
+
 	} else {
 		enum wlan_frm_fmt frm_type;
 
@@ -666,7 +730,6 @@ void htt_detach(htt_pdev_handle pdev)
 	HTT_TX_MUTEX_DESTROY(&pdev->credit_mutex);
 	HTT_TX_MUTEX_DESTROY(&pdev->htt_tx_mutex);
 	HTT_TX_NBUF_QUEUE_MUTEX_DESTROY(pdev);
-	htt_rx_dbg_rxbuf_deinit(pdev);
 }
 
 /**
@@ -695,8 +758,8 @@ int htt_update_endpoint(struct htt_pdev_t *pdev,
 	int     rc = 0;
 
 	hif_ctx = cds_get_context(QDF_MODULE_ID_HIF);
-	if (qdf_unlikely(NULL == hif_ctx)) {
-		QDF_ASSERT(NULL != hif_ctx);
+	if (qdf_unlikely(!hif_ctx)) {
+		QDF_ASSERT(hif_ctx);
 		QDF_TRACE(QDF_MODULE_ID_HTT, QDF_TRACE_LEVEL_ERROR,
 			  "%s:%d: assuming non-tx service.",
 			  __func__, __LINE__);
@@ -729,8 +792,8 @@ int htt_htc_attach(struct htt_pdev_t *pdev, uint16_t service_id)
 	struct htc_service_connect_resp response;
 	QDF_STATUS status;
 
-	qdf_mem_set(&connect, sizeof(connect), 0);
-	qdf_mem_set(&response, sizeof(response), 0);
+	qdf_mem_zero(&connect, sizeof(connect));
+	qdf_mem_zero(&response, sizeof(response));
 
 	connect.pMetaData = NULL;
 	connect.MetaDataLength = 0;
@@ -739,6 +802,8 @@ int htt_htc_attach(struct htt_pdev_t *pdev, uint16_t service_id)
 	connect.EpCallbacks.EpTxCompleteMultiple = NULL;
 	connect.EpCallbacks.EpRecv = htt_t2h_msg_handler;
 	connect.EpCallbacks.ep_resume_tx_queue = htt_tx_resume_handler;
+	connect.EpCallbacks.ep_padding_credit_update =
+					htt_tx_padding_credit_update_handler;
 
 	/* rx buffers currently are provided by HIF, not by EpRecvRefill */
 	connect.EpCallbacks.EpRecvRefill = NULL;
@@ -790,8 +855,13 @@ void htt_log_rx_ring_info(htt_pdev_handle pdev)
 		  "%s: Data Stall Detected with reason 4 (=FW_RX_REFILL_FAILED)."
 		  "src htt rx ring:  space for %d elements, filled with %d buffers, buffers in the ring %d, refill debt %d",
 		  __func__, pdev->rx_ring.size, pdev->rx_ring.fill_level,
-		  pdev->rx_ring.fill_cnt,
+		  qdf_atomic_read(&pdev->rx_ring.fill_cnt),
 		  qdf_atomic_read(&pdev->rx_ring.refill_debt));
+}
+
+void htt_rx_refill_failure(htt_pdev_handle pdev)
+{
+	QDF_BUG(qdf_atomic_read(&pdev->rx_ring.refill_debt));
 }
 
 #if HTT_DEBUG_LEVEL > 5
@@ -833,7 +903,7 @@ int htt_ipa_uc_attach(struct htt_pdev_t *pdev)
 {
 	int error;
 
-	QDF_TRACE(QDF_MODULE_ID_HTT, QDF_TRACE_LEVEL_INFO, "%s: enter",
+	QDF_TRACE(QDF_MODULE_ID_HTT, QDF_TRACE_LEVEL_DEBUG, "%s: enter",
 		  __func__);
 
 	/* TX resource attach */
@@ -860,7 +930,7 @@ int htt_ipa_uc_attach(struct htt_pdev_t *pdev)
 		return error;
 	}
 
-	QDF_TRACE(QDF_MODULE_ID_HTT, QDF_TRACE_LEVEL_INFO, "%s: exit",
+	QDF_TRACE(QDF_MODULE_ID_HTT, QDF_TRACE_LEVEL_DEBUG, "%s: exit",
 		__func__);
 	return 0;               /* success */
 }
@@ -873,7 +943,7 @@ int htt_ipa_uc_attach(struct htt_pdev_t *pdev)
  */
 void htt_ipa_uc_detach(struct htt_pdev_t *pdev)
 {
-	QDF_TRACE(QDF_MODULE_ID_HTT, QDF_TRACE_LEVEL_INFO, "%s: enter",
+	QDF_TRACE(QDF_MODULE_ID_HTT, QDF_TRACE_LEVEL_DEBUG, "%s: enter",
 		__func__);
 
 	/* TX IPA micro controller detach */
@@ -882,71 +952,32 @@ void htt_ipa_uc_detach(struct htt_pdev_t *pdev)
 	/* RX IPA micro controller detach */
 	htt_rx_ipa_uc_detach(pdev);
 
-	QDF_TRACE(QDF_MODULE_ID_HTT, QDF_TRACE_LEVEL_INFO, "%s: exit",
+	QDF_TRACE(QDF_MODULE_ID_HTT, QDF_TRACE_LEVEL_DEBUG, "%s: exit",
 		__func__);
 }
 
-/**
- * htt_ipa_uc_get_resource() - Get uc resource from htt and lower layer
- * @pdev: handle to the HTT instance
- * @ce_sr_base_paddr: copy engine source ring base physical address
- * @ce_sr_ring_size: copy engine source ring size
- * @ce_reg_paddr: copy engine register physical address
- * @tx_comp_ring_base_paddr: tx comp ring base physical address
- * @tx_comp_ring_size: tx comp ring size
- * @tx_num_alloc_buffer: number of allocated tx buffer
- * @rx_rdy_ring_base_paddr: rx ready ring base physical address
- * @rx_rdy_ring_size: rx ready ring size
- * @rx_proc_done_idx_paddr: rx process done index physical address
- * @rx_proc_done_idx_vaddr: rx process done index virtual address
- * @rx2_rdy_ring_base_paddr: rx done ring base physical address
- * @rx2_rdy_ring_size: rx done ring size
- * @rx2_proc_done_idx_paddr: rx done index physical address
- * @rx2_proc_done_idx_vaddr: rx done index virtual address
- *
- * Return: 0 success
- */
 int
 htt_ipa_uc_get_resource(htt_pdev_handle pdev,
-			qdf_dma_addr_t *ce_sr_base_paddr,
+			qdf_shared_mem_t **ce_sr,
+			qdf_shared_mem_t **tx_comp_ring,
+			qdf_shared_mem_t **rx_rdy_ring,
+			qdf_shared_mem_t **rx2_rdy_ring,
+			qdf_shared_mem_t **rx_proc_done_idx,
+			qdf_shared_mem_t **rx2_proc_done_idx,
 			uint32_t *ce_sr_ring_size,
 			qdf_dma_addr_t *ce_reg_paddr,
-			qdf_dma_addr_t *tx_comp_ring_base_paddr,
-			uint32_t *tx_comp_ring_size,
-			uint32_t *tx_num_alloc_buffer,
-			qdf_dma_addr_t *rx_rdy_ring_base_paddr,
-			uint32_t *rx_rdy_ring_size,
-			qdf_dma_addr_t *rx_proc_done_idx_paddr,
-			void **rx_proc_done_idx_vaddr,
-			qdf_dma_addr_t *rx2_rdy_ring_base_paddr,
-			uint32_t *rx2_rdy_ring_size,
-			qdf_dma_addr_t *rx2_proc_done_idx_paddr,
-			void **rx2_proc_done_idx_vaddr)
+			uint32_t *tx_num_alloc_buffer)
 {
 	/* Release allocated resource to client */
-	*tx_comp_ring_base_paddr =
-		pdev->ipa_uc_tx_rsc.tx_comp_base.paddr;
-	*tx_comp_ring_size =
-		(uint32_t) ol_cfg_ipa_uc_tx_max_buf_cnt(pdev->ctrl_pdev);
-	*tx_num_alloc_buffer = (uint32_t) pdev->ipa_uc_tx_rsc.alloc_tx_buf_cnt;
-	*rx_rdy_ring_base_paddr =
-		pdev->ipa_uc_rx_rsc.rx_ind_ring_base.paddr;
-	*rx_rdy_ring_size = (uint32_t) pdev->ipa_uc_rx_rsc.rx_ind_ring_size;
-	*rx_proc_done_idx_paddr =
-		pdev->ipa_uc_rx_rsc.rx_ipa_prc_done_idx.paddr;
-	*rx_proc_done_idx_vaddr =
-		(void *)pdev->ipa_uc_rx_rsc.rx_ipa_prc_done_idx.vaddr;
-	*rx2_rdy_ring_base_paddr =
-		pdev->ipa_uc_rx_rsc.rx2_ind_ring_base.paddr;
-	*rx2_rdy_ring_size = (uint32_t) pdev->ipa_uc_rx_rsc.rx2_ind_ring_size;
-	*rx2_proc_done_idx_paddr =
-		pdev->ipa_uc_rx_rsc.rx2_ipa_prc_done_idx.paddr;
-	*rx2_proc_done_idx_vaddr =
-		(void *)pdev->ipa_uc_rx_rsc.rx2_ipa_prc_done_idx.vaddr;
+	*tx_comp_ring = pdev->ipa_uc_tx_rsc.tx_comp_ring;
+	*rx_rdy_ring = pdev->ipa_uc_rx_rsc.rx_ind_ring;
+	*rx2_rdy_ring = pdev->ipa_uc_rx_rsc.rx2_ind_ring;
+	*rx_proc_done_idx = pdev->ipa_uc_rx_rsc.rx_ipa_prc_done_idx;
+	*rx2_proc_done_idx = pdev->ipa_uc_rx_rsc.rx2_ipa_prc_done_idx;
+	*tx_num_alloc_buffer = (uint32_t)pdev->ipa_uc_tx_rsc.alloc_tx_buf_cnt;
 
 	/* Get copy engine, bus resource */
-	htc_ipa_get_ce_resource(pdev->htc_pdev,
-				ce_sr_base_paddr,
+	htc_ipa_get_ce_resource(pdev->htc_pdev, ce_sr,
 				ce_sr_ring_size, ce_reg_paddr);
 
 	return 0;

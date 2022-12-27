@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017 The Linux Foundation. All rights reserved.
+ * Copyright (c) 2017-2020 The Linux Foundation. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -15,6 +15,7 @@
  * TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
  * PERFORMANCE OF THIS SOFTWARE.
  */
+
 /**
  * DOC: Implements public API for PMO GTK offload feature to interact
  * with target/wmi.
@@ -34,7 +35,7 @@ QDF_STATUS pmo_tgt_send_gtk_offload_req(struct wlan_objmgr_vdev *vdev,
 	struct pmo_vdev_priv_obj *vdev_ctx;
 	struct wlan_pmo_tx_ops pmo_tx_ops;
 
-	PMO_ENTER();
+	pmo_enter();
 	psoc = wlan_vdev_get_psoc(vdev);
 	if (!psoc) {
 		pmo_err("Failed to find psoc from from vdev:%pK",
@@ -54,7 +55,6 @@ QDF_STATUS pmo_tgt_send_gtk_offload_req(struct wlan_objmgr_vdev *vdev,
 
 	op_gtk_req = qdf_mem_malloc(sizeof(*op_gtk_req));
 	if (!op_gtk_req) {
-		pmo_err("cannot allocate op_gtk_req ");
 		status = QDF_STATUS_E_NOMEM;
 		goto out;
 	}
@@ -62,9 +62,9 @@ QDF_STATUS pmo_tgt_send_gtk_offload_req(struct wlan_objmgr_vdev *vdev,
 	if (gtk_req->flags == PMO_GTK_OFFLOAD_ENABLE) {
 		qdf_atomic_set(&vdev_ctx->gtk_err_enable, true);
 		qdf_mem_copy(op_gtk_req->kck, gtk_req->kck,
-			PMO_KCK_LEN);
+			     gtk_req->kck_len);
 		qdf_mem_copy(op_gtk_req->kek, gtk_req->kek,
-			PMO_KEK_LEN);
+			     PMO_KEK_LEN);
 		qdf_mem_copy(&op_gtk_req->replay_counter,
 			&gtk_req->replay_counter, PMO_REPLAY_COUNTER_LEN);
 	} else {
@@ -79,7 +79,7 @@ QDF_STATUS pmo_tgt_send_gtk_offload_req(struct wlan_objmgr_vdev *vdev,
 out:
 	if (op_gtk_req)
 		qdf_mem_free(op_gtk_req);
-	PMO_EXIT();
+	pmo_exit();
 
 	return status;
 }
@@ -91,7 +91,7 @@ QDF_STATUS pmo_tgt_get_gtk_rsp(struct wlan_objmgr_vdev *vdev)
 	QDF_STATUS status;
 	struct wlan_pmo_tx_ops pmo_tx_ops;
 
-	PMO_ENTER();
+	pmo_enter();
 	psoc = wlan_vdev_get_psoc(vdev);
 	if (!psoc) {
 		pmo_err("Failed to find psoc from from vdev:%pK",
@@ -110,7 +110,7 @@ QDF_STATUS pmo_tgt_get_gtk_rsp(struct wlan_objmgr_vdev *vdev)
 	if (status != QDF_STATUS_SUCCESS)
 		pmo_err("Failed to send_get_gtk_rsp_cmd  event");
 out:
-	PMO_EXIT();
+	pmo_exit();
 
 	return status;
 }
@@ -122,24 +122,21 @@ QDF_STATUS pmo_tgt_gtk_rsp_evt(struct wlan_objmgr_psoc *psoc,
 	struct wlan_objmgr_vdev *vdev;
 	struct pmo_vdev_priv_obj *vdev_ctx;
 
-	PMO_ENTER();
+	pmo_enter();
 	if (!rsp_param) {
 		pmo_err("gtk rsp param is null");
 		status = QDF_STATUS_E_NULL_VALUE;
 		goto out;
 	}
 
-	vdev = pmo_psoc_get_vdev(psoc, rsp_param->vdev_id);
+	vdev = wlan_objmgr_get_vdev_by_id_from_psoc(psoc, rsp_param->vdev_id,
+						    WLAN_PMO_ID);
 	if (!vdev) {
 		pmo_err("vdev is null vdev_id:%d psoc:%pK",
 			rsp_param->vdev_id, psoc);
 		status = QDF_STATUS_E_NULL_VALUE;
 		goto out;
 	}
-
-	status = pmo_vdev_get_ref(vdev);
-	if (QDF_IS_STATUS_ERROR(status))
-		goto out;
 
 	vdev_ctx = pmo_vdev_get_priv(vdev);
 
@@ -169,9 +166,9 @@ QDF_STATUS pmo_tgt_gtk_rsp_evt(struct wlan_objmgr_psoc *psoc,
 	}
 
 dec_ref:
-	pmo_vdev_put_ref(vdev);
+	wlan_objmgr_vdev_release_ref(vdev, WLAN_PMO_ID);
 out:
-	PMO_EXIT();
+	pmo_exit();
 
 	return status;
 }

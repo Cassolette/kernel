@@ -1,8 +1,5 @@
 /*
- * Copyright (c) 2011, 2013-2017 The Linux Foundation. All rights reserved.
- *
- * Previously licensed under the ISC license by Qualcomm Atheros, Inc.
- *
+ * Copyright (c) 2011, 2013-2017, 2019-2021 The Linux Foundation. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -17,12 +14,6 @@
  * PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR OTHER
  * TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
  * PERFORMANCE OF THIS SOFTWARE.
- */
-
-/*
- * This file was originally distributed by Qualcomm Atheros, Inc.
- * under proprietary terms before Copyright ownership was assigned
- * to the Linux Foundation.
  */
 
 #include <qdf_nbuf.h>           /* qdf_nbuf_t */
@@ -46,24 +37,35 @@
 	} while (0)
 
 int ol_rx_pn_cmp24(union htt_rx_pn_t *new_pn,
-		   union htt_rx_pn_t *old_pn, int is_unicast, int opmode)
+		   union htt_rx_pn_t *old_pn, int is_unicast, int opmode,
+		   bool strict_chk)
 {
-	int rc = ((new_pn->pn24 & 0xffffff) <= (old_pn->pn24 & 0xffffff));
-	return rc;
+	if (strict_chk)
+		return ((new_pn->pn24 & 0xffffff) - (old_pn->pn24 & 0xffffff)
+			!= 1);
+	else
+		return ((new_pn->pn24 & 0xffffff) <= (old_pn->pn24 & 0xffffff));
 }
 
 int ol_rx_pn_cmp48(union htt_rx_pn_t *new_pn,
-		   union htt_rx_pn_t *old_pn, int is_unicast, int opmode)
+		   union htt_rx_pn_t *old_pn, int is_unicast, int opmode,
+		   bool strict_chk)
 {
-	int rc = ((new_pn->pn48 & 0xffffffffffffULL) <=
-		  (old_pn->pn48 & 0xffffffffffffULL));
-	return rc;
+	if (strict_chk)
+		return ((new_pn->pn48 & 0xffffffffffffULL) -
+			(old_pn->pn48 & 0xffffffffffffULL) != 1);
+	else
+		return ((new_pn->pn48 & 0xffffffffffffULL) <=
+			(old_pn->pn48 & 0xffffffffffffULL));
 }
 
 int ol_rx_pn_wapi_cmp(union htt_rx_pn_t *new_pn,
-		      union htt_rx_pn_t *old_pn, int is_unicast, int opmode)
+		      union htt_rx_pn_t *old_pn, int is_unicast, int opmode,
+		      bool strict_chk)
 {
 	int pn_is_replay = 0;
+
+	/* TODO Strick check for WAPI is not implemented*/
 
 	if (new_pn->pn128[1] == old_pn->pn128[1])
 		pn_is_replay = (new_pn->pn128[0] <= old_pn->pn128[0]);
@@ -82,7 +84,7 @@ int ol_rx_pn_wapi_cmp(union htt_rx_pn_t *new_pn,
 qdf_nbuf_t
 ol_rx_pn_check_base(struct ol_txrx_vdev_t *vdev,
 		    struct ol_txrx_peer_t *peer,
-		    unsigned int tid, qdf_nbuf_t msdu_list)
+		    unsigned int tid, qdf_nbuf_t msdu_list, bool strict_chk)
 {
 	struct ol_txrx_pdev_t *pdev = vdev->pdev;
 	union htt_rx_pn_t *last_pn;
@@ -141,7 +143,7 @@ ol_rx_pn_check_base(struct ol_txrx_vdev_t *vdev,
 			pn_is_replay =
 				pdev->rx_pn[peer->security[index].sec_type].
 				cmp(&new_pn, last_pn, index == txrx_sec_ucast,
-				    vdev->opmode);
+				    vdev->opmode, strict_chk);
 		} else {
 			last_pn_valid = peer->tids_last_pn_valid[tid] = 1;
 		}
@@ -165,14 +167,12 @@ ol_rx_pn_check_base(struct ol_txrx_vdev_t *vdev,
 				last_pncheck_print_time = current_time_ms;
 				ol_txrx_warn(
 				   "PN check failed - TID %d, peer %pK "
-				   "(%02x:%02x:%02x:%02x:%02x:%02x) %s\n"
+				   "("QDF_MAC_ADDR_FMT") %s\n"
 				   "    old PN (u64 x2)= 0x%08llx %08llx (LSBs = %lld)\n"
 				   "    new PN (u64 x2)= 0x%08llx %08llx (LSBs = %lld)\n"
 				   "    new seq num = %d\n",
 				   tid, peer,
-				   peer->mac_addr.raw[0], peer->mac_addr.raw[1],
-				   peer->mac_addr.raw[2], peer->mac_addr.raw[3],
-				   peer->mac_addr.raw[4], peer->mac_addr.raw[5],
+				   QDF_MAC_ADDR_REF(peer->mac_addr.raw),
 				   (index ==
 				    txrx_sec_ucast) ? "ucast" : "mcast",
 				   last_pn->pn128[1], last_pn->pn128[0],
@@ -180,18 +180,16 @@ ol_rx_pn_check_base(struct ol_txrx_vdev_t *vdev,
 				   new_pn.pn128[1], new_pn.pn128[0],
 				   new_pn.pn128[0] & 0xffffffffffffULL,
 				   htt_rx_mpdu_desc_seq_num(pdev->htt_pdev,
-							    rx_desc));
+							    rx_desc, false));
 			} else {
 				ol_txrx_dbg(
 				   "PN check failed - TID %d, peer %pK "
-				   "(%02x:%02x:%02x:%02x:%02x:%02x) %s\n"
+				   "("QDF_MAC_ADDR_FMT") %s\n"
 				   "    old PN (u64 x2)= 0x%08llx %08llx (LSBs = %lld)\n"
 				   "    new PN (u64 x2)= 0x%08llx %08llx (LSBs = %lld)\n"
 				   "    new seq num = %d\n",
 				   tid, peer,
-				   peer->mac_addr.raw[0], peer->mac_addr.raw[1],
-				   peer->mac_addr.raw[2], peer->mac_addr.raw[3],
-				   peer->mac_addr.raw[4], peer->mac_addr.raw[5],
+				   QDF_MAC_ADDR_REF(peer->mac_addr.raw),
 				   (index ==
 				    txrx_sec_ucast) ? "ucast" : "mcast",
 				   last_pn->pn128[1], last_pn->pn128[0],
@@ -199,7 +197,7 @@ ol_rx_pn_check_base(struct ol_txrx_vdev_t *vdev,
 				   new_pn.pn128[1], new_pn.pn128[0],
 				   new_pn.pn128[0] & 0xffffffffffffULL,
 				   htt_rx_mpdu_desc_seq_num(pdev->htt_pdev,
-							    rx_desc));
+							    rx_desc, false));
 			}
 #if defined(ENABLE_RX_PN_TRACE)
 			ol_rx_pn_trace_display(pdev, 1);
@@ -262,7 +260,7 @@ ol_rx_pn_check(struct ol_txrx_vdev_t *vdev,
 	       struct ol_txrx_peer_t *peer, unsigned int tid,
 	       qdf_nbuf_t msdu_list)
 {
-	msdu_list = ol_rx_pn_check_base(vdev, peer, tid, msdu_list);
+	msdu_list = ol_rx_pn_check_base(vdev, peer, tid, msdu_list, false);
 	ol_rx_fwd_check(vdev, peer, tid, msdu_list);
 }
 
@@ -271,7 +269,7 @@ ol_rx_pn_check_only(struct ol_txrx_vdev_t *vdev,
 		    struct ol_txrx_peer_t *peer,
 		    unsigned int tid, qdf_nbuf_t msdu_list)
 {
-	msdu_list = ol_rx_pn_check_base(vdev, peer, tid, msdu_list);
+	msdu_list = ol_rx_pn_check_base(vdev, peer, tid, msdu_list, false);
 	ol_rx_deliver(vdev, peer, tid, msdu_list);
 }
 
@@ -309,7 +307,7 @@ ol_rx_pn_trace_add(struct ol_txrx_pdev_t *pdev,
 
 	htt_rx_mpdu_desc_pn(pdev->htt_pdev, rx_desc, &pn, 48);
 	pn32 = pn.pn48 & 0xffffffff;
-	seq_num = htt_rx_mpdu_desc_seq_num(pdev->htt_pdev, rx_desc);
+	seq_num = htt_rx_mpdu_desc_seq_num(pdev->htt_pdev, rx_desc, false);
 	unicast = !htt_rx_msdu_is_wlan_mcast(pdev->htt_pdev, rx_desc);
 
 	pdev->rx_pn_trace.data[idx].peer = peer;

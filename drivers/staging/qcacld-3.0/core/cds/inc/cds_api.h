@@ -1,8 +1,5 @@
 /*
- * Copyright (c) 2014-2017 The Linux Foundation. All rights reserved.
- *
- * Previously licensed under the ISC license by Qualcomm Atheros, Inc.
- *
+ * Copyright (c) 2014-2021 The Linux Foundation. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -19,11 +16,6 @@
  * PERFORMANCE OF THIS SOFTWARE.
  */
 
-/*
- * This file was originally distributed by Qualcomm Atheros, Inc.
- * under proprietary terms before Copyright ownership was assigned
- * to the Linux Foundation.
- */
 #if !defined(__CDS_API_H)
 #define __CDS_API_H
 
@@ -42,6 +34,9 @@
 #include <qdf_trace.h>
 #include <qdf_event.h>
 #include <qdf_lock.h>
+#include "qdf_platform.h"
+#include "qdf_cpuhp.h"
+#include <wlan_cmn.h>
 #include "reg_services_public_struct.h"
 #include <cds_reg_service.h>
 #include <cds_packet.h>
@@ -50,6 +45,11 @@
 #include <qdf_mc_timer.h>
 #include <wlan_objmgr_psoc_obj.h>
 #include <cdp_txrx_handle.h>
+
+/* The ini gReorderOffloadSupported is deprecated. So, defining a new macro
+ * DP_REORDER_OFFLOAD_SUPPORT with the ini's default value.
+ */
+#define DP_REORDER_OFFLOAD_SUPPORT (1)
 
 /* Amount of time to wait for WMA to perform an asynchronous activity.
  * This value should be larger than the timeout used by WMI to wait for
@@ -65,7 +65,8 @@
  * CDS_DRIVER_STATE_UNLOADING: Driver remove is in progress.
  * CDS_DRIVER_STATE_RECOVERING: Recovery in progress.
  * CDS_DRIVER_STATE_BAD: Driver in bad state.
- * CDS_DRIVER_STATE_MODULE_STOPPING: Module stop in progress.
+ * CDS_DRIVER_STATE_MODULE_STOP: Module stop in progress or done.
+ * CDS_DRIVER_STATE_ASSERTING_TARGET: Driver assert target in progress.
  */
 enum cds_driver_state {
 	CDS_DRIVER_STATE_UNINITIALIZED          = 0,
@@ -75,70 +76,24 @@ enum cds_driver_state {
 	CDS_DRIVER_STATE_RECOVERING             = BIT(3),
 	CDS_DRIVER_STATE_BAD                    = BIT(4),
 	CDS_DRIVER_STATE_FW_READY               = BIT(5),
-	CDS_DRIVER_STATE_MODULE_STOPPING        = BIT(6),
+	CDS_DRIVER_STATE_MODULE_STOP            = BIT(6),
+	CDS_DRIVER_STATE_ASSERTING_TARGET       = BIT(7),
+};
+
+/**
+ * struce cds_vdev_dp_stats - vdev stats populated from DP
+ * @tx_retries: packet number of successfully transmitted after more
+ *              than one retransmission attempt
+ */
+struct cds_vdev_dp_stats {
+	uint32_t tx_retries;
 };
 
 #define __CDS_IS_DRIVER_STATE(_state, _mask) (((_state) & (_mask)) == (_mask))
 
-/**
- * enum cds_fw_state - Firmware state
- * @CDS_FW_STATE_UNINITIALIZED: Firmware is in uninitialized state.
- * CDS_FW_STATE_DOWN: Firmware is down.
- */
-enum cds_fw_state {
-	CDS_FW_STATE_UNINITIALIZED = 0,
-	CDS_FW_STATE_DOWN,
-};
-
-#define __CDS_IS_FW_STATE(_state, _mask) (((_state) & (_mask)) == (_mask))
-
-/**
- * struct cds_sme_cbacks - list of sme functions registered with
- * CDS
- * @sme_get_valid_channels: gets the valid channel list for current reg domain
- * @sme_get_nss_for_vdev: gets the nss allowed for the vdev type
- */
-struct cds_sme_cbacks {
-	QDF_STATUS (*sme_get_valid_channels)(void*, uint8_t *, uint32_t *);
-	void (*sme_get_nss_for_vdev)(void*, enum tQDF_ADAPTER_MODE,
-		uint8_t *, uint8_t *);
-};
-
 void cds_set_driver_state(enum cds_driver_state);
 void cds_clear_driver_state(enum cds_driver_state);
 enum cds_driver_state cds_get_driver_state(void);
-
-/**
- * cds_set_fw_state() - Set current firmware state
- * @state:	Firmware state to be set to.
- *
- * This API sets firmware state to state. This API only sets the state and
- * doesn't clear states, please make sure to use cds_clear_firmware_state
- * to clear any state if required.
- *
- * Return: None
- */
-void cds_set_fw_state(enum cds_fw_state);
-
-/**
- * cds_clear_fw_state() - Clear current fw state
- * @state:	Driver state to be cleared.
- *
- * This API clears fw state. This API only clears the state, please make
- * sure to use cds_set_fw_state to set any new states.
- *
- * Return: None
- */
-void cds_clear_fw_state(enum cds_fw_state);
-
-/**
- * cds_get_fw_state() - Get current firmware state
- *
- * This API returns current firmware state stored in global context.
- *
- * Return: Firmware state enum
- */
-enum cds_fw_state cds_get_fw_state(void);
 
 /**
  * cds_is_driver_loading() - Is driver load in progress
@@ -202,63 +157,6 @@ static inline bool cds_is_load_or_unload_in_progress(void)
 }
 
 /**
- * cds_is_module_stop_in_progress() - Is module stopping
- *
- * Return: true if module stop is in progress.
- */
-static inline bool cds_is_module_stop_in_progress(void)
-{
-	enum cds_driver_state state = cds_get_driver_state();
-
-	return __CDS_IS_DRIVER_STATE(state, CDS_DRIVER_STATE_MODULE_STOPPING);
-}
-
-/**
- * cds_is_module_state_transitioning() - Is module state transitioning
- *
- * Return: true if module stop is in progress.
- */
-static inline int cds_is_module_state_transitioning(void)
-{
-	if (cds_is_load_or_unload_in_progress() || cds_is_driver_recovering() ||
-		cds_is_module_stop_in_progress()) {
-		pr_info("%s: Load/Unload %d or recovery %d or module_stop %d is in progress",
-			__func__, cds_is_load_or_unload_in_progress(),
-				cds_is_driver_recovering(),
-				cds_is_module_stop_in_progress());
-		return true;
-	} else {
-		return false;
-	}
-}
-
-/**
- * cds_is_fw_down() - Is FW down or not
- *
- * Return: true if FW is down and false otherwise.
- */
-static inline bool cds_is_fw_down(void)
-{
-	enum cds_fw_state state = cds_get_fw_state();
-
-	return __CDS_IS_FW_STATE(state, BIT(CDS_FW_STATE_DOWN));
-}
-
-/**
- * cds_set_fw_down() - Set or unset FW down bit
- * @value: value to set
- *
- * Return: none
- */
-static inline void cds_set_fw_down(uint8_t value)
-{
-	if (value)
-		cds_set_fw_state(CDS_FW_STATE_DOWN);
-	else
-		cds_clear_fw_state(CDS_FW_STATE_DOWN);
-}
-
-/**
  * cds_is_target_ready() - Is target is in ready state
  *
  * Return: true if target is in ready state and false otherwise.
@@ -268,6 +166,18 @@ static inline bool cds_is_target_ready(void)
 	enum cds_driver_state state = cds_get_driver_state();
 
 	return __CDS_IS_DRIVER_STATE(state, CDS_DRIVER_STATE_FW_READY);
+}
+
+/**
+ * cds_is_driver_state_module_stop - Is module stop is in-progress or done
+ *
+ * Return: true if driver state is module stop and false otherwise.
+ */
+static inline bool cds_is_driver_state_module_stop(void)
+{
+	enum cds_driver_state state = cds_get_driver_state();
+
+	return __CDS_IS_DRIVER_STATE(state, CDS_DRIVER_STATE_MODULE_STOP);
 }
 
 /**
@@ -355,18 +265,18 @@ static inline void cds_set_unload_in_progress(uint8_t value)
 }
 
 /**
- * cds_set_module_stop_in_progress() - Setting module stop in progress
+ * cds_set_driver_state_module_stop() - Setting module stop in progress or done
  *
  * @value: value to set
  *
  * Return: none
  */
-static inline void cds_set_module_stop_in_progress(bool value)
+static inline void cds_set_driver_state_module_stop(bool value)
 {
 	if (value)
-		cds_set_driver_state(CDS_DRIVER_STATE_MODULE_STOPPING);
+		cds_set_driver_state(CDS_DRIVER_STATE_MODULE_STOP);
 	else
-		cds_clear_driver_state(CDS_DRIVER_STATE_MODULE_STOPPING);
+		cds_clear_driver_state(CDS_DRIVER_STATE_MODULE_STOP);
 }
 
 /**
@@ -379,6 +289,33 @@ static inline bool cds_is_driver_loaded(void)
 	enum cds_driver_state state = cds_get_driver_state();
 
 	return __CDS_IS_DRIVER_STATE(state, CDS_DRIVER_STATE_LOADED);
+}
+
+/**
+ * cds_set_assert_target_in_progress() - Setting assert target in progress
+ *
+ * @value: value to set
+ *
+ * Return: none
+ */
+static inline void cds_set_assert_target_in_progress(bool value)
+{
+	if (value)
+		cds_set_driver_state(CDS_DRIVER_STATE_ASSERTING_TARGET);
+	else
+		cds_clear_driver_state(CDS_DRIVER_STATE_ASSERTING_TARGET);
+}
+
+/**
+ * cds_is_target_asserting() - Is driver asserting target
+ *
+ * Return: true if driver is asserting target
+ */
+static inline bool cds_is_target_asserting(void)
+{
+	enum cds_driver_state state = cds_get_driver_state();
+
+	return __CDS_IS_DRIVER_STATE(state, CDS_DRIVER_STATE_ASSERTING_TARGET);
 }
 
 /**
@@ -409,6 +346,12 @@ QDF_STATUS cds_open(struct wlan_objmgr_psoc *psoc);
  */
 QDF_STATUS cds_dp_open(struct wlan_objmgr_psoc *psoc);
 
+/**
+ * cds_enable() - start/enable cds module
+ * @psoc: Psoc pointer
+ *
+ * Return: QDF status
+ */
 QDF_STATUS cds_enable(struct wlan_objmgr_psoc *psoc);
 
 QDF_STATUS cds_disable(struct wlan_objmgr_psoc *psoc);
@@ -428,28 +371,43 @@ QDF_STATUS cds_close(struct wlan_objmgr_psoc *psoc);
  */
 QDF_STATUS cds_dp_close(struct wlan_objmgr_psoc *psoc);
 
-void *cds_get_context(QDF_MODULE_ID moduleId);
+/**
+ * cds_get_context() - get context data area
+ * @module_id: ID of the module who's context data is being retrieved.
+ *
+ * Each module in the system has a context/data area that is allocated
+ * and managed by CDS.  This API allows any user to get a pointer to its
+ * allocated context data area from the CDS global context.
+ *
+ * Return: pointer to the context data area of the module ID
+ *	   specified, or NULL if the context data is not allocated for
+ *	   the module ID specified.
+ */
+#define cds_get_context(module_id) \
+	__cds_get_context(module_id, __func__)
+void *__cds_get_context(QDF_MODULE_ID module_id, const char *func);
 
-uint8_t cds_get_datapath_handles(void **soc, struct cdp_pdev **pdev,
-			 struct cdp_vdev **vdev, uint8_t sessionId);
 void *cds_get_global_context(void);
 
-QDF_STATUS cds_alloc_context(QDF_MODULE_ID moduleID, void **ppModuleContext,
+QDF_STATUS cds_alloc_context(QDF_MODULE_ID module_id, void **module_context,
 			     uint32_t size);
 
-QDF_STATUS cds_free_context(QDF_MODULE_ID moduleID, void *pModuleContext);
+QDF_STATUS cds_free_context(QDF_MODULE_ID module_id, void *module_context);
 
 QDF_STATUS cds_set_context(QDF_MODULE_ID module_id, void *context);
-
-QDF_STATUS cds_get_vdev_types(enum tQDF_ADAPTER_MODE mode, uint32_t *type,
-			      uint32_t *subType);
 
 void cds_flush_work(void *work);
 void cds_flush_delayed_work(void *dwork);
 
+#ifdef REMOVE_PKT_LOG
+static inline
+bool cds_is_packet_log_enabled(void)
+{
+	return false;
+}
+#else
 bool cds_is_packet_log_enabled(void);
-
-uint64_t cds_get_monotonic_boottime(void);
+#endif
 
 /**
  * cds_get_recovery_reason() - get self recovery reason
@@ -472,7 +430,14 @@ void cds_reset_recovery_reason(void);
  *
  * Return: none
  */
-void cds_trigger_recovery(enum qdf_hang_reason reason);
+#define cds_trigger_recovery(reason) \
+	__cds_trigger_recovery(reason, __func__, __LINE__)
+
+void cds_trigger_recovery_psoc(void *psoc, enum qdf_hang_reason reason,
+			       const char *func, const uint32_t line);
+
+void __cds_trigger_recovery(enum qdf_hang_reason reason, const char *func,
+			    const uint32_t line);
 
 void cds_set_wakelock_logging(bool value);
 bool cds_is_wakelock_enabled(void);
@@ -491,7 +456,7 @@ void cds_get_and_reset_log_completion(uint32_t *is_fatal,
 bool cds_is_log_report_in_progress(void);
 bool cds_is_fatal_event_enabled(void);
 
-#ifdef WLAN_FEATURE_TSF_PLUS
+#ifdef WLAN_FEATURE_TSF_PLUS_SOCK_TS
 bool cds_is_ptp_rx_opt_enabled(void);
 bool cds_is_ptp_tx_opt_enabled(void);
 #else
@@ -540,14 +505,40 @@ bool cds_is_5_mhz_enabled(void);
 bool cds_is_10_mhz_enabled(void);
 bool cds_is_sub_20_mhz_enabled(void);
 bool cds_is_self_recovery_enabled(void);
-void cds_pkt_stats_to_logger_thread(void *pl_hdr, void *pkt_dump, void *data);
-enum tQDF_GLOBAL_CON_MODE cds_get_conparam(void);
+bool cds_is_fw_down(void);
+enum QDF_GLOBAL_MODE cds_get_conparam(void);
 
-#ifdef WMI_INTERFACE_EVENT_LOGGING
-void cds_print_htc_credit_history(uint32_t count, qdf_abstract_print * print,
-				  void *print_priv);
+#ifdef WLAN_LOGGING_SOCK_SVC_ENABLE
+void cds_pkt_stats_to_logger_thread(void *pl_hdr, void *pkt_dump, void *data);
+#else
+static inline
+void cds_pkt_stats_to_logger_thread(void *pl_hdr, void *pkt_dump, void *data)
+{
+}
 #endif
 
+#ifdef FEATURE_HTC_CREDIT_HISTORY
+/**
+ * cds_print_htc_credit_history() - Helper function to copy HTC credit
+ *				    history via htc_print_credit_history()
+ *
+ * @count:	Number of lines to be copied
+ * @print:	Print callback to print in the buffer
+ *
+ * Return:	none
+ */
+void cds_print_htc_credit_history(uint32_t count,
+				qdf_abstract_print * print,
+				void *print_priv);
+#else
+
+static inline
+void cds_print_htc_credit_history(uint32_t count,
+				qdf_abstract_print *print,
+				void *print_priv)
+{
+}
+#endif
 /**
  * cds_is_group_addr() - checks whether addr is multi cast
  * @mac_addr: address to be checked for multicast
@@ -565,4 +556,54 @@ bool cds_is_group_addr(uint8_t *mac_addr)
 		return false;
 }
 
+/**
+ * cds_get_connectivity_stats_pkt_bitmap() - get pkt-type bitmap
+ * @context: osif dev context
+ *
+ * Return: pkt bitmap to track
+ */
+uint32_t cds_get_connectivity_stats_pkt_bitmap(void *context);
+
+#ifdef FEATURE_ALIGN_STATS_FROM_DP
+/**
+ * cds_dp_get_vdev_stats() - get vdev stats from DP
+ * @vdev_id: vdev id
+ * @stats: structure of counters which CP is interested in
+ *
+ * Return: if get vdev stats from DP success, return true otherwise false
+ */
+bool cds_dp_get_vdev_stats(uint8_t vdev_id, struct cds_vdev_dp_stats *stats);
+#else
+static inline bool
+cds_dp_get_vdev_stats(uint8_t vdev_id, struct cds_vdev_dp_stats *stats)
+{
+	return false;
+}
+#endif
+
+/**
+ * cds_smmu_mem_map_setup() - Check SMMU S1 stage enable
+ *                            status and setup wlan driver
+ * @osdev: Parent device instance
+ * @ipa_present: IPA HW support flag
+ *
+ * This API checks if SMMU S1 translation is enabled in
+ * platform driver or not and sets it accordingly in driver.
+ *
+ * Return: QDF_STATUS
+ */
+QDF_STATUS cds_smmu_mem_map_setup(qdf_device_t osdev, bool ipa_present);
+
+/**
+ * cds_smmu_map_unmap() - Map / Unmap DMA buffer to IPA UC
+ * @map: Map / unmap operation
+ * @num_buf: Number of buffers in array
+ * @buf_arr: Buffer array of DMA mem mapping info
+ *
+ * This API maps/unmaps WLAN-IPA buffers if SMMU S1 translation
+ * is enabled.
+ *
+ * Return: Status of map operation
+ */
+int cds_smmu_map_unmap(bool map, uint32_t num_buf, qdf_mem_info_t *buf_arr);
 #endif /* if !defined __CDS_API_H */

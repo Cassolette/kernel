@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017 The Linux Foundation. All rights reserved.
+ * Copyright (c) 2017-2018, 2020-2021 The Linux Foundation. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -22,6 +22,8 @@
 #ifndef _WLAN_PMO_SUSPEND_RESUME_H_
 #define _WLAN_PMO_SUSPEND_RESUME_H_
 
+#ifdef WLAN_POWER_MANAGEMENT_OFFLOAD
+
 #include "wlan_pmo_common_public_struct.h"
 #include "wlan_pmo_wow.h"
 
@@ -41,16 +43,14 @@ void pmo_core_configure_dynamic_wake_events(struct wlan_objmgr_psoc *psoc);
  *
  * Return: True if bus suspende else false
  */
-static inline
-bool pmo_core_get_wow_bus_suspend(struct wlan_objmgr_psoc *psoc)
+static inline bool pmo_core_get_wow_bus_suspend(struct wlan_objmgr_psoc *psoc)
 {
-	bool value;
+	bool value = false;
 	struct pmo_psoc_priv_obj *psoc_ctx;
 
-	psoc_ctx = pmo_psoc_get_priv(psoc);
-	qdf_spin_lock_bh(&psoc_ctx->lock);
-	value = psoc_ctx->wow.is_wow_bus_suspended;
-	qdf_spin_unlock_bh(&psoc_ctx->lock);
+	pmo_psoc_with_ctx(psoc, psoc_ctx) {
+		value = psoc_ctx->wow.is_wow_bus_suspended;
+	}
 
 	return value;
 }
@@ -141,102 +141,39 @@ QDF_STATUS pmo_core_psoc_bus_resume_req(struct wlan_objmgr_psoc *psoc,
 		enum qdf_suspend_type type);
 
 /**
- * pmo_core_get_vdev_dtim_period() - Get vdev dtim period
+ * pmo_core_vdev_set_restore_dtim() - vdev dtim restore setting value
  * @vdev: objmgr vdev handle
- *
- * Return: Vdev dtim period
- */
-static inline
-uint8_t pmo_core_get_vdev_dtim_period(struct wlan_objmgr_vdev *vdev)
-{
-	uint8_t dtim_period = 0;
-
-	if (!vdev) {
-		pmo_err("vdev is null");
-		QDF_ASSERT(0);
-		return 0;
-	}
-	/* TODO */
-	/* dtim_period = wlan_vdev_mlme_get_dtim_period(vdev); */
-
-	return dtim_period;
-}
-
-/**
- * pmo_core_get_vdev_beacon_interval() - Get vdev beacon interval
- * @vdev: objmgr vdev handle
- *
- * Return: Vdev beacon interval
- */
-static inline
-uint16_t pmo_core_get_vdev_beacon_interval(struct wlan_objmgr_vdev *vdev)
-{
-	uint16_t beacon_interval = 0;
-
-	if (!vdev) {
-		pmo_err("vdev is null");
-		QDF_ASSERT(0);
-		return 0;
-	}
-	/* TODO */
-	/* beacon_interval = wlan_vdev_mlme_get_beacon_interval(vdev); */
-
-	return beacon_interval;
-}
-
-/**
- * pmo_core_update_alt_modulated_dtim_enable() - update alt modulatate dtim
- * @vdev: objmgr vdev handle
- * @value: true when alt modulated dtim enable else false
+ * @value: dtim restore policy value
  *
  * Return: None
  */
 static inline
-void pmo_core_update_alt_modulated_dtim_enable(struct wlan_objmgr_vdev *vdev,
-	bool value)
+void pmo_core_vdev_set_restore_dtim(struct wlan_objmgr_vdev *vdev,
+				    bool value)
 {
 	struct pmo_vdev_priv_obj *vdev_ctx;
 
 	vdev_ctx = pmo_vdev_get_priv(vdev);
 	qdf_spin_lock_bh(&vdev_ctx->pmo_vdev_lock);
-	vdev_ctx->alt_modulated_dtim_enable = value;
+	vdev_ctx->restore_dtim_setting = value;
 	qdf_spin_unlock_bh(&vdev_ctx->pmo_vdev_lock);
 }
 
 /**
- * pmo_core_vdev_set_dtim_policy() - Set vdev beacon dtim policy
+ * pmo_core_vdev_get_restore_dtim() - Get vdev restore dtim setting
  * @vdev: objmgr vdev handle
- * @value: carry vdev dtim policy
  *
- * Return: None
+ * Return: dtim restore policy
  */
 static inline
-void pmo_core_vdev_set_dtim_policy(struct wlan_objmgr_vdev *vdev,
-	uint32_t value)
+bool pmo_core_vdev_get_restore_dtim(struct wlan_objmgr_vdev *vdev)
 {
+	bool value;
 	struct pmo_vdev_priv_obj *vdev_ctx;
 
 	vdev_ctx = pmo_vdev_get_priv(vdev);
 	qdf_spin_lock_bh(&vdev_ctx->pmo_vdev_lock);
-	vdev_ctx->dtim_policy = value;
-	qdf_spin_unlock_bh(&vdev_ctx->pmo_vdev_lock);
-}
-
-/**
- * pmo_core_vdev_get_dtim_policy() - Get vdev beacon dtim policy
- * @vdev: objmgr vdev handle
- *
- * Return: vdev dtim policy
- */
-static inline
-uint32_t pmo_core_vdev_get_dtim_policy(struct wlan_objmgr_vdev *vdev)
-{
-	uint32_t value;
-	struct pmo_vdev_priv_obj *vdev_ctx;
-
-	vdev_ctx = pmo_vdev_get_priv(vdev);
-	qdf_spin_lock_bh(&vdev_ctx->pmo_vdev_lock);
-	value = vdev_ctx->dtim_policy;
+	value = vdev_ctx->restore_dtim_setting;
 	qdf_spin_unlock_bh(&vdev_ctx->pmo_vdev_lock);
 
 	return value;
@@ -249,16 +186,15 @@ uint32_t pmo_core_vdev_get_dtim_policy(struct wlan_objmgr_vdev *vdev)
  *
  * Return: None
  */
-static inline
-void pmo_core_psoc_update_power_save_mode(struct wlan_objmgr_psoc *psoc,
-	uint8_t value)
+static inline void
+pmo_core_psoc_update_power_save_mode(struct wlan_objmgr_psoc *psoc,
+				     uint8_t value)
 {
 	struct pmo_psoc_priv_obj *psoc_ctx;
 
-	psoc_ctx = pmo_psoc_get_priv(psoc);
-	qdf_spin_lock_bh(&psoc_ctx->lock);
-	psoc_ctx->psoc_cfg.power_save_mode = value;
-	qdf_spin_unlock_bh(&psoc_ctx->lock);
+	pmo_psoc_with_ctx(psoc, psoc_ctx) {
+		psoc_ctx->psoc_cfg.power_save_mode = value;
+	}
 }
 
 /**
@@ -267,57 +203,17 @@ void pmo_core_psoc_update_power_save_mode(struct wlan_objmgr_psoc *psoc,
  *
  * Return: vdev psoc power save mode value
  */
-static inline
-uint8_t pmo_core_psoc_get_power_save_mode(struct wlan_objmgr_psoc *psoc)
+static inline uint8_t
+pmo_core_psoc_get_power_save_mode(struct wlan_objmgr_psoc *psoc)
 {
-	uint8_t value;
+	uint8_t value = 0;
 	struct pmo_psoc_priv_obj *psoc_ctx;
 
-	psoc_ctx = pmo_psoc_get_priv(psoc);
-	qdf_spin_lock_bh(&psoc_ctx->lock);
-	value = psoc_ctx->psoc_cfg.power_save_mode;
-	qdf_spin_unlock_bh(&psoc_ctx->lock);
+	pmo_psoc_with_ctx(psoc, psoc_ctx) {
+		value = psoc_ctx->psoc_cfg.power_save_mode;
+	}
 
 	return value;
-}
-
-/**
- * pmo_core_psoc_get_qpower_config() - get qpower configuration
- * @psoc: objmgr psoc handle
- *
- * Power Save Offload configuration:
- * 0 -> Power save offload is disabled
- * 1 -> Legacy Power save enabled + Deep sleep Disabled
- * 2 -> QPower enabled + Deep sleep Disabled
- * 3 -> Legacy Power save enabled + Deep sleep Enabled
- * 4 -> QPower enabled + Deep sleep Enabled
- * 5 -> Duty cycling QPower enabled
- *
- * Return: enum powersave_qpower_mode with below values
- * QPOWER_DISABLED if QPOWER is disabled
- * QPOWER_ENABLED if QPOWER is enabled
- * QPOWER_DUTY_CYCLING if DUTY CYCLING QPOWER is enabled
- */
-static inline
-enum pmo_power_save_qpower_mode pmo_core_psoc_get_qpower_config(
-		struct wlan_objmgr_psoc *psoc)
-{
-	uint8_t ps_mode = pmo_core_psoc_get_power_save_mode(psoc);
-
-	switch (ps_mode) {
-	case pmo_ps_qpower_no_deep_sleep:
-	case pmo_ps_qpower_deep_sleep:
-		pmo_debug("QPOWER is enabled in power save mode %d", ps_mode);
-		return pmo_qpower_enabled;
-	case pmo_ps_duty_cycling_qpower:
-		pmo_debug("DUTY cycling QPOWER is enabled in power save mode %d",
-			ps_mode);
-		return pmo_qpower_duty_cycling;
-	default:
-		pmo_debug("QPOWER is disabled in power save mode %d",
-			ps_mode);
-		return pmo_qpower_disabled;
-	}
 }
 
 /**
@@ -357,39 +253,12 @@ uint16_t pmo_core_vdev_get_pause_bitmap(struct pmo_psoc_priv_obj *psoc_ctx,
 static inline
 bool pmo_is_vdev_in_ap_mode(struct wlan_objmgr_vdev *vdev)
 {
-	enum tQDF_ADAPTER_MODE mode;
+	enum QDF_OPMODE mode;
 
 	mode = pmo_get_vdev_opmode(vdev);
 
 	return (mode == QDF_SAP_MODE || mode == QDF_P2P_GO_MODE) == 1 ? 1 : 0;
 }
-
-#ifdef QCA_IBSS_SUPPORT
-/**
- * pmo_is_vdev_in_ibss_mode() - check that vdev is in ibss mode or not
- * @vdev: objmgr vdev handle
- * @vdev_id: vdev id
- *
- * Helper function to know whether given vdev id
- * is in IBSS mode or not.
- *
- * Return: True/False
- */
-static inline
-bool pmo_is_vdev_in_ibss_mode(struct wlan_objmgr_vdev *vdev)
-{
-	enum tQDF_ADAPTER_MODE mode;
-
-	mode = pmo_get_vdev_opmode(vdev);
-
-	return (mode == QDF_IBSS_MODE) ? true : false;
-}
-#else
-static inline bool pmo_is_vdev_in_ibss_mode(struct wlan_objmgr_vdev *vdev)
-{
-	return false;
-}
-#endif /* QCA_IBSS_SUPPORT */
 
 /**
  * pmo_handle_initial_wake_up() - handle initial wake up
@@ -433,5 +302,218 @@ void pmo_core_psoc_target_suspend_acknowledge(void *context, bool wow_nack);
  * Return: None
  */
 void pmo_core_psoc_wakeup_host_event_received(struct wlan_objmgr_psoc *psoc);
+
+/**
+ * pmo_core_config_listen_interval() - function to dynamically configure
+ * listen interval
+ * @vdev: objmgr vdev
+ * @listen_interval: new listen interval passed by user
+ *
+ * This function allows user to configure listen interval dynamically
+ *
+ * Return: QDF_STATUS
+ */
+QDF_STATUS pmo_core_config_listen_interval(struct wlan_objmgr_vdev *vdev,
+					   uint32_t listen_interval);
+
+/**
+ * pmo_core_config_modulated_dtim() - function to configure modulated dtim
+ * @vdev: objmgr vdev handle
+ * @mod_dtim: New modulated dtim value passed by user
+ *
+ * This function configures the modulated dtim in firmware
+ *
+ * Return: QDF_STATUS
+ */
+QDF_STATUS pmo_core_config_modulated_dtim(struct wlan_objmgr_vdev *vdev,
+					  uint32_t mod_dtim);
+
+/**
+ * pmo_core_txrx_suspend() - suspends TXRX
+ * @psoc: objmgr psoc handle
+ *
+ * This function disables the EXT grp irqs and drains the TX/RX pipes;
+ * this essentially suspends the TXRX activity
+ *
+ * Return: QDF_STATUS
+ */
+QDF_STATUS pmo_core_txrx_suspend(struct wlan_objmgr_psoc *psoc);
+
+/**
+ * pmo_core_txrx_resume() - resumes TXRX
+ * @psoc: objmgr psoc handle
+ *
+ * This function enables the EXT grp irqs, which inturn resumes
+ * the TXRX activity
+ *
+ * Return: QDF_STATUS
+ */
+QDF_STATUS pmo_core_txrx_resume(struct wlan_objmgr_psoc *psoc);
+
+/**
+ * pmo_core_config_forced_dtim() - function to configure forced dtim
+ * @vdev: objmgr vdev handle
+ * @dynamic_dtim: dynamic dtim value passed by user
+ *
+ * This function configures the forced modulated dtim in firmware
+ *
+ * Return: QDF_STATUS
+ */
+QDF_STATUS pmo_core_config_forced_dtim(struct wlan_objmgr_vdev *vdev,
+				       uint32_t dynamic_dtim);
+
+#ifdef SYSTEM_PM_CHECK
+/**
+ * pmo_core_system_resume() - function to handle system resume notification
+ * @psoc: objmgr psoc handle
+ *
+ * Return: None
+ */
+void pmo_core_system_resume(struct wlan_objmgr_psoc *psoc);
+#else
+static inline void pmo_core_system_resume(struct wlan_objmgr_psoc *psoc)
+{}
+#endif
+#ifdef WLAN_FEATURE_IGMP_OFFLOAD
+/**
+ * pmo_core_enable_igmp_offload() - function to offload igmp
+ * @vdev: objmgr vdev handle
+ * @pmo_igmp_req: igmp req
+ *
+ * This function to offload igmp to fw
+ *
+ * Return: QDF_STATUS
+ */
+QDF_STATUS
+pmo_core_enable_igmp_offload(struct wlan_objmgr_vdev *vdev,
+			     struct pmo_igmp_offload_req *pmo_igmp_req);
+#else
+static inline QDF_STATUS
+pmo_core_enable_igmp_offload(struct wlan_objmgr_vdev *vdev,
+			     struct pmo_igmp_offload_req *pmo_igmp_req)
+{
+	return QDF_STATUS_SUCCESS;
+}
+#endif
+
+/**
+ * pmo_core_vdev_get_moddtim_user_enabled() - Get vdev if mod dtim set
+ * by user
+ * @vdev: objmgr vdev handle
+ *
+ * Return: mod dtim set by user or not
+ */
+static inline
+bool pmo_core_vdev_get_moddtim_user_enabled(struct wlan_objmgr_vdev *vdev)
+{
+	bool value;
+	struct pmo_vdev_priv_obj *vdev_ctx;
+
+	vdev_ctx = pmo_vdev_get_priv(vdev);
+	qdf_spin_lock_bh(&vdev_ctx->pmo_vdev_lock);
+	value = vdev_ctx->dyn_modulated_dtim_enabled;
+	qdf_spin_unlock_bh(&vdev_ctx->pmo_vdev_lock);
+
+	return value;
+}
+
+/**
+ * pmo_core_vdev_set_moddtim_user_enabled() - vdev moddtim user enable setting
+ * @vdev: objmgr vdev handle
+ * @value: vdev moddtim user enable or not
+ *
+ * Return: None
+ */
+static inline
+void pmo_core_vdev_set_moddtim_user_enabled(struct wlan_objmgr_vdev *vdev,
+					    bool value)
+{
+	struct pmo_vdev_priv_obj *vdev_ctx;
+
+	vdev_ctx = pmo_vdev_get_priv(vdev);
+	qdf_spin_lock_bh(&vdev_ctx->pmo_vdev_lock);
+	vdev_ctx->dyn_modulated_dtim_enabled = value;
+	qdf_spin_unlock_bh(&vdev_ctx->pmo_vdev_lock);
+}
+
+/**
+ * pmo_core_vdev_get_moddtim_user_active() - Get vdev if moddtim user is
+ * sent to fw
+ * @vdev: objmgr vdev handle
+ *
+ * Return: moddtim user is sent to fw or not
+ */
+static inline
+bool pmo_core_vdev_get_moddtim_user_active(struct wlan_objmgr_vdev *vdev)
+{
+	bool retval;
+	struct pmo_vdev_priv_obj *vdev_ctx;
+
+	vdev_ctx = pmo_vdev_get_priv(vdev);
+	qdf_spin_lock_bh(&vdev_ctx->pmo_vdev_lock);
+	retval = vdev_ctx->is_dyn_modulated_dtim_activated;
+	qdf_spin_unlock_bh(&vdev_ctx->pmo_vdev_lock);
+
+	return retval;
+}
+
+/**
+ * pmo_core_vdev_set_moddtim_user_active() - vdev moddtim user active setting
+ * @vdev: objmgr vdev handle
+ * @value: vdev moddtim user active or not
+ *
+ * Return: None
+ */
+static inline
+void pmo_core_vdev_set_moddtim_user_active(struct wlan_objmgr_vdev *vdev,
+					   bool value)
+{
+	struct pmo_vdev_priv_obj *vdev_ctx;
+
+	vdev_ctx = pmo_vdev_get_priv(vdev);
+	qdf_spin_lock_bh(&vdev_ctx->pmo_vdev_lock);
+	vdev_ctx->is_dyn_modulated_dtim_activated = value;
+	qdf_spin_unlock_bh(&vdev_ctx->pmo_vdev_lock);
+}
+
+/**
+ * pmo_core_vdev_get_moddtim_user() - Get vdev moddtim set by user
+ * @vdev: objmgr vdev handle
+ *
+ * Return: moddtim value set by user
+ */
+static inline
+uint32_t pmo_core_vdev_get_moddtim_user(struct wlan_objmgr_vdev *vdev)
+{
+	uint32_t value;
+	struct pmo_vdev_priv_obj *vdev_ctx;
+
+	vdev_ctx = pmo_vdev_get_priv(vdev);
+	qdf_spin_lock_bh(&vdev_ctx->pmo_vdev_lock);
+	value = vdev_ctx->dyn_modulated_dtim;
+	qdf_spin_unlock_bh(&vdev_ctx->pmo_vdev_lock);
+
+	return value;
+}
+
+/**
+ * pmo_core_vdev_set_moddtim_user() - vdev moddtim user value setting
+ * @vdev: objmgr vdev handle
+ * @value: vdev moddtim value set by user
+ *
+ * Return: None
+ */
+static inline
+void pmo_core_vdev_set_moddtim_user(struct wlan_objmgr_vdev *vdev,
+				    uint32_t value)
+{
+	struct pmo_vdev_priv_obj *vdev_ctx;
+
+	vdev_ctx = pmo_vdev_get_priv(vdev);
+	qdf_spin_lock_bh(&vdev_ctx->pmo_vdev_lock);
+	vdev_ctx->dyn_modulated_dtim = value;
+	qdf_spin_unlock_bh(&vdev_ctx->pmo_vdev_lock);
+}
+#endif /* WLAN_POWER_MANAGEMENT_OFFLOAD */
 
 #endif /* end  of _WLAN_PMO_SUSPEND_RESUME_H_ */

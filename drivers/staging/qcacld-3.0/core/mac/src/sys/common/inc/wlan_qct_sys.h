@@ -1,8 +1,5 @@
 /*
- * Copyright (c) 2013-2017 The Linux Foundation. All rights reserved.
- *
- * Previously licensed under the ISC license by Qualcomm Atheros, Inc.
- *
+ * Copyright (c) 2013-2019 The Linux Foundation. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -17,12 +14,6 @@
  * PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR OTHER
  * TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
  * PERFORMANCE OF THIS SOFTWARE.
- */
-
-/*
- * This file was originally distributed by Qualcomm Atheros, Inc.
- * under proprietary terms before Copyright ownership was assigned
- * to the Linux Foundation.
  */
 
 #if !defined(WLAN_QCT_SYS_H__)
@@ -45,6 +36,8 @@
 #include <qdf_status.h>
 #include <scheduler_api.h>
 
+struct mac_context;
+
 /*---------------------------------------------------------------------------
    Preprocessor definitions and constants
    -------------------------------------------------------------------------*/
@@ -53,60 +46,60 @@
    Type declarations
    -------------------------------------------------------------------------*/
 
-/*----------------------------------------------------------------------------
+/**
+ * sys_rsp_cb() - SYS async resonse callback
+ * @user_data: context data for callback
+ *
+ * This is a protype for the callback function that SYS makes to various
+ * modules in the system.
+ *
+ * Return: None
+ */
+typedef void (*sys_rsp_cb)(void *user_data);
 
-   \brief sysResponseCback() - SYS async resonse callback
+/**
+ * sys_build_message_header() - to build the sys message header
+ * @msg_id: message id
+ * @msg: pointer to message context
+ *
+ * This function will initialize the SYS message header with the
+ * message type and any internal fields needed for a new SYS
+ * message. This function sets all but the message body, which is up
+ * to the caller to setup based on the specific message being built.
+ *
+ * NOTE: There are internal / reserved items in a SYS message that
+ * must be set correctly for the message to be recognized as a SYS
+ * message by the SYS message handlers.  It is important for every SYS
+ * message to be setup / built / initialized through this function.
+ *
+ * Return: QDF_STATUS
+ */
+QDF_STATUS sys_build_message_header(SYS_MSG_ID msg_id,
+				    struct scheduler_msg *msg);
 
-   This is a protype for the callback function that SYS makes to various
-   modules in the system.
-
-   \param  pUserData - user data that is passed to the Callback function
-   when it is invoked.
-
-   \return Nothing
-
-   \sa sysMcStart(), sysMcThreadProbe(), sysTxThreadProbe()
-
-   --------------------------------------------------------------------------*/
-typedef void (*sysResponseCback)(void *pUserData);
-
-/*---------------------------------------------------------------------------
-   Preprocessor definitions and constants
-   -------------------------------------------------------------------------*/
-
-/*---------------------------------------------------------------------------
-   Function declarations and documenation
-   -------------------------------------------------------------------------*/
-
-/*----------------------------------------------------------------------------
-
-   \brief sys_build_message_header() - Build / initialize a SYS message header
-
-   This function will initialize the SYS message header with the message type
-   and any internal fields needed for a new SYS message.  This function sets
-   all but the message body, which is up to the caller to setup based on the
-   specific message being built.
-
-   \note There are internal / reserved items in a SYS message that must be
-   set correctly for the message to be recognized as a SYS message by
-   the SYS message handlers.  It is important for every SYS message to
-   be setup / built / initialized through this function.
-
-   \param sysMsgId - a valid message ID for a SYS message.  See the
-   SYS_MSG_ID enum for all the valid SYS message IDs.
-
-   \param pMsg - pointer to the message structure to be setup.
-
-   \return
-
-   \sa
-
-   --------------------------------------------------------------------------*/
-QDF_STATUS sys_build_message_header(SYS_MSG_ID sysMsgId,
-				    struct scheduler_msg *pMsg);
+/**
+ * umac_stop() - send schedule message to mc thread to stop umac (sme and mac)
+ *
+ * Return: status of operation
+ */
+QDF_STATUS umac_stop(void);
 
 QDF_STATUS sys_mc_process_handler(struct scheduler_msg *msg);
 
-void wlan_sys_probe(void);
+/**
+ * sys_process_mmh_msg() - api to process an mmh message
+ * @mac: pointer to mac context
+ * @msg: pointer to message
+ *
+ * This API is used to process an mmh message.
+ *
+ * NOTE WELL: Ownership of the @msg bodyptr, if present, is always
+ * transferred, and the caller must not attempt to dereference or free
+ * the bodyptr after invoking this API.
+ *
+ * Return: none
+ */
+void sys_process_mmh_msg(struct mac_context *mac,
+			 struct scheduler_msg *msg);
 
 #endif /* WLAN_QCT_SYS_H__ */

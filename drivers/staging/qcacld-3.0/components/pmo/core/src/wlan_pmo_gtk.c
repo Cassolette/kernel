@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017 The Linux Foundation. All rights reserved.
+ * Copyright (c) 2017-2020 The Linux Foundation. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -15,6 +15,7 @@
  * TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
  * PERFORMANCE OF THIS SOFTWARE.
  */
+
 /**
  * DOC: Implements gtk offload feature API's
  */
@@ -71,6 +72,13 @@ static QDF_STATUS pmo_core_do_enable_gtk_offload(
 {
 	QDF_STATUS status = QDF_STATUS_SUCCESS;
 	uint8_t vdev_id;
+	enum QDF_OPMODE op_mode;
+
+	op_mode = pmo_get_vdev_opmode(vdev);
+	if (QDF_NDI_MODE == op_mode) {
+		pmo_debug("gtk offload is not supported in NaN mode");
+		return QDF_STATUS_E_INVAL;
+	}
 
 	if (!pmo_core_is_vdev_supports_offload(vdev)) {
 		pmo_debug("vdev in invalid opmode for gtk offload %d",
@@ -78,7 +86,7 @@ static QDF_STATUS pmo_core_do_enable_gtk_offload(
 		return QDF_STATUS_E_INVAL;
 	}
 
-	if (!pmo_core_is_vdev_connected(vdev))
+	if (wlan_vdev_is_up(vdev) != QDF_STATUS_SUCCESS)
 		return QDF_STATUS_E_INVAL;
 
 	vdev_id = pmo_vdev_get_id(vdev);
@@ -121,7 +129,7 @@ static QDF_STATUS pmo_core_is_gtk_enabled_in_fwr(
 		return QDF_STATUS_E_INVAL;
 	}
 
-	if (!pmo_core_is_vdev_connected(vdev))
+	if (wlan_vdev_is_up(vdev) != QDF_STATUS_SUCCESS)
 		return QDF_STATUS_E_INVAL;
 
 	status = pmo_get_vdev_bss_peer_mac_addr(vdev,
@@ -133,10 +141,10 @@ static QDF_STATUS pmo_core_is_gtk_enabled_in_fwr(
 	if (qdf_mem_cmp(&vdev_ctx->vdev_gtk_req.bssid,
 		&peer_bssid, QDF_MAC_ADDR_SIZE)) {
 		qdf_spin_unlock_bh(&vdev_ctx->pmo_vdev_lock);
-		pmo_err("cache request mac:%pM, peer mac:%pM are not same",
-			vdev_ctx->vdev_gtk_req.bssid.bytes,
-			peer_bssid.bytes);
-		 return QDF_STATUS_E_INVAL;
+		pmo_err("cache request mac:"QDF_MAC_ADDR_FMT", peer mac:"QDF_MAC_ADDR_FMT" are not same",
+			QDF_MAC_ADDR_REF(vdev_ctx->vdev_gtk_req.bssid.bytes),
+			QDF_MAC_ADDR_REF(peer_bssid.bytes));
+		return QDF_STATUS_E_INVAL;
 	}
 
 	if (vdev_ctx->vdev_gtk_req.flags != PMO_GTK_OFFLOAD_ENABLE) {
@@ -155,6 +163,13 @@ static QDF_STATUS pmo_core_do_disable_gtk_offload(
 			struct pmo_gtk_req *op_gtk_req)
 {
 	QDF_STATUS status = QDF_STATUS_SUCCESS;
+	enum QDF_OPMODE op_mode;
+
+	op_mode = pmo_get_vdev_opmode(vdev);
+	if (QDF_NDI_MODE == op_mode) {
+		pmo_debug("gtk offload is not supported in NaN mode");
+		return QDF_STATUS_E_INVAL;
+	}
 
 	status = pmo_core_is_gtk_enabled_in_fwr(vdev, vdev_ctx);
 	if (status != QDF_STATUS_SUCCESS)
@@ -170,10 +185,9 @@ QDF_STATUS pmo_core_cache_gtk_offload_req(struct wlan_objmgr_vdev *vdev,
 		struct pmo_gtk_req *gtk_req)
 {
 	QDF_STATUS status;
-	enum tQDF_ADAPTER_MODE opmode;
+	enum QDF_OPMODE opmode;
 	uint8_t vdev_id;
 
-	PMO_ENTER();
 	if (!gtk_req) {
 		pmo_err("gtk_req is NULL");
 		status = QDF_STATUS_E_INVAL;
@@ -202,20 +216,18 @@ QDF_STATUS pmo_core_cache_gtk_offload_req(struct wlan_objmgr_vdev *vdev,
 
 	status = pmo_core_cache_gtk_req_in_vdev_priv(vdev, gtk_req);
 dec_ref:
-	pmo_vdev_put_ref(vdev);
+	wlan_objmgr_vdev_release_ref(vdev, WLAN_PMO_ID);
 out:
-	PMO_EXIT();
 
 	return status;
 }
 
 QDF_STATUS pmo_core_flush_gtk_offload_req(struct wlan_objmgr_vdev *vdev)
 {
-	enum tQDF_ADAPTER_MODE opmode;
+	enum QDF_OPMODE opmode;
 	uint8_t vdev_id;
 	QDF_STATUS status;
 
-	PMO_ENTER();
 	if (!vdev) {
 		pmo_err("psoc is NULL");
 		status = QDF_STATUS_E_INVAL;
@@ -238,9 +250,8 @@ QDF_STATUS pmo_core_flush_gtk_offload_req(struct wlan_objmgr_vdev *vdev)
 
 	status = pmo_core_flush_gtk_req_from_vdev_priv(vdev);
 dec_ref:
-	pmo_vdev_put_ref(vdev);
+	wlan_objmgr_vdev_release_ref(vdev, WLAN_PMO_ID);
 out:
-	PMO_EXIT();
 
 	return status;
 }
@@ -251,7 +262,7 @@ QDF_STATUS pmo_core_enable_gtk_offload_in_fwr(struct wlan_objmgr_vdev *vdev)
 	struct pmo_vdev_priv_obj *vdev_ctx;
 	struct pmo_gtk_req *op_gtk_req = NULL;
 
-	PMO_ENTER();
+	pmo_enter();
 	if (!vdev) {
 		pmo_err("vdev is NULL");
 		status = QDF_STATUS_E_INVAL;
@@ -266,17 +277,16 @@ QDF_STATUS pmo_core_enable_gtk_offload_in_fwr(struct wlan_objmgr_vdev *vdev)
 
 	op_gtk_req = qdf_mem_malloc(sizeof(*op_gtk_req));
 	if (!op_gtk_req) {
-		pmo_err("op_gtk_req is NULL");
 		status = QDF_STATUS_E_INVAL;
 		goto dec_ref;
 	}
 	status = pmo_core_do_enable_gtk_offload(vdev, vdev_ctx, op_gtk_req);
 dec_ref:
-	pmo_vdev_put_ref(vdev);
+	wlan_objmgr_vdev_release_ref(vdev, WLAN_PMO_ID);
 out:
 	if (op_gtk_req)
 		qdf_mem_free(op_gtk_req);
-	PMO_EXIT();
+	pmo_exit();
 
 	return status;
 }
@@ -287,7 +297,7 @@ QDF_STATUS pmo_core_disable_gtk_offload_in_fwr(struct wlan_objmgr_vdev *vdev)
 	struct pmo_vdev_priv_obj *vdev_ctx;
 	struct pmo_gtk_req *op_gtk_req = NULL;
 
-	PMO_ENTER();
+	pmo_enter();
 	if (!vdev) {
 		pmo_err("vdev is NULL");
 		status = QDF_STATUS_E_INVAL;
@@ -302,18 +312,17 @@ QDF_STATUS pmo_core_disable_gtk_offload_in_fwr(struct wlan_objmgr_vdev *vdev)
 
 	op_gtk_req = qdf_mem_malloc(sizeof(*op_gtk_req));
 	if (!op_gtk_req) {
-		pmo_err("op_gtk_req is NULL");
 		status = QDF_STATUS_E_NOMEM;
 		goto dec_ref;
 	}
 
 	status = pmo_core_do_disable_gtk_offload(vdev, vdev_ctx, op_gtk_req);
 dec_ref:
-	pmo_vdev_put_ref(vdev);
+	wlan_objmgr_vdev_release_ref(vdev, WLAN_PMO_ID);
 out:
 	if (op_gtk_req)
 		qdf_mem_free(op_gtk_req);
-	PMO_EXIT();
+	pmo_exit();
 
 	return status;
 }
@@ -324,7 +333,7 @@ QDF_STATUS pmo_core_get_gtk_rsp(struct wlan_objmgr_vdev *vdev,
 	QDF_STATUS status = QDF_STATUS_SUCCESS;
 	struct pmo_vdev_priv_obj *vdev_ctx;
 
-	PMO_ENTER();
+	pmo_enter();
 	if (!gtk_rsp_req || !vdev) {
 		pmo_err("%s is null", !vdev ? "vdev":"gtk_rsp_req");
 		status = QDF_STATUS_E_INVAL;
@@ -349,9 +358,9 @@ QDF_STATUS pmo_core_get_gtk_rsp(struct wlan_objmgr_vdev *vdev,
 	/* send cmd to fwr */
 	status = pmo_tgt_get_gtk_rsp(vdev);
 dec_ref:
-	pmo_vdev_put_ref(vdev);
+	wlan_objmgr_vdev_release_ref(vdev, WLAN_PMO_ID);
 out:
-	PMO_EXIT();
+	pmo_exit();
 
 	return status;
 }

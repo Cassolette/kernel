@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017 The Linux Foundation. All rights reserved.
+ * Copyright (c) 2017-2021 The Linux Foundation. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -92,6 +92,7 @@ QDF_STATUS pmo_tgt_enable_arp_offload_req(struct wlan_objmgr_vdev *vdev,
 QDF_STATUS pmo_tgt_disable_arp_offload_req(struct wlan_objmgr_vdev *vdev,
 		uint8_t vdev_id);
 
+#ifdef WLAN_NS_OFFLOAD
 /**
  * pmo_tgt_enable_ns_offload_req() -  Send ns offload req to targe
  * @vdev: objmgr vdev
@@ -111,6 +112,7 @@ QDF_STATUS pmo_tgt_enable_ns_offload_req(struct wlan_objmgr_vdev *vdev,
  */
 QDF_STATUS pmo_tgt_disable_ns_offload_req(struct wlan_objmgr_vdev *vdev,
 		uint8_t vdev_id);
+#endif /* WLAN_NS_OFFLOAD */
 
 /**
  * pmo_tgt_enable_wow_wakeup_event() - Send Enable wow wakeup events req to fwr
@@ -149,6 +151,10 @@ QDF_STATUS pmo_tgt_send_wow_patterns_to_fw(struct wlan_objmgr_vdev *vdev,
 		uint8_t ptrn_id, const uint8_t *ptrn, uint8_t ptrn_len,
 		uint8_t ptrn_offset, const uint8_t *mask,
 		uint8_t mask_len, bool user);
+
+QDF_STATUS pmo_tgt_del_wow_pattern(
+		struct wlan_objmgr_vdev *vdev, uint8_t ptrn_id,
+		bool user);
 
 /**
  * pmo_tgt_set_mc_filter_req() - Set mcast filter command to fw
@@ -340,6 +346,26 @@ QDF_STATUS pmo_tgt_vdev_update_param_req(struct wlan_objmgr_vdev *vdev,
 QDF_STATUS pmo_tgt_send_vdev_sta_ps_param(struct wlan_objmgr_vdev *vdev,
 		enum pmo_sta_powersave_param ps_param, uint32_t param_value);
 
+#ifdef WLAN_FEATURE_IGMP_OFFLOAD
+/**
+ * pmo_tgt_send_igmp_offload_req() - Send igmp offload request to fw
+ * @vdev: objmgr vdev
+ * @pmo_igmp_req: igmp offload params
+ *
+ * Return: QDF status
+ */
+QDF_STATUS
+pmo_tgt_send_igmp_offload_req(struct wlan_objmgr_vdev *vdev,
+			      struct pmo_igmp_offload_req *pmo_igmp_req);
+#else
+static inline QDF_STATUS
+pmo_tgt_send_igmp_offload_req(struct wlan_objmgr_vdev *vdev,
+			      struct pmo_igmp_offload_req *pmo_igmp_req)
+{
+	return QDF_STATUS_SUCCESS;
+}
+#endif
+
 /**
  * pmo_tgt_update_wow_bus_suspend_state() - update wow bus suspend state flag
  * @psoc: objmgr psoc
@@ -371,10 +397,29 @@ int pmo_tgt_psoc_get_pending_cmnds(struct wlan_objmgr_psoc *psoc);
  * @psoc: objmgr psoc
  * @val: true on suspend false for resume
  *
- * Return: Pending WMI commands on success else EAGAIN on error
+ * Return: None
  */
 void pmo_tgt_update_target_suspend_flag(struct wlan_objmgr_psoc *psoc,
-		uint8_t val);
+					uint8_t val);
+
+/**
+ * pmo_tgt_update_target_suspend_acked_flag() - Set WMI target Suspend acked
+ *                                              flag
+ * @psoc: objmgr psoc
+ * @val: true on suspend false for resume
+ *
+ * Return: None
+ */
+void pmo_tgt_update_target_suspend_acked_flag(struct wlan_objmgr_psoc *psoc,
+					      uint8_t val);
+
+/**
+ * pmo_tgt_is_target_suspended() - Get WMI target Suspend flag
+ * @psoc: objmgr psoc
+ *
+ * Return: true if target suspended, false otherwise.
+ */
+bool pmo_tgt_is_target_suspended(struct wlan_objmgr_psoc *psoc);
 
 /**
  * pmo_tgt_psoc_send_wow_enable_req() -Send wow enable request
@@ -430,4 +475,27 @@ QDF_STATUS pmo_tgt_psoc_send_host_wakeup_ind(struct wlan_objmgr_psoc *psoc);
  */
 QDF_STATUS pmo_tgt_psoc_send_target_resume_req(struct wlan_objmgr_psoc *psoc);
 
+/**
+ * pmo_tgt_psoc_send_idle_roam_monitor() - Send idle roam set suspend mode
+ * command to firmware
+ * @psoc: objmgr psoc
+ * @val: Set suspend mode value
+ *
+ * Return: QDF_STATUS_SUCCESS on success else error code
+ */
+QDF_STATUS pmo_tgt_psoc_send_idle_roam_monitor(struct wlan_objmgr_psoc *psoc,
+					       uint8_t val);
+
+#ifdef WLAN_FEATURE_ICMP_OFFLOAD
+/**
+ * pmo_tgt_config_icmp_offload_req() - Configure icmp offload req to target
+ * @psoc: objmgr psoc
+ * @pmo_icmp_req: ICMP offload parameters
+ *
+ * Return: QDF status
+ */
+QDF_STATUS
+pmo_tgt_config_icmp_offload_req(struct wlan_objmgr_psoc *psoc,
+				struct pmo_icmp_offload *pmo_icmp_req);
+#endif
 #endif /* end  of _WLAN_PMO_TGT_API_H_ */

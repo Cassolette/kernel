@@ -1,8 +1,5 @@
 /*
- * Copyright (c) 2011-2017 The Linux Foundation. All rights reserved.
- *
- * Previously licensed under the ISC license by Qualcomm Atheros, Inc.
- *
+ * Copyright (c) 2011-2017, 2019 The Linux Foundation. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -19,12 +16,6 @@
  * PERFORMANCE OF THIS SOFTWARE.
  */
 
-/*
- * This file was originally distributed by Qualcomm Atheros, Inc.
- * under proprietary terms before Copyright ownership was assigned
- * to the Linux Foundation.
- */
-
 /**
  * @file ol_ctrl_txrx_api.h
  * @brief Define the host control API functions called by the host data SW.
@@ -32,12 +23,11 @@
 #ifndef _OL_CTRL_TXRX_API__H_
 #define _OL_CTRL_TXRX_API__H_
 
-/* #include <osapi_linux.h>      / * uint8_t * / */
 #include <osdep.h>              /* uint8_t */
 #include <qdf_nbuf.h>           /* qdf_nbuf_t */
 
 #include <cdp_txrx_cmn.h>           /* ol_txrx_pdev_handle */
-#include <ol_txrx_types.h>          /* OL_TXRX_MAC_ADDR_LEN */
+#include <ol_txrx_types.h>
 #include <cds_ieee80211_common.h>   /* ieee80211_frame */
 #include <cdp_txrx_handle.h>
 #ifdef SUPPORT_HOST_STATISTICS
@@ -107,6 +97,16 @@ ol_rx_err(struct cdp_cfg *cfg_pdev,
 	  uint32_t tsf32,
 	  enum ol_rx_err_type err_type,
 	  qdf_nbuf_t rx_frame, uint64_t *pn, uint8_t key_id);
+
+#ifdef HL_RX_AGGREGATION_HOLE_DETECTION
+/**
+ * ol_rx_aggregation_hole - ol rx aggregation hole report
+ * @hole_info: hole_info
+ *
+ * Return: void
+ */
+void ol_rx_aggregation_hole(uint32_t hole_info);
+#endif
 
 enum ol_rx_notify_type {
 	OL_RX_NOTIFY_IPV4_IGMP,

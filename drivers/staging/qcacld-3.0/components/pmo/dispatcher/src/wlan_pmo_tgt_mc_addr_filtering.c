@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017 The Linux Foundation. All rights reserved.
+ * Copyright (c) 2017-2018, 2020 The Linux Foundation. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -15,6 +15,7 @@
  * TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
  * PERFORMANCE OF THIS SOFTWARE.
  */
+
 /**
  * DOC: Implements public API for pmo to interact with target/WMI
  */
@@ -31,7 +32,7 @@ QDF_STATUS pmo_tgt_set_mc_filter_req(struct wlan_objmgr_vdev *vdev,
 	struct wlan_objmgr_psoc *psoc;
 	struct wlan_pmo_tx_ops pmo_tx_ops;
 
-	PMO_ENTER();
+	pmo_enter();
 
 	psoc = pmo_vdev_get_psoc(vdev);
 
@@ -47,7 +48,7 @@ QDF_STATUS pmo_tgt_set_mc_filter_req(struct wlan_objmgr_vdev *vdev,
 	if (status != QDF_STATUS_SUCCESS)
 		pmo_err("Failed to add/clear mc filter");
 out:
-	PMO_EXIT();
+	pmo_exit();
 
 	return status;
 }
@@ -59,7 +60,7 @@ QDF_STATUS pmo_tgt_clear_mc_filter_req(struct wlan_objmgr_vdev *vdev,
 	struct wlan_objmgr_psoc *psoc;
 	struct wlan_pmo_tx_ops pmo_tx_ops;
 
-	PMO_ENTER();
+	pmo_enter();
 
 	psoc = pmo_vdev_get_psoc(vdev);
 
@@ -75,7 +76,7 @@ QDF_STATUS pmo_tgt_clear_mc_filter_req(struct wlan_objmgr_vdev *vdev,
 	if (status != QDF_STATUS_SUCCESS)
 		pmo_err("Failed to add/clear mc filter");
 out:
-	PMO_EXIT();
+	pmo_exit();
 
 	return status;
 }
@@ -84,8 +85,6 @@ bool pmo_tgt_get_multiple_mc_filter_support(struct wlan_objmgr_vdev *vdev)
 {
 	struct wlan_pmo_tx_ops pmo_tx_ops;
 	struct wlan_objmgr_psoc *psoc;
-
-	PMO_ENTER();
 
 	psoc = pmo_vdev_get_psoc(vdev);
 
@@ -105,8 +104,6 @@ QDF_STATUS pmo_tgt_set_multiple_mc_filter_req(struct wlan_objmgr_vdev *vdev,
 	struct wlan_objmgr_psoc *psoc;
 	struct wlan_pmo_tx_ops pmo_tx_ops;
 
-	PMO_ENTER();
-
 	psoc = pmo_vdev_get_psoc(vdev);
 
 	pmo_tx_ops = GET_PMO_TX_OPS_FROM_PSOC(psoc);
@@ -121,7 +118,6 @@ QDF_STATUS pmo_tgt_set_multiple_mc_filter_req(struct wlan_objmgr_vdev *vdev,
 	if (status != QDF_STATUS_SUCCESS)
 		pmo_err("Failed to add/clear multiple mc filter");
 out:
-	PMO_EXIT();
 
 	return status;
 }
@@ -132,8 +128,6 @@ QDF_STATUS pmo_tgt_clear_multiple_mc_filter_req(struct wlan_objmgr_vdev *vdev,
 	QDF_STATUS status;
 	struct wlan_objmgr_psoc *psoc;
 	struct wlan_pmo_tx_ops pmo_tx_ops;
-
-	PMO_ENTER();
 
 	psoc = pmo_vdev_get_psoc(vdev);
 
@@ -149,7 +143,6 @@ QDF_STATUS pmo_tgt_clear_multiple_mc_filter_req(struct wlan_objmgr_vdev *vdev,
 	if (status != QDF_STATUS_SUCCESS)
 		pmo_err("Failed to add/clear multiple mc filter");
 out:
-	PMO_EXIT();
 
 	return status;
 }

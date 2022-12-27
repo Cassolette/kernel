@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017 The Linux Foundation. All rights reserved.
+ * Copyright (c) 2017-2021 The Linux Foundation. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -15,6 +15,7 @@
  * TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
  * PERFORMANCE OF THIS SOFTWARE.
  */
+
 /**
  * DOC: Implements public API for pmo to interact with target/WMI
  */
@@ -31,7 +32,7 @@ QDF_STATUS pmo_tgt_vdev_update_param_req(struct wlan_objmgr_vdev *vdev,
 	struct wlan_objmgr_psoc *psoc;
 	struct wlan_pmo_tx_ops pmo_tx_ops;
 
-	PMO_ENTER();
+	pmo_enter();
 
 	psoc = pmo_vdev_get_psoc(vdev);
 
@@ -45,10 +46,33 @@ QDF_STATUS pmo_tgt_vdev_update_param_req(struct wlan_objmgr_vdev *vdev,
 	status = pmo_tx_ops.send_vdev_param_update_req(vdev, param_id,
 			param_value);
 out:
-	PMO_EXIT();
+	pmo_exit();
 
 	return status;
 }
+
+#ifdef WLAN_FEATURE_IGMP_OFFLOAD
+QDF_STATUS
+pmo_tgt_send_igmp_offload_req(struct wlan_objmgr_vdev *vdev,
+			      struct pmo_igmp_offload_req *pmo_igmp_req)
+{
+	QDF_STATUS status;
+	struct wlan_objmgr_psoc *psoc;
+	struct wlan_pmo_tx_ops pmo_tx_ops;
+
+	psoc = pmo_vdev_get_psoc(vdev);
+
+	pmo_tx_ops = GET_PMO_TX_OPS_FROM_PSOC(psoc);
+	if (!pmo_tx_ops.send_igmp_offload_req) {
+		pmo_err("send_vdev_param_set_req is null");
+		return QDF_STATUS_E_NULL_VALUE;
+	}
+
+	status = pmo_tx_ops.send_igmp_offload_req(vdev, pmo_igmp_req);
+
+	return status;
+}
+#endif
 
 QDF_STATUS pmo_tgt_send_vdev_sta_ps_param(struct wlan_objmgr_vdev *vdev,
 		enum pmo_sta_powersave_param ps_param, uint32_t param_value)
@@ -57,7 +81,7 @@ QDF_STATUS pmo_tgt_send_vdev_sta_ps_param(struct wlan_objmgr_vdev *vdev,
 	struct wlan_objmgr_psoc *psoc;
 	struct wlan_pmo_tx_ops pmo_tx_ops;
 
-	PMO_ENTER();
+	pmo_enter();
 
 	psoc = pmo_vdev_get_psoc(vdev);
 
@@ -71,7 +95,7 @@ QDF_STATUS pmo_tgt_send_vdev_sta_ps_param(struct wlan_objmgr_vdev *vdev,
 	status = pmo_tx_ops.send_vdev_sta_ps_param_req(vdev, ps_param,
 			param_value);
 out:
-	PMO_EXIT();
+	pmo_exit();
 
 	return status;
 }
@@ -130,17 +154,53 @@ void pmo_tgt_update_target_suspend_flag(struct wlan_objmgr_psoc *psoc,
 	pmo_tx_ops.update_target_suspend_flag(psoc, val);
 }
 
-QDF_STATUS pmo_tgt_psoc_send_wow_enable_req(struct wlan_objmgr_psoc *psoc,
-	struct pmo_wow_cmd_params *param)
+void pmo_tgt_update_target_suspend_acked_flag(struct wlan_objmgr_psoc *psoc,
+					      uint8_t val)
 {
 	struct wlan_pmo_tx_ops pmo_tx_ops;
 
 	pmo_tx_ops = GET_PMO_TX_OPS_FROM_PSOC(psoc);
+	if (!pmo_tx_ops.update_target_suspend_acked_flag) {
+		pmo_err("update_target_suspend_acked_flag is null");
+		return;
+	}
+	pmo_tx_ops.update_target_suspend_acked_flag(psoc, val);
+}
+
+bool pmo_tgt_is_target_suspended(struct wlan_objmgr_psoc *psoc)
+{
+	struct wlan_pmo_tx_ops pmo_tx_ops;
+
+	pmo_tx_ops = GET_PMO_TX_OPS_FROM_PSOC(psoc);
+	if (!pmo_tx_ops.is_target_suspended) {
+		pmo_err("is_target_suspended is null");
+		return false;
+	}
+	return pmo_tx_ops.is_target_suspended(psoc);
+}
+
+QDF_STATUS pmo_tgt_psoc_send_wow_enable_req(struct wlan_objmgr_psoc *psoc,
+	struct pmo_wow_cmd_params *param)
+{
+	struct pmo_psoc_priv_obj *psoc_ctx;
+	struct wlan_pmo_tx_ops pmo_tx_ops;
+
+	psoc_ctx = pmo_psoc_get_priv(psoc);
+	pmo_tx_ops = GET_PMO_TX_OPS_FROM_PSOC(psoc);
+
+	if (psoc_ctx->wow.wow_state == pmo_wow_state_legacy_d0) {
+		if (!pmo_tx_ops.psoc_send_d0wow_enable_req) {
+			pmo_err("psoc_send_d0wow_enable_req is null");
+			return QDF_STATUS_E_NULL_VALUE;
+		}
+		pmo_debug("Sending D0WOW enable command...");
+		return pmo_tx_ops.psoc_send_d0wow_enable_req(psoc);
+	}
+
 	if (!pmo_tx_ops.psoc_send_wow_enable_req) {
 		pmo_err("psoc_send_wow_enable_req is null");
 		return QDF_STATUS_E_NULL_VALUE;
 	}
-
 	return pmo_tx_ops.psoc_send_wow_enable_req(psoc, param);
 }
 
@@ -189,14 +249,26 @@ bool pmo_tgt_psoc_get_runtime_pm_in_progress(struct wlan_objmgr_psoc *psoc)
 
 QDF_STATUS pmo_tgt_psoc_send_host_wakeup_ind(struct wlan_objmgr_psoc *psoc)
 {
+	struct pmo_psoc_priv_obj *psoc_ctx;
 	struct wlan_pmo_tx_ops pmo_tx_ops;
 
+	psoc_ctx = pmo_psoc_get_priv(psoc);
 	pmo_tx_ops = GET_PMO_TX_OPS_FROM_PSOC(psoc);
+
+	if (psoc_ctx->psoc_cfg.d0_wow_supported &&
+	    psoc_ctx->wow.wow_state == pmo_wow_state_legacy_d0) {
+		if (!pmo_tx_ops.psoc_send_d0wow_disable_req) {
+			pmo_err("psoc_send_d0wow_disable_req is null");
+			return QDF_STATUS_E_NULL_VALUE;
+		}
+		pmo_debug("Sending D0WOW disable command...");
+		return pmo_tx_ops.psoc_send_d0wow_disable_req(psoc);
+	}
+
 	if (!pmo_tx_ops.psoc_send_host_wakeup_ind) {
 		pmo_err("psoc_send_host_wakeup_ind is null");
 		return QDF_STATUS_E_NULL_VALUE;
 	}
-
 	return pmo_tx_ops.psoc_send_host_wakeup_ind(psoc);
 }
 
@@ -213,3 +285,15 @@ QDF_STATUS pmo_tgt_psoc_send_target_resume_req(struct wlan_objmgr_psoc *psoc)
 	return pmo_tx_ops.psoc_send_target_resume_req(psoc);
 }
 
+QDF_STATUS pmo_tgt_psoc_send_idle_roam_monitor(struct wlan_objmgr_psoc *psoc,
+					       uint8_t val)
+{
+	struct wlan_pmo_tx_ops pmo_tx_ops;
+
+	pmo_tx_ops = GET_PMO_TX_OPS_FROM_PSOC(psoc);
+	if (!pmo_tx_ops.psoc_send_idle_roam_suspend_mode) {
+		pmo_err("NULL fp");
+		return QDF_STATUS_E_NULL_VALUE;
+	}
+	return pmo_tx_ops.psoc_send_idle_roam_suspend_mode(psoc, val);
+}

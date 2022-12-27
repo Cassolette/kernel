@@ -1,8 +1,5 @@
 /*
- * Copyright (c) 2011, 2014-2017 The Linux Foundation. All rights reserved.
- *
- * Previously licensed under the ISC license by Qualcomm Atheros, Inc.
- *
+ * Copyright (c) 2011, 2014-2018, 2020 The Linux Foundation. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -17,12 +14,6 @@
  * PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR OTHER
  * TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
  * PERFORMANCE OF THIS SOFTWARE.
- */
-
-/*
- * This file was originally distributed by Qualcomm Atheros, Inc.
- * under proprietary terms before Copyright ownership was assigned
- * to the Linux Foundation.
  */
 
 /*
@@ -71,10 +62,11 @@
 #ifndef __CDS_REGDOMAIN_H
 #define __CDS_REGDOMAIN_H
 
+#include <wlan_cmn.h>
 #include <reg_services_public_struct.h>
 
 #define MIN_TX_PWR_CAP    8
-#define MAX_TX_PWR_CAP    22
+#define MAX_TX_PWR_CAP    24
 
 #define CTRY_DEFAULT          0
 #define CTRY_FLAG             0x8000
@@ -441,24 +433,11 @@ enum reg_domain {
 
 	WORLD = 0x0199,
 	FCCA = 0x0A10,
+	FCCB = 0x0B90,
 	MKKA = 0x0A40,
 	MKKC = 0x0A50,
 	ETSIC = 0x0C30,
 
-};
-
-/**
- * enum ctl_val: CTL value
- * @FCC: FCC
- * @MKK: MKK
- * @ETSI: ETSI
- * @NO_CTL: no CTL
- */
-enum ctl_val {
-	FCC = 0x10,
-	MKK = 0x40,
-	ETSI = 0x30,
-	NO_CTL = 0xff
 };
 
 /**

@@ -1,8 +1,5 @@
 /*
- * Copyright (c) 2011, 2014-2017 The Linux Foundation. All rights reserved.
- *
- * Previously licensed under the ISC license by Qualcomm Atheros, Inc.
- *
+ * Copyright (c) 2011, 2014-2018-2021 The Linux Foundation. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -17,12 +14,6 @@
  * PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR OTHER
  * TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
  * PERFORMANCE OF THIS SOFTWARE.
- */
-
-/*
- * This file was originally distributed by Qualcomm Atheros, Inc.
- * under proprietary terms before Copyright ownership was assigned
- * to the Linux Foundation.
  */
 
 #ifndef _HTT_TYPES__H_
@@ -122,52 +113,35 @@ struct htt_rx_hash_bucket {
 };
 
 /*
- * IPA micro controller
- * wlan host driver
- * firmware shared memory structure
- */
-struct uc_shared_mem_t {
-	uint32_t *vaddr;
-	qdf_dma_addr_t paddr;
-	qdf_dma_mem_context(memctx);
-};
-
-/*
  * Micro controller datapath offload
  * WLAN TX resources
  */
 struct htt_ipa_uc_tx_resource_t {
-	struct uc_shared_mem_t tx_ce_idx;
-	struct uc_shared_mem_t tx_comp_base;
+	qdf_shared_mem_t *tx_ce_idx;
+	qdf_shared_mem_t *tx_comp_ring;
 
 	uint32_t tx_comp_idx_paddr;
-	void **tx_buf_pool_vaddr_strg;
-	qdf_dma_addr_t *paddr_strg;
+	qdf_shared_mem_t **tx_buf_pool_strg;
 	uint32_t alloc_tx_buf_cnt;
+	bool ipa_smmu_mapped;
 };
 
 /**
  * struct htt_ipa_uc_rx_resource_t
  * @rx_rdy_idx_paddr: rx ready index physical address
- * @rx_ind_ring_base: rx indication ring base memory info
+ * @rx_ind_ring: rx indication ring memory info
  * @rx_ipa_prc_done_idx: rx process done index memory info
- * @rx_ind_ring_size: rx process done ring size
- * @rx2_rdy_idx_paddr: rx process done index physical address
- * @rx2_ind_ring_base: rx process done indication ring base memory info
- * @rx2_ipa_prc_done_idx: rx process done index memory info
- * @rx2_ind_ring_size: rx process done ring size
+ * @rx2_ind_ring: rx2 indication ring memory info
+ * @rx2_ipa_prc_done_idx: rx2 process done index memory info
  */
 struct htt_ipa_uc_rx_resource_t {
 	qdf_dma_addr_t rx_rdy_idx_paddr;
-	struct uc_shared_mem_t rx_ind_ring_base;
-	struct uc_shared_mem_t rx_ipa_prc_done_idx;
-	uint32_t rx_ind_ring_size;
+	qdf_shared_mem_t *rx_ind_ring;
+	qdf_shared_mem_t *rx_ipa_prc_done_idx;
 
 	/* 2nd RX ring */
-	qdf_dma_addr_t rx2_rdy_idx_paddr;
-	struct uc_shared_mem_t rx2_ind_ring_base;
-	struct uc_shared_mem_t rx2_ipa_prc_done_idx;
-	uint32_t rx2_ind_ring_size;
+	qdf_shared_mem_t *rx2_ind_ring;
+	qdf_shared_mem_t *rx2_ipa_prc_done_idx;
 };
 
 /**
@@ -272,6 +246,15 @@ struct htt_pdev_t {
 		int default_tx_comp_req;
 		int ce_classify_enabled;
 		uint8_t is_first_wakeup_packet;
+		/*
+		 * To track if credit reporting through
+		 * HTT_T2H_MSG_TYPE_TX_CREDIT_UPDATE_IND is enabled/disabled.
+		 * In Genoa(QCN7605) credits are reported through
+		 * HTT_T2H_MSG_TYPE_TX_CREDIT_UPDATE_IND only.
+		 */
+		u8 credit_update_enabled;
+		/* Explicitly request TX completions. */
+		u8 request_tx_comp;
 	} cfg;
 	struct {
 		uint8_t major;
@@ -315,7 +298,8 @@ struct htt_pdev_t {
 		uint32_t size_mask;	/* size - 1, at least 16 bits long */
 
 		int fill_level; /* how many rx buffers to keep in the ring */
-		int fill_cnt;   /* # of rx buffers (full+empty) in the ring */
+		/* # of rx buffers (full+empty) in the ring */
+		qdf_atomic_t fill_cnt;
 		int pop_fail_cnt;   /* # of nebuf pop failures */
 
 		/*
@@ -386,7 +370,18 @@ struct htt_pdev_t {
 		qdf_spinlock_t rx_hash_lock;
 		struct htt_rx_hash_bucket **hash_table;
 		uint32_t listnode_offset;
+		bool smmu_map;
 	} rx_ring;
+
+#ifndef CONFIG_HL_SUPPORT
+	struct {
+		qdf_atomic_t fill_cnt;          /* # of buffers in pool */
+		qdf_atomic_t refill_low_mem;    /* if set refill the ring */
+		qdf_nbuf_t *netbufs_ring;
+		qdf_spinlock_t rx_buff_pool_lock;
+	} rx_buff_pool;
+#endif
+
 #ifdef CONFIG_HL_SUPPORT
 	int rx_desc_size_hl;
 #endif
@@ -430,6 +425,7 @@ struct htt_pdev_t {
 
 	struct htt_ipa_uc_tx_resource_t ipa_uc_tx_rsc;
 	struct htt_ipa_uc_rx_resource_t ipa_uc_rx_rsc;
+	int is_ipa_uc_enabled;
 
 	struct htt_tx_credit_t htt_tx_credit;
 
@@ -455,6 +451,9 @@ struct htt_pdev_t {
 	tp_rx_pkt_dump_cb rx_pkt_dump_cb;
 
 	struct mon_channel mon_ch_info;
+
+	/* Flag to indicate whether new htt format is supported */
+	bool new_htt_format_enabled;
 };
 
 #define HTT_EPID_GET(_htt_pdev_hdl)  \

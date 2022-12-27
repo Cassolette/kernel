@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017 The Linux Foundation. All rights reserved.
+ * Copyright (c) 2017-2018 The Linux Foundation. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -24,6 +24,21 @@
 #include "wlan_pmo_main.h"
 #include "wlan_pmo_obj_mgmt_public_struct.h"
 
+#define PMO_PKT_FILTERS_DEFAULT 12
+#define PMO_PKT_FILTERS_DISABLED 0xffffffff
+
+uint32_t pmo_get_num_packet_filters(struct wlan_objmgr_psoc *psoc)
+{
+	struct pmo_psoc_priv_obj *psoc_ctx;
+	bool pkt_filter = false;
+
+	pmo_psoc_with_ctx(psoc, psoc_ctx) {
+		pkt_filter = pmo_intersect_packet_filter(psoc_ctx);
+	}
+
+	return pkt_filter ? PMO_PKT_FILTERS_DEFAULT : PMO_PKT_FILTERS_DISABLED;
+}
+
 QDF_STATUS pmo_core_set_pkt_filter(struct wlan_objmgr_psoc *psoc,
 			struct pmo_rcv_pkt_fltr_cfg *pmo_set_pkt_fltr_req,
 			uint8_t vdev_id)
@@ -31,7 +46,7 @@ QDF_STATUS pmo_core_set_pkt_filter(struct wlan_objmgr_psoc *psoc,
 	struct wlan_objmgr_vdev *vdev;
 	QDF_STATUS status;
 
-	PMO_ENTER();
+	pmo_enter();
 
 	if (!psoc) {
 		pmo_err("psoc is null");
@@ -53,7 +68,7 @@ QDF_STATUS pmo_core_set_pkt_filter(struct wlan_objmgr_psoc *psoc,
 dec_ref:
 	wlan_objmgr_vdev_release_ref(vdev, WLAN_PMO_ID);
 out:
-	PMO_EXIT();
+	pmo_exit();
 
 	return status;
 
@@ -66,7 +81,7 @@ QDF_STATUS pmo_core_clear_pkt_filter(struct wlan_objmgr_psoc *psoc,
 	struct wlan_objmgr_vdev *vdev;
 	QDF_STATUS status;
 
-	PMO_ENTER();
+	pmo_enter();
 
 	if (!psoc) {
 		pmo_err("psoc is null");
@@ -89,7 +104,7 @@ QDF_STATUS pmo_core_clear_pkt_filter(struct wlan_objmgr_psoc *psoc,
 dec_ref:
 	wlan_objmgr_vdev_release_ref(vdev, WLAN_PMO_ID);
 out:
-	PMO_EXIT();
+	pmo_exit();
 
 	return status;
 

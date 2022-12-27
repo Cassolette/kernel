@@ -1,8 +1,5 @@
 /*
- * Copyright (c) 2012-2017 The Linux Foundation. All rights reserved.
- *
- * Previously licensed under the ISC license by Qualcomm Atheros, Inc.
- *
+ * Copyright (c) 2012-2021 The Linux Foundation. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -19,12 +16,6 @@
  * PERFORMANCE OF THIS SOFTWARE.
  */
 
-/*
- * This file was originally distributed by Qualcomm Atheros, Inc.
- * under proprietary terms before Copyright ownership was assigned
- * to the Linux Foundation.
- */
-
 #ifndef __WEXT_IW_H__
 #define __WEXT_IW_H__
 
@@ -37,7 +28,7 @@
 #include "qdf_event.h"
 
 struct hdd_context;
-struct sap_Config;
+struct sap_config;
 
 /*
  * order of parameters in addTs private ioctl
@@ -146,107 +137,21 @@ typedef enum {
 	HDD_WLAN_WMM_STATUS_MODIFY_UAPSD_SET_FAILED = 21
 } hdd_wlan_wmm_status_e;
 
-/** TS Info Ack Policy */
-enum hdd_wlan_wmm_ts_info_ack_policy {
-	HDD_WLAN_WMM_TS_INFO_ACK_POLICY_NORMAL_ACK = 0,
-	HDD_WLAN_WMM_TS_INFO_ACK_POLICY_HT_IMMEDIATE_BLOCK_ACK = 1,
-};
-
-/** Maximum Length of WPA/RSN IE */
-#define MAX_WPA_RSN_IE_LEN 40
-
 /** Enable 11d */
 #define ENABLE_11D  1
 
 /** Disable 11d */
 #define DISABLE_11D 0
 
-/*
- * refer wpa.h in wpa supplicant code for REASON_MICHAEL_MIC_FAILURE
- *
- * supplicant sets REASON_MICHAEL_MIC_FAILURE as the reason code when it
- * sends the MLME deauth IOCTL for TKIP counter measures
- */
-#define HDD_REASON_MICHAEL_MIC_FAILURE 14
-
 #define HDD_RTSCTS_EN_MASK                  0xF
 #define HDD_RTSCTS_ENABLE                   1
 #define HDD_CTS_ENABLE                      2
 
-#define WPS_OUI_TYPE   "\x00\x50\xf2\x04"
-#define WPS_OUI_TYPE_SIZE  4
-
-#define SS_OUI_TYPE    "\x00\x16\x32"
-#define SS_OUI_TYPE_SIZE   3
-
-#define P2P_OUI_TYPE   "\x50\x6f\x9a\x09"
-#define P2P_OUI_TYPE_SIZE  4
-
-#define HS20_OUI_TYPE   "\x50\x6f\x9a\x10"
-#define HS20_OUI_TYPE_SIZE  4
-
-#define OSEN_OUI_TYPE   "\x50\x6f\x9a\x12"
-#define OSEN_OUI_TYPE_SIZE  4
-
-#ifdef WLAN_FEATURE_WFD
-#define WFD_OUI_TYPE   "\x50\x6f\x9a\x0a"
-#define WFD_OUI_TYPE_SIZE  4
-#endif
-
-#define MBO_OUI_TYPE   "\x50\x6f\x9a\x16"
-#define MBO_OUI_TYPE_SIZE  4
-
-#define QCN_OUI_TYPE   "\x8c\xfd\xf0\x01"
-#define QCN_OUI_TYPE_SIZE  4
-
-/*
- * This structure contains the interface level (granularity)
- * configuration information in support of wireless extensions.
- */
-struct hdd_wext_state {
-	/** The CSR "desired" Profile */
-	tCsrRoamProfile roamProfile;
-
-	/**WPA or RSN IE*/
-	uint8_t WPARSNIE[MAX_WPA_RSN_IE_LEN];
-
-	/**Additional IE for assoc */
-	tSirAddie assocAddIE;
-
-	/**auth key mgmt */
-	int32_t authKeyMgmt;
-
-	/* qdf event */
-	qdf_event_t hdd_qdf_event;
-};
-
-struct ccp_freq_chan_map {
-	/* List of frequencies */
-	uint32_t freq;
-	uint32_t chan;
-};
+#define HDD_AUTO_RATE_SGI    0x8
 
 /* Packet Types. */
 #define WLAN_KEEP_ALIVE_UNSOLICIT_ARP_RSP     2
 #define WLAN_KEEP_ALIVE_NULL_PKT              1
-
-#define wlan_hdd_get_wps_ie_ptr(ie, ie_len) \
-	wlan_get_vendor_ie_ptr_from_oui(WPS_OUI_TYPE, WPS_OUI_TYPE_SIZE, \
-	ie, ie_len)
-
-#define wlan_hdd_get_p2p_ie_ptr(ie, ie_len) \
-	wlan_get_vendor_ie_ptr_from_oui(P2P_OUI_TYPE, P2P_OUI_TYPE_SIZE, \
-	ie, ie_len)
-
-#ifdef WLAN_FEATURE_WFD
-#define wlan_hdd_get_wfd_ie_ptr(ie, ie_len) \
-	wlan_get_vendor_ie_ptr_from_oui(WFD_OUI_TYPE, WFD_OUI_TYPE_SIZE, \
-	ie, ie_len)
-#endif
-
-#define wlan_hdd_get_mbo_ie_ptr(ie, ie_len) \
-	wlan_get_vendor_ie_ptr_from_oui(MBO_OUI_TYPE, MBO_OUI_TYPE_SIZE, \
-	ie, ie_len)
 
 /*
  * Defines for fw_test command
@@ -258,61 +163,74 @@ struct ccp_freq_chan_map {
 #define HDD_FWTEST_MU_DEFAULT_VALUE 40
 #define HDD_FWTEST_MAX_VALUE 500
 
-extern int hdd_unregister_wext(struct net_device *dev);
-extern int hdd_register_wext(struct net_device *dev);
-extern int hdd_wlan_get_freq(uint32_t chan, uint32_t *freq);
-extern void hdd_display_stats_help(void);
-extern void hdd_wlan_get_version(struct hdd_context *hdd_ctx,
-				 union iwreq_data *wrqu, char *extra);
-
-extern void hdd_wlan_get_stats(struct hdd_adapter *adapter, uint16_t *length,
-			       char *buffer, uint16_t buf_len);
-extern void hdd_wlan_list_fw_profile(uint16_t *length,
-			       char *buffer, uint16_t buf_len);
-
-extern int iw_set_var_ints_getnone(struct net_device *dev,
-				   struct iw_request_info *info,
-				   union iwreq_data *wrqu, char *extra);
-
-extern int iw_set_three_ints_getnone(struct net_device *dev,
-				     struct iw_request_info *info,
-				     union iwreq_data *wrqu, char *extra);
-
-extern int hdd_priv_get_data(struct iw_point *p_priv_data,
-			     union iwreq_data *wrqu);
-
-extern void *mem_alloc_copy_from_user_helper(const void *wrqu_data, size_t len);
+#ifdef WLAN_WEXT_SUPPORT_ENABLE
+/**
+ * hdd_unregister_wext() - unregister wext context
+ * @dev: net device handle
+ *
+ * Unregisters wext interface context for a given net device
+ *
+ * Returns: None
+ */
+void hdd_unregister_wext(struct net_device *dev);
 
 /**
- * wlan_hdd_get_linkspeed_for_peermac() - Get link speed for a peer
- * @adapter: adapter upon which the peer is active
- * @mac_address: MAC address of the peer
- * @linkspeed: pointer to memory where returned link speed is to be placed
+ * hdd_register_wext() - register wext context
+ * @dev: net device handle
  *
- * This function will send a query to SME for the linkspeed of the
- * given peer, and then wait for the callback to be invoked.
+ * Registers wext interface context for a given net device
  *
- * Return: 0 if linkspeed data is available, negative errno otherwise
+ * Returns: None
  */
-int wlan_hdd_get_linkspeed_for_peermac(struct hdd_adapter *adapter,
-				       struct qdf_mac_addr *mac_address,
-				       uint32_t *linkspeed);
-void hdd_clear_roam_profile_ie(struct hdd_adapter *adapter);
+void hdd_register_wext(struct net_device *dev);
 
-QDF_STATUS wlan_hdd_get_class_astats(struct hdd_adapter *adapter);
+/**
+ * hdd_wext_unregister() - unregister wext context with rtnl lock dependency
+ * @dev: net device from which wireless extensions are being unregistered
+ * @rtnl_held: flag which indicates if caller is holding the rtnl_lock
+ *
+ * Unregisters wext context for a given net device. This behaves the
+ * same as hdd_unregister_wext() except it does not take the rtnl_lock
+ * if the caller is already holding it.
+ *
+ * Returns: None
+ */
+void hdd_wext_unregister(struct net_device *dev,
+			 bool rtnl_held);
 
-QDF_STATUS wlan_hdd_get_station_stats(struct hdd_adapter *adapter);
+static inline
+void hdd_wext_send_event(struct net_device *dev, unsigned int cmd,
+			 union iwreq_data *wrqu, const char *extra)
+{
+	wireless_send_event(dev, cmd, wrqu, extra);
+}
 
-QDF_STATUS wlan_hdd_get_rssi(struct hdd_adapter *adapter, int8_t *rssi_value);
+void hdd_wlan_get_stats(struct hdd_adapter *adapter, uint16_t *length,
+		       char *buffer, uint16_t buf_len);
+void hdd_wlan_list_fw_profile(uint16_t *length,
+			      char *buffer, uint16_t buf_len);
 
-QDF_STATUS wlan_hdd_get_snr(struct hdd_adapter *adapter, int8_t *snr);
+int iw_set_var_ints_getnone(struct net_device *dev,
+			   struct iw_request_info *info,
+			   union iwreq_data *wrqu, char *extra);
 
-int hdd_get_ldpc(struct hdd_adapter *adapter, int *value);
-int hdd_set_ldpc(struct hdd_adapter *adapter, int value);
-int hdd_get_tx_stbc(struct hdd_adapter *adapter, int *value);
-int hdd_set_tx_stbc(struct hdd_adapter *adapter, int value);
-int hdd_get_rx_stbc(struct hdd_adapter *adapter, int *value);
-int hdd_set_rx_stbc(struct hdd_adapter *adapter, int value);
+int iw_set_three_ints_getnone(struct net_device *dev,
+			     struct iw_request_info *info,
+			     union iwreq_data *wrqu, char *extra);
+
+int hdd_priv_get_data(struct iw_point *p_priv_data,
+		     union iwreq_data *wrqu);
+
+void *mem_alloc_copy_from_user_helper(const void *wrqu_data, size_t len);
+
+/**
+ * hdd_we_set_short_gi() - Set adapter Short GI
+ * @adapter: adapter being modified
+ * @sgi: new sgi value
+ *
+ * Return: 0 on success, negative errno on failure
+ */
+int hdd_we_set_short_gi(struct hdd_adapter *adapter, int sgi);
 
 /**
  * hdd_assemble_rate_code() - assemble rate code to be sent to FW
@@ -337,56 +255,47 @@ int hdd_assemble_rate_code(uint8_t preamble, uint8_t nss, uint8_t rate);
  * Return: 0 on success, negative errno on failure
  */
 int hdd_set_11ax_rate(struct hdd_adapter *adapter, int value,
-		      struct sap_Config *sap_config);
+		      struct sap_config *sap_config);
 
 /**
- * hdd_set_peer_rate() - set peer rate
+ * hdd_we_update_phymode() - handle change in PHY mode
  * @adapter: adapter being modified
- * @value: rate code with AID
+ * @new_phymode: new PHY mode for the device
  *
- * Return: 0 on success, negative errno on failure
+ * This function is called when the device is set to a new PHY mode.
+ * It takes a holistic look at the desired PHY mode along with the
+ * configured capabilities of the driver and the reported capabilities
+ * of the hardware in order to correctly configure all PHY-related
+ * parameters.
+ *
+ * Return: 0 on success, negative errno value on error
  */
-int hdd_set_peer_rate(struct hdd_adapter *adapter, int value);
-
-void wlan_hdd_change_country_code_callback(void *adapter);
-
-int wlan_hdd_update_phymode(struct net_device *net, tHalHandle hal,
-			    int new_phymode, struct hdd_context *phddctx);
-
-int wlan_hdd_get_temperature(struct hdd_adapter *adapter, int *temperature);
+int hdd_we_update_phymode(struct hdd_adapter *adapter, int new_phymode);
 
 /**
- * wlan_hdd_get_link_speed() - get link speed
- * @adapter:     pointer to the adapter
- * @link_speed:   pointer to link speed
+ * wlan_hdd_update_btcoex_mode() - set BTCoex Mode
+ * @adapter: adapter being modified
+ * @value: new BTCoex mode for the adapter
  *
- * This function fetches per bssid link speed.
+ * This function is called to set a BTCoex Operation Mode
  *
- * Return: if associated, link speed shall be returned.
- *         if not associated, link speed of 0 is returned.
- *         On error, error number will be returned.
+ * Return: 0 on success, negative errno value on error
  */
-int wlan_hdd_get_link_speed(struct hdd_adapter *adapter, uint32_t *link_speed);
+int wlan_hdd_set_btcoex_mode(struct hdd_adapter *adapter, int value);
+
+/**
+ * wlan_hdd_set_btcoex_rssi_threshold() - set RSSI threshold
+ * @adapter: adapter being modified
+ * @value: new RSSI Threshold for the adapter
+ *
+ * This function is called to set a new RSSI threshold for
+ * change of Coex operating mode from TDD to FDD
+ *
+ * Return: 0 on success, negative errno value on error
+ */
+int wlan_hdd_set_btcoex_rssi_threshold(struct hdd_adapter *adapter, int value);
 
 struct iw_request_info;
-
-/**
- * hdd_check_standard_wext_control() - Check to see if standard
- *      wireless extensions ioctls are allowed
- * @hdd_ctx: Global HDD context
- * @info: Wireless extensions ioctl information passed by the kernel
- *
- * This function will examine the "standard_wext_control" configuration
- * item to determine whether or not standard wireless extensions ioctls
- * are allowed.
- *
- * Return: 0 if the ioctl is allowed to be processed, -ENOTSUPP if the
- * ioctls have been disabled. Note that in addition to returning
- * status, this function will log a message if the ioctls are disabled
- * or deprecated.
- */
-int hdd_check_standard_wext_control(struct hdd_context *hdd_ctx,
-				    struct iw_request_info *info);
 
 /**
  * hdd_check_private_wext_control() - Check to see if private
@@ -406,42 +315,64 @@ int hdd_check_standard_wext_control(struct hdd_context *hdd_ctx,
 int hdd_check_private_wext_control(struct hdd_context *hdd_ctx,
 				   struct iw_request_info *info);
 
-/**
- * wlan_hdd_get_peer_rssi() - get station's rssi
- * @adapter: hostapd interface
- * @macaddress: peer sta mac address or ff:ff:ff:ff:ff:ff to query all peer
- * @peer_sta_info: output pointer which will fill by peer sta info
- *
- * This function will call sme_get_peer_info to get rssi
- *
- * Return: 0 on success, otherwise error value
- */
-int wlan_hdd_get_peer_rssi(struct hdd_adapter *adapter,
-			   struct qdf_mac_addr *macaddress,
-			   struct sir_peer_sta_info *peer_sta_info);
+#ifdef CONFIG_DP_TRACE
+void hdd_set_dump_dp_trace(uint16_t cmd_type, uint16_t count);
+#else
+static inline
+void hdd_set_dump_dp_trace(uint16_t cmd_type, uint16_t count) {}
+#endif
+#else /* WLAN_WEXT_SUPPORT_ENABLE */
 
-/**
- * wlan_hdd_get_peer_info() - get peer info
- * @adapter: hostapd interface
- * @macaddress: request peer mac address
- * @peer_info_ext: one peer extended info retrieved
- *
- * This function will call sme_get_peer_info_ext to get peer info
- *
- * Return: 0 on success, otherwise error value
- */
-int wlan_hdd_get_peer_info(struct hdd_adapter *adapter,
-			   struct qdf_mac_addr macaddress,
-			   struct sir_peer_info_ext *peer_info_ext);
+static inline void hdd_unregister_wext(struct net_device *dev)
+{
+}
 
+static inline void hdd_register_wext(struct net_device *dev)
+{
+}
+
+static inline void hdd_wext_unregister(struct net_device *dev,
+				       bool rtnl_locked)
+{
+}
+
+static inline
+void hdd_wext_send_event(struct net_device *dev, unsigned int cmd,
+			 union iwreq_data *wrqu, const char *extra)
+{
+}
+#endif /* WLAN_WEXT_SUPPORT_ENABLE */
+
+#ifdef WLAN_DUMP_LOG_BUF_CNT
 /**
- * wlan_hdd_set_mon_chan() - Set capture channel on the monitor mode interface.
- * @adapter: Handle to adapter
- * @chan: Monitor mode channel
- * @bandwidth: Capture channel bandwidth
+ * hdd_dump_log_buffer() - dump log buffer history
  *
- * Return: 0 on success else error code.
+ * Reture: None
  */
-int wlan_hdd_set_mon_chan(struct hdd_adapter *adapter, uint32_t chan,
-			  uint32_t bandwidth);
+void hdd_dump_log_buffer(void);
+#else
+static inline
+void hdd_dump_log_buffer(void)
+{
+}
+#endif
+
+#if defined(WLAN_WEXT_SUPPORT_ENABLE) && defined(HASTINGS_BT_WAR)
+int hdd_hastings_bt_war_enable_fw(struct hdd_context *hdd_ctx);
+int hdd_hastings_bt_war_disable_fw(struct hdd_context *hdd_ctx);
+#else
+static inline
+int hdd_hastings_bt_war_enable_fw(struct hdd_context *hdd_ctx)
+{
+	return -ENOTSUPP;
+}
+
+static inline
+int hdd_hastings_bt_war_disable_fw(struct hdd_context *hdd_ctx)
+{
+	return -ENOTSUPP;
+}
+
+#endif
+
 #endif /* __WEXT_IW_H__ */

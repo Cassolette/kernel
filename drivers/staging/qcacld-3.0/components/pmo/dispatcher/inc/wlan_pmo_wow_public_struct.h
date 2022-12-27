@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017 The Linux Foundation. All rights reserved.
+ * Copyright (c) 2017-2021 The Linux Foundation. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -28,13 +28,19 @@
 
 #define _WLAN_PMO_WOW_PUBLIC_STRUCT_H_
 
+#ifndef PMO_WOW_FILTERS_MAX
+#define PMO_WOW_FILTERS_MAX             22
+#endif
+
 #define PMO_WOWL_PTRN_MAX_SIZE          146
 #define PMO_WOWL_PTRN_MASK_MAX_SIZE      19
-#define PMO_WOWL_MAX_PTRNS_ALLOWED       CFG_MAX_WOW_FILTERS_MAX
 #define PMO_WOWL_BCAST_PATTERN_MAX_SIZE 146
 
 #define PMO_WOW_INTER_PTRN_TOKENIZER   ';'
 #define PMO_WOW_INTRA_PTRN_TOKENIZER   ':'
+
+#define PMO_WOW_PTRN_MASK_VALID     0xFF
+#define PMO_NUM_BITS_IN_BYTE           8
 
 
 /* Action frame categories */
@@ -57,11 +63,11 @@
 #define PMO_MAC_SELF_PROTECTED        15
 #define PMO_MAC_ACTION_WME            17
 #define PMO_MAC_ACTION_FST            18
+#define PMO_MAC_ACTION_RVS            19
 #define PMO_MAC_ACTION_VHT            21
+#define PMO_VENDOR_PROTECTED          126
 #define PMO_MAC_ACTION_MAX            256
 
-#define PMO_MAC_ACTION_MEASURE_REQUEST_ID      0
-#define PMO_MAC_ACTION_TPC_REQUEST_ID          2
 /*
  * ALLOWED_ACTION_FRAMES_BITMAP
  *
@@ -89,29 +95,53 @@
  * PMO_SELF_PROTECTED         15      0
  * PMO_ACTION_WME             17      1
  * PMO_ACTION_FST             18      1
+ * PMO_ACTION_RVS             19      1
  * PMO_ACTION_VHT             21      1
+ * PMO_VENDOR_PROTECTED       126     1
  * ----------------------------+------+-------+
  */
-#define ALLOWED_ACTION_FRAMES_BITMAP0 \
-		((1 << PMO_MAC_ACTION_SPECTRUM_MGMT) | \
-		 (1 << PMO_MAC_ACTION_QOS_MGMT) | \
-		 (1 << PMO_MAC_ACTION_PUBLIC_USAGE) | \
-		 (1 << PMO_MAC_ACTION_SA_QUERY) | \
-		 (1 << PMO_MAC_ACTION_PROT_DUAL_PUB) | \
-		 (1 << PMO_MAC_ACTION_WNM) | \
-		 (1 << PMO_MAC_ACTION_WME) | \
-		 (1 << PMO_MAC_ACTION_FST) | \
-		 (1 << PMO_MAC_ACTION_VHT))
+#define SYSTEM_SUSPEND_ALLOWED_ACTION_FRAMES_BITMAP0 \
+			((1 << PMO_MAC_ACTION_SPECTRUM_MGMT) | \
+			 (1 << PMO_MAC_ACTION_QOS_MGMT) | \
+			 (1 << PMO_MAC_ACTION_PUBLIC_USAGE) | \
+			 (1 << PMO_MAC_ACTION_SA_QUERY) | \
+			 (1 << PMO_MAC_ACTION_PROT_DUAL_PUB) | \
+			 (1 << PMO_MAC_ACTION_WNM) | \
+			 (1 << PMO_MAC_ACTION_WME) | \
+			 (1 << PMO_MAC_ACTION_FST) | \
+			 (1 << PMO_MAC_ACTION_RVS) | \
+			 (1 << PMO_MAC_ACTION_VHT))
 
 #define ALLOWED_ACTION_FRAMES_BITMAP1   0x0
 #define ALLOWED_ACTION_FRAMES_BITMAP2   0x0
-#define ALLOWED_ACTION_FRAMES_BITMAP3   0x0
+#define ALLOWED_ACTION_FRAMES_BITMAP3 \
+		(1 << (PMO_VENDOR_PROTECTED % 32))
+
 #define ALLOWED_ACTION_FRAMES_BITMAP4   0x0
 #define ALLOWED_ACTION_FRAMES_BITMAP5   0x0
 #define ALLOWED_ACTION_FRAMES_BITMAP6   0x0
 #define ALLOWED_ACTION_FRAMES_BITMAP7   0x0
 
 #define ALLOWED_ACTION_FRAME_MAP_WORDS (PMO_MAC_ACTION_MAX / 32)
+
+#define RUNTIME_PM_ALLOWED_ACTION_FRAMES_BITMAP0 \
+		((1 << PMO_MAC_ACTION_SPECTRUM_MGMT) | \
+		 (1 << PMO_MAC_ACTION_QOS_MGMT) | \
+		 (1 << PMO_MAC_ACTION_PUBLIC_USAGE) | \
+		 (1 << PMO_MAC_ACTION_RRM) | \
+		 (1 << PMO_MAC_ACTION_SA_QUERY) | \
+		 (1 << PMO_MAC_ACTION_PROT_DUAL_PUB) | \
+		 (1 << PMO_MAC_ACTION_WNM) | \
+		 (1 << PMO_MAC_ACTION_WME) | \
+		 (1 << PMO_MAC_ACTION_FST) | \
+		 (1 << PMO_MAC_ACTION_RVS) | \
+		 (1 << PMO_MAC_ACTION_VHT))
+
+/* Public Action for 20/40 BSS Coexistence */
+#define PMO_MAC_ACTION_MEASUREMENT_PILOT    7
+
+#define DROP_PUBLIC_ACTION_FRAME_BITMAP \
+		(1 << PMO_MAC_ACTION_MEASUREMENT_PILOT)
 
 #ifndef ANI_SUPPORT_11H
 /*
@@ -123,13 +153,13 @@
  * ----------------------------------+-----+------+
  *         Type                      | Bit | Drop |
  * ----------------------------------+-----+------+
- * SIR_MAC_ACTION_MEASURE_REQUEST_ID    0     1
- * SIR_MAC_ACTION_TPC_REQUEST_ID        1     1
+ * ACTION_SPCT_MSR_REQ                  0     1
+ * ACTION_SPCT_TPC_REQ                  2     1
  * ----------------------------------+-----+------+
  */
 #define DROP_SPEC_MGMT_ACTION_FRAME_BITMAP \
-		((1 << PMO_MAC_ACTION_MEASURE_REQUEST_ID) |\
-		 (1 << PMO_MAC_ACTION_TPC_REQUEST_ID))
+		((1 << ACTION_SPCT_MSR_REQ) |\
+		 (1 << ACTION_SPCT_TPC_REQ))
 #else
 /*
  * If 11H support is defined, dont drop the above action category of
@@ -171,10 +201,25 @@ enum pmo_wow_action_wakeup_opertion {
 };
 
 /**
+ * enum pmo_wow_state: enumeration of wow state
+ * @pmo_wow_state_none: not in wow state
+ * @pmo_wow_state_legacy_d0: in d0 wow state trigger by legacy d0 wow command
+ * @pmo_wow_state_unified_d0: in d0 wow state trigger by unified wow command
+ * @pmo_wow_state_unified_d3: in d3 wow state trigger by unified wow command
+ */
+enum pmo_wow_state {
+	pmo_wow_state_none = 0,
+	pmo_wow_state_legacy_d0,
+	pmo_wow_state_unified_d0,
+	pmo_wow_state_unified_d3,
+};
+
+/**
  * struct pmo_wow - store wow patterns
  * @wow_enable: wow enable/disable
  * @wow_enable_cmd_sent: is wow enable command sent to fw
  * @is_wow_bus_suspended: true if bus is suspended
+ * @wow_state: state of wow
  * @target_suspend: target suspend event
  * @target_resume: target resume event
  * @wow_nack: wow negative ack flag
@@ -186,6 +231,8 @@ enum pmo_wow_action_wakeup_opertion {
  * @pmo_lphb_callback: registered os if calllback function
  * @ptrn_id_def: default pattern id counter for legacy firmware
  * @ptrn_id_usr: user pattern id counter for legacy firmware
+ * @txrx_suspended: flag to determine if TX/RX is suspended
+ *		    during WoW
  *
  * This structure stores wow patterns and
  * wow related parameters in host.
@@ -194,10 +241,11 @@ struct pmo_wow {
 	bool wow_enable;
 	bool wow_enable_cmd_sent;
 	bool is_wow_bus_suspended;
+	enum pmo_wow_state wow_state;
 	qdf_event_t target_suspend;
 	qdf_event_t target_resume;
 	int wow_nack;
-	bool wow_initial_wake_up;
+	atomic_t wow_initial_wake_up;
 	qdf_wake_lock_t wow_wake_lock;
 	/*
 	 * currently supports only vdev 0.
@@ -209,6 +257,7 @@ struct pmo_wow {
 
 	uint8_t ptrn_id_def;
 	uint8_t ptrn_id_usr;
+	bool txrx_suspended;
 };
 
 /* WOW related structures */
@@ -221,7 +270,6 @@ struct pmo_wow {
  * @pattern: pattern byte stream
  * @pattern_mask_size: pattern mask size
  * @pattern_mask: pattern mask
- * @session_id: session id
  */
 struct pmo_wow_add_pattern {
 	uint8_t pattern_id;
@@ -230,23 +278,6 @@ struct pmo_wow_add_pattern {
 	uint8_t pattern[PMO_WOWL_BCAST_PATTERN_MAX_SIZE];
 	uint8_t pattern_mask_size;
 	uint8_t pattern_mask[PMO_WOWL_BCAST_PATTERN_MAX_SIZE];
-	uint8_t session_id;
-};
-
-/**
- * struct pmo_wow_add_pattern - wow pattern add structure
- * @magic_pkt_enable: enables or disables magic packet filtering
- * @wow_deauth_rcv:  This configuration is valid only when magicPktEnable=1,
- *    It requests hardware to wake up when it receives the
- *    Deauthentication Frame.
- * @pattern_filtering_enable: Enables/disables packet pattern filtering
- * @wow_bss_conn_loss: wake up host when bss connection lost
- */
-struct pmo_wow_enter_params {
-	uint8_t magic_pkt_enable;
-	uint8_t wow_deauth_rcv;
-	uint8_t pattern_filtering_enable;
-	uint8_t wow_bss_conn_loss;
 };
 
 /**

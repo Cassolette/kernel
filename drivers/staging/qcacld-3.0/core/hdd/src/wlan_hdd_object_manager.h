@@ -1,8 +1,5 @@
 /*
- * Copyright (c) 2017 The Linux Foundation. All rights reserved.
- *
- * Previously licensed under the ISC license by Qualcomm Atheros, Inc.
- *
+ * Copyright (c) 2017-2021 The Linux Foundation. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -19,11 +16,6 @@
  * PERFORMANCE OF THIS SOFTWARE.
  */
 
-/*
- * This file was originally distributed by Qualcomm Atheros, Inc.
- * under proprietary terms before Copyright ownership was assigned
- * to the Linux Foundation.
- */
 #if !defined(WLAN_HDD_OBJECT_MANAGER_H)
 #define WLAN_HDD_OBJECT_MANAGER_H
 /**
@@ -87,6 +79,17 @@ int hdd_objmgr_create_and_store_psoc(struct hdd_context *hdd_ctx,
 int hdd_objmgr_release_and_destroy_psoc(struct hdd_context *hdd_ctx);
 
 /**
+ * hdd_objmgr_update_tgt_max_vdev_psoc() - Update target max vdev number
+ * @hdd_ctx: Hdd context
+ *
+ * This API update target max vdev number to psoc object
+ *
+ * Return: None
+ */
+void hdd_objmgr_update_tgt_max_vdev_psoc(struct hdd_context *hdd_ctx,
+					 uint8_t max_vdev);
+
+/**
  * hdd_objmgr_create_and_store_pdev() - Create pdev and store in hdd context
  * @hdd_ctx: Hdd context
  *
@@ -105,85 +108,6 @@ int hdd_objmgr_create_and_store_pdev(struct hdd_context *hdd_ctx);
  * Return: 0 for success, negative error code for failure
  */
 int hdd_objmgr_release_and_destroy_pdev(struct hdd_context *hdd_ctx);
-
-/**
- * hdd_objmgr_create_and_store_vdev() - Create vdev and store in hdd adapter
- * @pdev: pdev pointer
- * @adapter: hdd adapter
- *
- * This API creates the vdev object and store the vdev reference to the
- * given @adapter. Also, creates a self peer for the vdev.
- *
- * Return: 0 for success, negative error code for failure
- */
-int hdd_objmgr_create_and_store_vdev(struct wlan_objmgr_pdev *pdev,
-			      struct hdd_adapter *adapter);
-
-/**
- * hdd_objmgr_destroy_vdev() - Delete vdev
- * @adapter: hdd adapter
- *
- * This function logically destroys the vdev in object manager. Physical
- * deletion is prevented until the vdev is released via a call to
- * hdd_objmgr_release_vdev(). E.g.
- *
- *	hdd_objmgr_destroy_vdev(...);
- *	sme_close_session(...);
- *	hdd_objmgr_release_vdev(...);
- *
- * Return: 0 for success, negative error code for failure
- */
-int hdd_objmgr_destroy_vdev(struct hdd_adapter *adapter);
-
-/**
- * hdd_objmgr_release_vdev() - releases the vdev from adapter
- * @adapter: hdd adapter
- *
- * See also hdd_objmgr_destroy_vdev()
- *
- * Return: 0 for success, negative error code for failure
- */
-int hdd_objmgr_release_vdev(struct hdd_adapter *adapter);
-
-/**
- * hdd_objmgr_release_and_destroy_vdev() - Delete vdev and remove from adapter
- * @adapter: hdd adapter
- *
- * This API deletes vdev object and release its reference from hdd adapter
- *
- * Return: 0 for success, negative error code for failure
- */
-int hdd_objmgr_release_and_destroy_vdev(struct hdd_adapter *adapter);
-
-/**
- * hdd_objmgr_add_peer_object() - Create and add the peer to the vdev
- * @vdev: vdev pointer
- * @adapter_mode: adapter mode
- * @mac_addr: Peer mac address
- * @is_p2p_type: TRUE if peer is p2p type
- *
- * This API creates and adds the peer object to the given @vdev. The peer type
- * (STA, AP, P2P or IBSS) is assigned based on adapter mode. For example, if
- * adapter mode is STA, peer is AP.
- *
- * Return: 0 for success, negative error code for failure
- */
-int hdd_objmgr_add_peer_object(struct wlan_objmgr_vdev *vdev,
-			       enum tQDF_ADAPTER_MODE adapter_mode,
-			       uint8_t *mac_addr,
-			       bool is_p2p_type);
-
-/**
- * hdd_objmgr_remove_peer_object() - Delete and remove the peer from vdev
- * @vdev: vdev pointer
- * @mac_addr: Peer Mac address
- *
- * This API finds the peer object from given @mac_addr and deletes the same.
- *
- * Return: 0 for success, negative error code for failure
- */
-int hdd_objmgr_remove_peer_object(struct wlan_objmgr_vdev *vdev,
-				  uint8_t *mac_addr);
 
 /**
  * hdd_objmgr_set_peer_mlme_auth_state() - set the peer mlme auth state
@@ -209,4 +133,54 @@ int hdd_objmgr_set_peer_mlme_auth_state(struct wlan_objmgr_vdev *vdev,
 int hdd_objmgr_set_peer_mlme_state(struct wlan_objmgr_vdev *vdev,
 				   enum wlan_peer_state peer_state);
 
+/**
+ * hdd_objmgr_get_vdev_by_user() - Get reference of vdev from adapter
+ *  with user id
+ * @adapter: hdd adapter
+ * @dbgid: reference count dbg id
+ *
+ * Return: pointer to vdev object for success, NULL for failure
+ */
+#ifdef WLAN_OBJMGR_REF_ID_TRACE
+#define hdd_objmgr_get_vdev_by_user(adapter, dbgid) \
+	__hdd_objmgr_get_vdev_by_user(adapter, dbgid, __func__, __LINE__)
+struct wlan_objmgr_vdev *
+__hdd_objmgr_get_vdev_by_user(struct hdd_adapter *adapter,
+			      wlan_objmgr_ref_dbgid id,
+			      const char *func,
+			      int line);
+#else
+#define hdd_objmgr_get_vdev_by_user(adapter, dbgid) \
+	__hdd_objmgr_get_vdev_by_user(adapter, dbgid, __func__)
+struct wlan_objmgr_vdev *
+__hdd_objmgr_get_vdev_by_user(struct hdd_adapter *adapter,
+			      wlan_objmgr_ref_dbgid id,
+			      const char *func);
+#endif
+
+/**
+ * hdd_objmgr_put_vdev_by_user() - Release reference of vdev object with
+ *  user id
+ * @vdev: pointer to vdev object
+ * @dbgid: reference count dbg id
+ *
+ * This API releases vdev object reference which was acquired using
+ * hdd_objmgr_get_vdev_by_user().
+ *
+ * Return: void
+ */
+#ifdef WLAN_OBJMGR_REF_ID_TRACE
+#define hdd_objmgr_put_vdev_by_user(vdev, dbgid) \
+	__hdd_objmgr_put_vdev_by_user(vdev, dbgid, __func__, __LINE__)
+void
+__hdd_objmgr_put_vdev_by_user(struct wlan_objmgr_vdev *vdev,
+			      wlan_objmgr_ref_dbgid id, const char *func,
+			      int line);
+#else
+#define hdd_objmgr_put_vdev_by_user(vdev, dbgid) \
+	__hdd_objmgr_put_vdev_by_user(vdev, dbgid, __func__)
+void
+__hdd_objmgr_put_vdev_by_user(struct wlan_objmgr_vdev *vdev,
+			      wlan_objmgr_ref_dbgid id, const char *func);
+#endif
 #endif /* end #if !defined(WLAN_HDD_OBJECT_MANAGER_H) */

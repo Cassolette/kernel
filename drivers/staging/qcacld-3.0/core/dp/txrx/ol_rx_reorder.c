@@ -1,8 +1,5 @@
 /*
- * Copyright (c) 2011-2017 The Linux Foundation. All rights reserved.
- *
- * Previously licensed under the ISC license by Qualcomm Atheros, Inc.
- *
+ * Copyright (c) 2011-2020 The Linux Foundation. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -19,18 +16,10 @@
  * PERFORMANCE OF THIS SOFTWARE.
  */
 
-/*
- * This file was originally distributed by Qualcomm Atheros, Inc.
- * under proprietary terms before Copyright ownership was assigned
- * to the Linux Foundation.
- */
-
 /*=== header file includes ===*/
 /* generic utilities */
 #include <qdf_nbuf.h>           /* qdf_nbuf_t, etc. */
 #include <qdf_mem.h>         /* qdf_mem_malloc */
-
-#include <linux/ieee80211.h>          /* IEEE80211_SEQ_MAX */
 
 /* external interfaces */
 #include <ol_txrx_api.h>        /* ol_txrx_pdev_handle */
@@ -173,7 +162,7 @@ ol_rx_seq_num_check(struct ol_txrx_pdev_t *pdev,
 	uint16_t seq_num = IEEE80211_SEQ_MAX;
 	bool retry = 0;
 
-	seq_num = htt_rx_mpdu_desc_seq_num(pdev->htt_pdev, rx_mpdu_desc);
+	seq_num = htt_rx_mpdu_desc_seq_num(pdev->htt_pdev, rx_mpdu_desc, false);
 
 	 /* For mcast packets, we only the dup-detection, not re-order check */
 
@@ -305,7 +294,7 @@ ol_rx_reorder_release(struct ol_txrx_vdev_t *vdev,
 		seq_num = htt_rx_mpdu_desc_seq_num(
 			htt_pdev,
 			htt_rx_msdu_desc_retrieve(htt_pdev,
-						  head_msdu));
+						  head_msdu), false);
 		peer->tids_last_seq[tid] = seq_num;
 		/* rx_opt_proc takes a NULL-terminated list of msdu netbufs */
 		qdf_nbuf_set_next(tail_msdu, NULL);
@@ -367,7 +356,7 @@ ol_rx_reorder_flush(struct ol_txrx_vdev_t *vdev,
 		if (rx_reorder_array_elem->head) {
 			OL_RX_REORDER_MPDU_CNT_DECR(&peer->tids_rx_reorder[tid],
 						    1);
-			if (head_msdu == NULL) {
+			if (!head_msdu) {
 				head_msdu = rx_reorder_array_elem->head;
 				tail_msdu = rx_reorder_array_elem->tail;
 				rx_reorder_array_elem->head = NULL;
@@ -390,7 +379,7 @@ ol_rx_reorder_flush(struct ol_txrx_vdev_t *vdev,
 
 		seq_num = htt_rx_mpdu_desc_seq_num(
 			htt_pdev,
-			htt_rx_msdu_desc_retrieve(htt_pdev, head_msdu));
+			htt_rx_msdu_desc_retrieve(htt_pdev, head_msdu), false);
 		peer->tids_last_seq[tid] = seq_num;
 		/* rx_opt_proc takes a NULL-terminated list of msdu netbufs */
 		qdf_nbuf_set_next(tail_msdu, NULL);
@@ -452,6 +441,66 @@ ol_rx_reorder_first_hole(struct ol_txrx_peer_t *peer,
 	*idx_end = tmp_idx;
 }
 
+#ifdef HL_RX_AGGREGATION_HOLE_DETECTION
+
+/**
+ * ol_rx_reorder_detect_hole - ol rx reorder detect hole
+ * @peer: ol_txrx_peer_t
+ * @tid: tid
+ * @idx_start: idx_start
+ *
+ * Return: void
+ */
+static void ol_rx_reorder_detect_hole(struct ol_txrx_peer_t *peer,
+					uint32_t tid,
+					uint32_t idx_start)
+{
+	uint32_t win_sz_mask, next_rel_idx, hole_size;
+
+	if (tid >= OL_TXRX_NUM_EXT_TIDS) {
+		ol_txrx_err("%s:  invalid tid, %u\n", __FUNCTION__, tid);
+		return;
+	}
+
+	if (peer->tids_next_rel_idx[tid] == INVALID_REORDER_INDEX)
+		return;
+
+	win_sz_mask = peer->tids_rx_reorder[tid].win_sz_mask;
+	/* Return directly if block-ack not enable */
+	if (win_sz_mask == 0)
+		return;
+
+	idx_start &= win_sz_mask;
+	next_rel_idx = peer->tids_next_rel_idx[tid] & win_sz_mask;
+
+	if (idx_start != next_rel_idx) {
+		hole_size = ((int)idx_start - (int)next_rel_idx) & win_sz_mask;
+
+		ol_rx_aggregation_hole(hole_size);
+	}
+
+	return;
+}
+
+#else
+
+/**
+ * ol_rx_reorder_detect_hole - ol rx reorder detect hole
+ * @peer: ol_txrx_peer_t
+ * @tid: tid
+ * @idx_start: idx_start
+ *
+ * Return: void
+ */
+static void ol_rx_reorder_detect_hole(struct ol_txrx_peer_t *peer,
+					uint32_t tid,
+					uint32_t idx_start)
+{
+	/* no-op */
+}
+
+#endif
+
 void
 ol_rx_reorder_peer_cleanup(struct ol_txrx_vdev_t *vdev,
 			   struct ol_txrx_peer_t *peer)
@@ -477,10 +526,19 @@ ol_rx_addba_handler(ol_txrx_pdev_handle pdev,
 	unsigned int array_size;
 	struct ol_txrx_peer_t *peer;
 	struct ol_rx_reorder_t *rx_reorder;
+	void *array_mem = NULL;
+
+	if (tid >= OL_TXRX_NUM_EXT_TIDS) {
+		ol_txrx_err("invalid tid, %u", tid);
+		WARN_ON(1);
+		return;
+	}
 
 	peer = ol_txrx_peer_find_by_id(pdev, peer_id);
-	if (peer == NULL)
+	if (!peer) {
+		ol_txrx_err("not able to find peer, %u", peer_id);
 		return;
+	}
 
 	if (pdev->cfg.host_addba) {
 		ol_ctrl_rx_addba_complete(pdev->ctrl_pdev,
@@ -493,11 +551,21 @@ ol_rx_addba_handler(ol_txrx_pdev_handle pdev,
 	rx_reorder = &peer->tids_rx_reorder[tid];
 
 	TXRX_ASSERT2(win_sz <= 64);
-	rx_reorder->win_sz = win_sz;
 	round_pwr2_win_sz = OL_RX_REORDER_ROUND_PWR2(win_sz);
 	array_size =
 		round_pwr2_win_sz * sizeof(struct ol_rx_reorder_array_elem_t);
-	rx_reorder->array = qdf_mem_malloc(array_size);
+
+	array_mem = qdf_mem_malloc(array_size);
+	if (!array_mem)
+		return;
+
+	if (rx_reorder->array != &rx_reorder->base) {
+		ol_txrx_info("delete array for tid %d", tid);
+		qdf_mem_free(rx_reorder->array);
+	}
+
+	rx_reorder->array = array_mem;
+	rx_reorder->win_sz = win_sz;
 	TXRX_ASSERT1(rx_reorder->array);
 
 	rx_reorder->win_sz_mask = round_pwr2_win_sz - 1;
@@ -514,11 +582,19 @@ ol_rx_delba_handler(ol_txrx_pdev_handle pdev, uint16_t peer_id, uint8_t tid)
 	struct ol_txrx_peer_t *peer;
 	struct ol_rx_reorder_t *rx_reorder;
 
-	peer = ol_txrx_peer_find_by_id(pdev, peer_id);
-	if (peer == NULL)
+	if (tid >= OL_TXRX_NUM_EXT_TIDS) {
+		ol_txrx_err("invalid tid, %u", tid);
+		WARN_ON(1);
 		return;
+	}
 
-	peer->tids_next_rel_idx[tid] = 0xffff;  /* invalid value */
+	peer = ol_txrx_peer_find_by_id(pdev, peer_id);
+	if (!peer) {
+		ol_txrx_err("not able to find peer, %u", peer_id);
+		return;
+	}
+
+	peer->tids_next_rel_idx[tid] = INVALID_REORDER_INDEX;
 	rx_reorder = &peer->tids_rx_reorder[tid];
 
 	/* check that there really was a block ack agreement */
@@ -531,8 +607,8 @@ ol_rx_delba_handler(ol_txrx_pdev_handle pdev, uint16_t peer_id, uint8_t tid)
 	 * used for non block-ack cases.
 	 */
 	if (rx_reorder->array != &rx_reorder->base) {
-		ol_txrx_dbg("%s, delete reorder array, tid:%d\n",
-			    __func__, tid);
+		ol_txrx_dbg("delete reorder array, tid:%d",
+			    tid);
 		qdf_mem_free(rx_reorder->array);
 	}
 
@@ -554,6 +630,11 @@ ol_rx_flush_handler(ol_txrx_pdev_handle pdev,
 	struct ol_rx_reorder_array_elem_t *rx_reorder_array_elem;
 	htt_pdev_handle htt_pdev = pdev->htt_pdev;
 
+	if (tid >= OL_TXRX_NUM_EXT_TIDS) {
+		ol_txrx_err("%s:  invalid tid, %u\n", __FUNCTION__, tid);
+		return;
+	}
+
 	peer = ol_txrx_peer_find_by_id(pdev, peer_id);
 	if (peer)
 		vdev = peer->vdev;
@@ -572,13 +653,17 @@ ol_rx_flush_handler(ol_txrx_pdev_handle pdev,
 			ol_rx_reorder_flush_frag(htt_pdev, peer, tid,
 						 idx_start);
 			/*
-			 * Assuming flush message sent seperately for frags
+			 * Assuming flush message sent separately for frags
 			 * and for normal frames
 			 */
 			OL_RX_REORDER_TIMEOUT_MUTEX_UNLOCK(pdev);
 			return;
 		}
 	}
+
+	if (action == htt_rx_flush_release)
+		ol_rx_reorder_detect_hole(peer, tid, idx_start);
+
 	ol_rx_reorder_flush(vdev, peer, tid, idx_start, idx_end, action);
 	/*
 	 * If the rx reorder timeout is handled by host SW, see if there are
@@ -592,8 +677,8 @@ void
 ol_rx_pn_ind_handler(ol_txrx_pdev_handle pdev,
 		     uint16_t peer_id,
 		     uint8_t tid,
-		     int seq_num_start,
-		     int seq_num_end, uint8_t pn_ie_cnt, uint8_t *pn_ie)
+		     uint16_t seq_num_start,
+		     uint16_t seq_num_end, uint8_t pn_ie_cnt, uint8_t *pn_ie)
 {
 	struct ol_txrx_vdev_t *vdev = NULL;
 	void *rx_desc;
@@ -603,8 +688,14 @@ ol_rx_pn_ind_handler(ol_txrx_pdev_handle pdev,
 	qdf_nbuf_t head_msdu = NULL;
 	qdf_nbuf_t tail_msdu = NULL;
 	htt_pdev_handle htt_pdev = pdev->htt_pdev;
-	int seq_num, i = 0;
+	uint16_t seq_num;
+	int i = 0;
 
+	if (tid >= OL_TXRX_NUM_EXT_TIDS) {
+		ol_txrx_err("%s:  invalid tid, %u\n", __FUNCTION__, tid);
+		WARN_ON(1);
+		return;
+	}
 	peer = ol_txrx_peer_find_by_id(pdev, peer_id);
 
 	if (!peer) {
@@ -668,37 +759,31 @@ ol_rx_pn_ind_handler(ol_txrx_pdev_handle pdev,
 						current_time_ms;
 					ol_txrx_warn(
 					   "Tgt PN check failed - TID %d, peer %pK "
-					   "(%02x:%02x:%02x:%02x:%02x:%02x)\n"
+					   "("QDF_MAC_ADDR_FMT")\n"
 					   "    PN (u64 x2)= 0x%08llx %08llx (LSBs = %lld)\n"
 					   "    new seq num = %d\n",
 					   tid, peer,
-					   peer->mac_addr.raw[0],
-					   peer->mac_addr.raw[1],
-					   peer->mac_addr.raw[2],
-					   peer->mac_addr.raw[3],
-					   peer->mac_addr.raw[4],
-					   peer->mac_addr.raw[5], pn.pn128[1],
+					   QDF_MAC_ADDR_REF(peer->mac_addr.raw),
+					   pn.pn128[1],
 					   pn.pn128[0],
 					   pn.pn128[0] & 0xffffffffffffULL,
 					   htt_rx_mpdu_desc_seq_num(htt_pdev,
-								    rx_desc));
+								    rx_desc,
+								    false));
 				} else {
 					ol_txrx_dbg(
 					   "Tgt PN check failed - TID %d, peer %pK "
-					   "(%02x:%02x:%02x:%02x:%02x:%02x)\n"
+					   "("QDF_MAC_ADDR_FMT")\n"
 					   "    PN (u64 x2)= 0x%08llx %08llx (LSBs = %lld)\n"
 					   "    new seq num = %d\n",
 					   tid, peer,
-					   peer->mac_addr.raw[0],
-					   peer->mac_addr.raw[1],
-					   peer->mac_addr.raw[2],
-					   peer->mac_addr.raw[3],
-					   peer->mac_addr.raw[4],
-					   peer->mac_addr.raw[5], pn.pn128[1],
+					   QDF_MAC_ADDR_REF(peer->mac_addr.raw),
+					   pn.pn128[1],
 					   pn.pn128[0],
 					   pn.pn128[0] & 0xffffffffffffULL,
 					   htt_rx_mpdu_desc_seq_num(htt_pdev,
-								    rx_desc));
+								    rx_desc,
+								    false));
 				}
 				ol_rx_err(pdev->ctrl_pdev, vdev->vdev_id,
 					  peer->mac_addr.raw, tid,
@@ -716,7 +801,7 @@ ol_rx_pn_ind_handler(ol_txrx_pdev_handle pdev,
 				} while (1);
 
 			} else {
-				if (head_msdu == NULL) {
+				if (!head_msdu) {
 					head_msdu = rx_reorder_array_elem->head;
 					tail_msdu = rx_reorder_array_elem->tail;
 				} else {

@@ -1,8 +1,5 @@
 /*
- * Copyright (c) 2014-2017 The Linux Foundation. All rights reserved.
- *
- * Previously licensed under the ISC license by Qualcomm Atheros, Inc.
- *
+ * Copyright (c) 2014-2021 The Linux Foundation. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -17,12 +14,6 @@
  * PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR OTHER
  * TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
  * PERFORMANCE OF THIS SOFTWARE.
- */
-
-/*
- * This file was originally distributed by Qualcomm Atheros, Inc.
- * under proprietary terms before Copyright ownership was assigned
- * to the Linux Foundation.
  */
 
 #ifndef __WLAN_HDD_NAN_H
@@ -40,57 +31,60 @@ struct hdd_context;
 struct wiphy;
 struct wireless_dev;
 
-int wlan_hdd_cfg80211_nan_request(struct wiphy *wiphy,
-				  struct wireless_dev *wdev,
-				  const void *data,
-				  int data_len);
-
-bool wlan_hdd_nan_is_supported(void);
-/**
- * hdd_nan_populate_cds_config() - Populate NAN cds configuration
- * @cds_cfg: CDS Configuration
- * @hdd_ctx: Pointer to hdd context
- *
- * Return: none
- */
-static inline void hdd_nan_populate_cds_config(struct cds_config_info *cds_cfg,
-			struct hdd_context *hdd_ctx)
-{
-	cds_cfg->is_nan_enabled = hdd_ctx->config->enable_nan_support;
-}
+bool wlan_hdd_nan_is_supported(struct hdd_context *hdd_ctx);
 
 /**
- * hdd_nan_populate_pmo_config() - Populate NAN pmo configuration
- * @pmo_cfg: PMO Configuration
- * @hdd_ctx: Pointer to hdd context
+ * wlan_hdd_cfg80211_nan_ext_request() - handle NAN Extended request
+ * @wiphy:   pointer to wireless wiphy structure.
+ * @wdev:    pointer to wireless_dev structure.
+ * @data:    Pointer to the data to be passed via vendor interface
+ * @data_len:Length of the data to be passed
  *
- * Return: none
+ * This function is called by userspace to send a NAN request to
+ * firmware.  This is an SSR-protected wrapper function.
+ *
+ * Return: 0 on success, negative errno on failure
  */
-static inline void hdd_nan_populate_pmo_config(struct pmo_psoc_cfg *pmo_cfg,
-			struct hdd_context *hdd_ctx)
-{
-	pmo_cfg->nan_enable = hdd_ctx->config->enable_nan_support;
-}
+int wlan_hdd_cfg80211_nan_ext_request(struct wiphy *wiphy,
+				      struct wireless_dev *wdev,
+				      const void *data,
+				      int data_len);
 
-void wlan_hdd_cfg80211_nan_callback(void *ctx, tSirNanEvent *msg);
-#else
-static inline bool wlan_hdd_nan_is_supported(void)
+#define FEATURE_NAN_VENDOR_COMMANDS					\
+	{                                                               \
+		.info.vendor_id = QCA_NL80211_VENDOR_ID,                \
+		.info.subcmd = QCA_NL80211_VENDOR_SUBCMD_NAN_EXT,       \
+		.flags = WIPHY_VENDOR_CMD_NEED_WDEV |                   \
+			 WIPHY_VENDOR_CMD_NEED_NETDEV |                 \
+			 WIPHY_VENDOR_CMD_NEED_RUNNING,                 \
+		.doit = wlan_hdd_cfg80211_nan_ext_request,		\
+		vendor_command_policy(nan_attr_policy,			\
+				      QCA_WLAN_VENDOR_ATTR_NAN_PARAMS_MAX) \
+	},								\
+	{                                                               \
+		.info.vendor_id = QCA_NL80211_VENDOR_ID,                \
+		.info.subcmd = QCA_NL80211_VENDOR_SUBCMD_NDP,           \
+		.flags = WIPHY_VENDOR_CMD_NEED_WDEV |                   \
+			WIPHY_VENDOR_CMD_NEED_NETDEV |                  \
+			WIPHY_VENDOR_CMD_NEED_RUNNING,                  \
+		.doit = wlan_hdd_cfg80211_process_ndp_cmd,		\
+		vendor_command_policy(vendor_attr_policy,		\
+				      QCA_WLAN_VENDOR_ATTR_NDP_PARAMS_MAX) \
+	},
+#else /* WLAN_FEATURE_NAN */
+#define FEATURE_NAN_VENDOR_COMMANDS
+
+static inline bool wlan_hdd_nan_is_supported(struct hdd_context *hdd_ctx)
 {
 	return false;
 }
-static inline void hdd_nan_populate_cds_config(struct cds_config_info *cds_cfg,
-			struct hdd_context *hdd_ctx)
-{
-}
-
-static inline void hdd_nan_populate_pmo_config(struct pmo_psoc_cfg *pmo_cfg,
-			struct hdd_context *hdd_ctx)
-{
-}
-
-static inline void wlan_hdd_cfg80211_nan_callback(void *ctx,
-						  tSirNanEvent *msg)
-{
-}
 #endif /* WLAN_FEATURE_NAN */
+
+/**
+ * hdd_nan_concurrency_update() - NAN concurrency
+ *
+ * Return: None
+ */
+void hdd_nan_concurrency_update(void);
+
 #endif /* __WLAN_HDD_NAN_H */

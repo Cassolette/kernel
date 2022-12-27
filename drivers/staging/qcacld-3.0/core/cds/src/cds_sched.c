@@ -1,8 +1,5 @@
 /*
- * Copyright (c) 2014-2017 The Linux Foundation. All rights reserved.
- *
- * Previously licensed under the ISC license by Qualcomm Atheros, Inc.
- *
+ * Copyright (c) 2014-2021 The Linux Foundation. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -19,19 +16,12 @@
  * PERFORMANCE OF THIS SOFTWARE.
  */
 
-/*
- * This file was originally distributed by Qualcomm Atheros, Inc.
- * under proprietary terms before Copyright ownership was assigned
- * to the Linux Foundation.
- */
-
 /**
  *  File: cds_sched.c
  *
  *  DOC: CDS Scheduler Implementation
  */
 
- /* Include Files */
 #include <cds_api.h>
 #include <ani_global.h>
 #include <sir_types.h>
@@ -42,35 +32,15 @@
 #include "cds_sched.h"
 #include <wlan_hdd_power.h>
 #include "wma_types.h"
+#include <dp_txrx.h>
 #include <linux/spinlock.h>
 #include <linux/kthread.h>
 #include <linux/cpu.h>
-/* Preprocessor Definitions and Constants */
-#define CDS_SCHED_THREAD_HEART_BEAT    INFINITE
-/* Milli seconds to delay SSR thread when an Entry point is Active */
-#define SSR_WAIT_SLEEP_TIME 200
-/* MAX iteration count to wait for Entry point to exit before
- * we proceed with SSR in WD Thread
- */
-#define MAX_SSR_WAIT_ITERATIONS 100
-#define MAX_SSR_PROTECT_LOG (16)
-
-static atomic_t ssr_protect_entry_count;
-
-/**
- * struct ssr_protect - sub system restart(ssr) protection tracking table
- * @func: Function which needs ssr protection
- * @free: Flag to tell whether entry is free in table or not
- * @pid: Process id which needs ssr protection
- */
-struct ssr_protect {
-	const char *func;
-	bool  free;
-	uint32_t pid;
-};
+#ifdef RX_PERFORMANCE
+#include <linux/sched/types.h>
+#endif
 
 static spinlock_t ssr_protect_lock;
-static struct ssr_protect ssr_protect_log[MAX_SSR_PROTECT_LOG];
 
 struct shutdown_notifier {
 	struct list_head list;
@@ -85,11 +55,11 @@ enum notifier_state {
 	NOTIFIER_STATE_NOTIFYING,
 } notifier_state;
 
-
 static p_cds_sched_context gp_cds_sched_context;
+
 #ifdef QCA_CONFIG_SMP
 static int cds_ol_rx_thread(void *arg);
-static unsigned long affine_cpu;
+static uint32_t affine_cpu;
 static QDF_STATUS cds_alloc_ol_rx_pkt_freeq(p_cds_sched_context pSchedContext);
 
 #define CDS_CORE_PER_CLUSTER (4)
@@ -100,11 +70,76 @@ static QDF_STATUS cds_alloc_ol_rx_pkt_freeq(p_cds_sched_context pSchedContext);
 #define CDS_CPU_CLUSTER_TYPE_PERF 1
 
 static inline
-int cds_set_cpus_allowed_ptr(struct task_struct *task, unsigned long cpu)
+int cds_set_cpus_allowed_ptr_with_cpu(struct task_struct *task,
+				      unsigned long cpu)
 {
 	return set_cpus_allowed_ptr(task, cpumask_of(cpu));
 }
 
+static inline
+int cds_set_cpus_allowed_ptr_with_mask(struct task_struct *task,
+				       qdf_cpu_mask *new_mask)
+{
+	return set_cpus_allowed_ptr(task, new_mask);
+}
+
+void cds_set_rx_thread_cpu_mask(uint8_t cpu_affinity_mask)
+{
+	p_cds_sched_context sched_context = get_cds_sched_ctxt();
+
+	if (!sched_context) {
+		qdf_err("invalid context");
+		return;
+	}
+	sched_context->conf_rx_thread_cpu_mask = cpu_affinity_mask;
+}
+
+void cds_set_rx_thread_ul_cpu_mask(uint8_t cpu_affinity_mask)
+{
+	p_cds_sched_context sched_context = get_cds_sched_ctxt();
+
+	if (!sched_context) {
+		qdf_err("invalid context");
+		return;
+	}
+	sched_context->conf_rx_thread_ul_affinity = cpu_affinity_mask;
+}
+
+#if (LINUX_VERSION_CODE >= KERNEL_VERSION(4, 4, 0))
+/**
+ * cds_rx_thread_log_cpu_affinity_change - Log Rx thread affinity change
+ * @core_affine_cnt: Available cores
+ * @tput_req: Throughput request
+ * @old_mask: Old affinity mask
+ * @new_mask: New affinity mask
+ *
+ * Return: NONE
+ */
+static void cds_rx_thread_log_cpu_affinity_change(unsigned char core_affine_cnt,
+						  int tput_req,
+						  struct cpumask *old_mask,
+						  struct cpumask *new_mask)
+{
+	char new_mask_str[10];
+	char old_mask_str[10];
+
+	qdf_mem_zero(new_mask_str, sizeof(new_mask_str));
+	qdf_mem_zero(new_mask_str, sizeof(old_mask_str));
+
+	cpumap_print_to_pagebuf(false, old_mask_str, old_mask);
+	cpumap_print_to_pagebuf(false, new_mask_str, new_mask);
+
+	cds_debug("num online cores %d, high tput req %d, Rx_thread old mask %s new mask %s",
+		  core_affine_cnt, tput_req, old_mask_str, new_mask_str);
+}
+#else
+static void cds_rx_thread_log_cpu_affinity_change(unsigned char core_affine_cnt,
+						  int tput_req,
+						  struct cpumask *old_mask,
+						  struct cpumask *new_mask)
+{
+}
+#endif
 
 /**
  * cds_sched_find_attach_cpu - find available cores and attach to required core
@@ -112,9 +147,12 @@ int cds_set_cpus_allowed_ptr(struct task_struct *task, unsigned long cpu)
  * @high_throughput:	high throughput is required or not
  *
  * Find current online cores.
- * high troughput required and PERF core online, then attach to last PERF core
- * low throughput required or only little cores online, the attach any little
- * core
+ * During high TPUT,
+ * 1) If user INI configured cores, affine to those cores
+ * 2) Otherwise perf cores.
+ * 3) Otherwise to all cores.
+ *
+ * During low TPUT, set affinity to any core, let system decide.
  *
  * Return: 0 success
  *         1 fail
@@ -122,138 +160,59 @@ int cds_set_cpus_allowed_ptr(struct task_struct *task, unsigned long cpu)
 static int cds_sched_find_attach_cpu(p_cds_sched_context pSchedContext,
 	bool high_throughput)
 {
-	unsigned long *online_perf_cpu = NULL;
-	unsigned long *online_litl_cpu = NULL;
-	unsigned char perf_core_count = 0;
-	unsigned char litl_core_count = 0;
-	int cds_max_cluster_id = 0;
-#ifdef WLAN_OPEN_SOURCE
-	struct cpumask litl_mask;
+	unsigned char core_affine_count = 0;
+	qdf_cpu_mask new_mask;
 	unsigned long cpus;
-	int i;
-#endif
+	struct cds_config_info *cds_cfg;
 
-	QDF_TRACE(QDF_MODULE_ID_QDF, QDF_TRACE_LEVEL_INFO_LOW,
-		"%s: num possible cpu %d",
-		__func__, num_possible_cpus());
+	cds_debug("num possible cpu %d", num_possible_cpus());
 
-	online_perf_cpu = qdf_mem_malloc(
-		num_possible_cpus() * sizeof(unsigned long));
-	if (!online_perf_cpu) {
-		QDF_TRACE(QDF_MODULE_ID_QDF, QDF_TRACE_LEVEL_ERROR,
-			"%s: perf cpu cache alloc fail", __func__);
-		return 1;
-	}
+	qdf_cpumask_clear(&new_mask);
 
-	online_litl_cpu = qdf_mem_malloc(
-		num_possible_cpus() * sizeof(unsigned long));
-	if (!online_litl_cpu) {
-		QDF_TRACE(QDF_MODULE_ID_QDF, QDF_TRACE_LEVEL_ERROR,
-			"%s: lttl cpu cache alloc fail", __func__);
-		qdf_mem_free(online_perf_cpu);
-		return 1;
-	}
-
-	/* Get Online perf CPU count */
-#if defined(WLAN_OPEN_SOURCE) && \
-	(LINUX_VERSION_CODE >= KERNEL_VERSION(3, 10, 0))
-	for_each_online_cpu(cpus) {
-		if (topology_physical_package_id(cpus) > CDS_MAX_CPU_CLUSTERS) {
-			QDF_TRACE(QDF_MODULE_ID_QDF, QDF_TRACE_LEVEL_ERROR,
-				"%s: can handle max %d clusters, returning...",
-				__func__, CDS_MAX_CPU_CLUSTERS);
-			goto err;
-		}
-
-		if (topology_physical_package_id(cpus) ==
-					 CDS_CPU_CLUSTER_TYPE_PERF) {
-			online_perf_cpu[perf_core_count] = cpus;
-			perf_core_count++;
-		} else {
-			online_litl_cpu[litl_core_count] = cpus;
-			litl_core_count++;
-		}
-		cds_max_cluster_id =  topology_physical_package_id(cpus);
-	}
-#else
-	cds_max_cluster_id = 0;
-#endif
-
-	/* Single cluster system, not need to handle this */
-	if (0 == cds_max_cluster_id) {
-		QDF_TRACE(QDF_MODULE_ID_QDF, QDF_TRACE_LEVEL_INFO_LOW,
-		"%s: single cluster system. returning", __func__);
-		goto success;
-	}
-
-	if ((!litl_core_count) && (!perf_core_count)) {
-		QDF_TRACE(QDF_MODULE_ID_QDF, QDF_TRACE_LEVEL_ERROR,
-			"%s: Both Cluster off, do nothing", __func__);
-		goto success;
-	}
-
-	if ((high_throughput && perf_core_count) || (!litl_core_count)) {
-		/* Attach RX thread to PERF CPU */
-		if (pSchedContext->rx_thread_cpu !=
-			online_perf_cpu[perf_core_count - 1]) {
-			if (cds_set_cpus_allowed_ptr(
-				pSchedContext->ol_rx_thread,
-				online_perf_cpu[perf_core_count - 1])) {
-				QDF_TRACE(QDF_MODULE_ID_QDF,
-					QDF_TRACE_LEVEL_ERROR,
-					"%s: rx thread perf core set fail",
-					__func__);
+	if (high_throughput) {
+		/* Get Online perf/pwr CPU count */
+		for_each_online_cpu(cpus) {
+			if (topology_physical_package_id(cpus) >
+							CDS_MAX_CPU_CLUSTERS) {
+				cds_err("can handle max %d clusters, returning...",
+					CDS_MAX_CPU_CLUSTERS);
 				goto err;
 			}
-			pSchedContext->rx_thread_cpu =
-				online_perf_cpu[perf_core_count - 1];
+
+			if (pSchedContext->conf_rx_thread_cpu_mask) {
+				if (pSchedContext->conf_rx_thread_cpu_mask &
+								(1 << cpus))
+					qdf_cpumask_set_cpu(cpus, &new_mask);
+			} else if (topology_physical_package_id(cpus) ==
+						 CDS_CPU_CLUSTER_TYPE_PERF) {
+				qdf_cpumask_set_cpu(cpus, &new_mask);
+			}
+
+			core_affine_count++;
 		}
 	} else {
-#if defined(WLAN_OPEN_SOURCE) && \
-	 (LINUX_VERSION_CODE >= KERNEL_VERSION(3, 10, 0))
-		/* Attach to any little core
-		 * Final decision should made by scheduler */
-
-		cpumask_clear(&litl_mask);
-		for (i = 0; i < litl_core_count; i++)
-			cpumask_set_cpu(online_litl_cpu[i], &litl_mask);
-
-		set_cpus_allowed_ptr(pSchedContext->ol_rx_thread, &litl_mask);
-		pSchedContext->rx_thread_cpu = 0;
-#else
-
-		/* Attach RX thread to last little core CPU */
-		if (pSchedContext->rx_thread_cpu !=
-			online_perf_cpu[litl_core_count - 1]) {
-			if (cds_set_cpus_allowed_ptr(
-				pSchedContext->ol_rx_thread,
-				online_perf_cpu[litl_core_count - 1])) {
-				QDF_TRACE(QDF_MODULE_ID_QDF,
-					QDF_TRACE_LEVEL_ERROR,
-					"%s: rx thread litl core set fail",
-					__func__);
-				goto err;
-			}
-			pSchedContext->rx_thread_cpu =
-				online_perf_cpu[litl_core_count - 1];
-		}
-#endif /* WLAN_OPEN_SOURCE */
+		/* Attach to all cores, let scheduler decide */
+		qdf_cpumask_setall(&new_mask);
 	}
 
-	QDF_TRACE(QDF_MODULE_ID_QDF, QDF_TRACE_LEVEL_INFO_LOW,
-		"%s: NUM PERF CORE %d, HIGH TPUTR REQ %d, RX THRE CPU %lu",
-		__func__, perf_core_count,
-		(int)pSchedContext->high_throughput_required,
-		pSchedContext->rx_thread_cpu);
+	cds_rx_thread_log_cpu_affinity_change(core_affine_count,
+				(int)pSchedContext->high_throughput_required,
+				&pSchedContext->rx_thread_cpu_mask,
+				&new_mask);
 
-success:
-	qdf_mem_free(online_perf_cpu);
-	qdf_mem_free(online_litl_cpu);
+	if (!cpumask_equal(&pSchedContext->rx_thread_cpu_mask, &new_mask)) {
+		cds_cfg = cds_get_ini_config();
+		cpumask_copy(&pSchedContext->rx_thread_cpu_mask, &new_mask);
+		if (cds_cfg && cds_cfg->enable_dp_rx_threads)
+			dp_txrx_set_cpu_mask(cds_get_context(QDF_MODULE_ID_SOC),
+					     &new_mask);
+		else
+			cds_set_cpus_allowed_ptr_with_mask(pSchedContext->ol_rx_thread,
+							   &new_mask);
+	}
+
 	return 0;
-
 err:
-	qdf_mem_free(online_perf_cpu);
-	qdf_mem_free(online_litl_cpu);
 	return 1;
 }
 
@@ -271,8 +230,7 @@ int cds_sched_handle_cpu_hot_plug(void)
 	p_cds_sched_context pSchedContext = get_cds_sched_ctxt();
 
 	if (!pSchedContext) {
-		QDF_TRACE(QDF_MODULE_ID_QDF, QDF_TRACE_LEVEL_ERROR,
-			"%s: invalid context", __func__);
+		cds_err("invalid context");
 		return 1;
 	}
 
@@ -282,13 +240,68 @@ int cds_sched_handle_cpu_hot_plug(void)
 	mutex_lock(&pSchedContext->affinity_lock);
 	if (cds_sched_find_attach_cpu(pSchedContext,
 		pSchedContext->high_throughput_required)) {
-		QDF_TRACE(QDF_MODULE_ID_QDF, QDF_TRACE_LEVEL_ERROR,
-			"%s: handle hot plug fail", __func__);
+		cds_err("handle hot plug fail");
 		mutex_unlock(&pSchedContext->affinity_lock);
 		return 1;
 	}
 	mutex_unlock(&pSchedContext->affinity_lock);
 	return 0;
+}
+
+void cds_sched_handle_rx_thread_affinity_req(bool high_throughput)
+{
+	p_cds_sched_context pschedcontext = get_cds_sched_ctxt();
+	unsigned long cpus;
+	qdf_cpu_mask new_mask;
+	unsigned char core_affine_count = 0;
+
+	if (!pschedcontext || !pschedcontext->ol_rx_thread)
+		return;
+
+	if (cds_is_load_or_unload_in_progress()) {
+		cds_err("load or unload in progress");
+		return;
+	}
+
+	if (pschedcontext->rx_affinity_required == high_throughput)
+		return;
+
+	pschedcontext->rx_affinity_required = high_throughput;
+	qdf_cpumask_clear(&new_mask);
+	if (!high_throughput) {
+		/* Attach to all cores, let scheduler decide */
+		qdf_cpumask_setall(&new_mask);
+		goto affine_thread;
+	}
+	for_each_online_cpu(cpus) {
+		if (topology_physical_package_id(cpus) >
+		    CDS_MAX_CPU_CLUSTERS) {
+			cds_err("can handle max %d clusters ",
+				CDS_MAX_CPU_CLUSTERS);
+			return;
+		}
+		if (pschedcontext->conf_rx_thread_ul_affinity &&
+		    (pschedcontext->conf_rx_thread_ul_affinity &
+				 (1 << cpus)))
+			qdf_cpumask_set_cpu(cpus, &new_mask);
+
+		core_affine_count++;
+	}
+
+affine_thread:
+	cds_rx_thread_log_cpu_affinity_change(
+		core_affine_count,
+		(int)pschedcontext->rx_affinity_required,
+		&pschedcontext->rx_thread_cpu_mask,
+		&new_mask);
+
+	mutex_lock(&pschedcontext->affinity_lock);
+	if (!cpumask_equal(&pschedcontext->rx_thread_cpu_mask, &new_mask)) {
+		cpumask_copy(&pschedcontext->rx_thread_cpu_mask, &new_mask);
+		cds_set_cpus_allowed_ptr_with_mask(pschedcontext->ol_rx_thread,
+						   &new_mask);
+	}
+	mutex_unlock(&pschedcontext->affinity_lock);
 }
 
 /**
@@ -306,83 +319,81 @@ int cds_sched_handle_throughput_req(bool high_tput_required)
 	p_cds_sched_context pSchedContext = get_cds_sched_ctxt();
 
 	if (!pSchedContext) {
-		QDF_TRACE(QDF_MODULE_ID_QDF, QDF_TRACE_LEVEL_ERROR,
-			"%s: invalid context", __func__);
+		cds_err("invalid context");
 		return 1;
 	}
 
 	if (cds_is_load_or_unload_in_progress()) {
-		QDF_TRACE(QDF_MODULE_ID_QDF, QDF_TRACE_LEVEL_ERROR,
-			"%s: load or unload in progress", __func__);
+		cds_err("load or unload in progress");
 		return 0;
 	}
 
 	mutex_lock(&pSchedContext->affinity_lock);
-	pSchedContext->high_throughput_required = high_tput_required;
-	if (cds_sched_find_attach_cpu(pSchedContext, high_tput_required)) {
-		QDF_TRACE(QDF_MODULE_ID_QDF, QDF_TRACE_LEVEL_ERROR,
-			"%s: handle throughput req fail", __func__);
-		mutex_unlock(&pSchedContext->affinity_lock);
-		return 1;
+	if (pSchedContext->high_throughput_required != high_tput_required) {
+		pSchedContext->high_throughput_required = high_tput_required;
+		if (cds_sched_find_attach_cpu(pSchedContext,
+					      high_tput_required)) {
+			mutex_unlock(&pSchedContext->affinity_lock);
+			return 1;
+		}
 	}
 	mutex_unlock(&pSchedContext->affinity_lock);
 	return 0;
 }
 
 /**
- * cds_cpu_hotplug_notify() - hot plug notify
- * @block: Pointer to block
- * @state: State
- * @hcpu: Pointer to hotplug cpu
+ * cds_cpu_hotplug_multi_cluster() - calls the multi-cluster hotplug handler,
+ *	when on a multi-cluster platform
  *
- * Return: NOTIFY_OK
+ * Return: QDF_STATUS
  */
-static int
-__cds_cpu_hotplug_notify(struct notifier_block *block,
-		       unsigned long state, void *hcpu)
+static QDF_STATUS cds_cpu_hotplug_multi_cluster(void)
 {
-	unsigned long cpu = (unsigned long)hcpu;
+	int cpus;
+	unsigned int multi_cluster = 0;
+
+	for_each_online_cpu(cpus) {
+		multi_cluster = topology_physical_package_id(cpus);
+	}
+
+	if (!multi_cluster)
+		return QDF_STATUS_E_NOSUPPORT;
+
+	if (cds_sched_handle_cpu_hot_plug())
+		return QDF_STATUS_E_FAILURE;
+
+	return QDF_STATUS_SUCCESS;
+}
+
+/**
+ * __cds_cpu_hotplug_notify() - CPU hotplug event handler
+ * @cpu: CPU Id of the CPU generating the event
+ * @cpu_up: true if the CPU is online
+ *
+ * Return: None
+ */
+static void __cds_cpu_hotplug_notify(uint32_t cpu, bool cpu_up)
+{
 	unsigned long pref_cpu = 0;
 	p_cds_sched_context pSchedContext = get_cds_sched_ctxt();
 	int i;
-	unsigned int multi_cluster;
-	unsigned int num_cpus;
-#if defined(WLAN_OPEN_SOURCE) && \
-	 (LINUX_VERSION_CODE >= KERNEL_VERSION(3, 10, 0))
-	int cpus;
-#endif
 
+	if (!pSchedContext || !pSchedContext->ol_rx_thread)
+		return;
 
-	if ((NULL == pSchedContext) || (NULL == pSchedContext->ol_rx_thread))
-		return NOTIFY_OK;
+	if (cds_is_load_or_unload_in_progress() || cds_is_driver_recovering())
+		return;
 
-	if (cds_is_load_or_unload_in_progress())
-		return NOTIFY_OK;
+	cds_debug("'%s' event on CPU %u (of %d); Currently affine to CPU %u",
+		  cpu_up ? "Up" : "Down", cpu, num_possible_cpus(), affine_cpu);
 
-	num_cpus = num_possible_cpus();
-	QDF_TRACE(QDF_MODULE_ID_QDF, QDF_TRACE_LEVEL_INFO_LOW,
-		  "%s: RX CORE %d, STATE %d, NUM CPUS %d",
-		  __func__, (int)affine_cpu, (int)state, num_cpus);
-	multi_cluster = 0;
+	/* try multi-cluster scheduling first */
+	if (QDF_IS_STATUS_SUCCESS(cds_cpu_hotplug_multi_cluster()))
+		return;
 
-#if defined(WLAN_OPEN_SOURCE) && \
-	 (LINUX_VERSION_CODE >= KERNEL_VERSION(3, 10, 0))
-
-	for_each_online_cpu(cpus) {
-		multi_cluster =  topology_physical_package_id(cpus);
-	}
-#endif
-
-	if ((multi_cluster) &&
-		((CPU_ONLINE == state) || (CPU_DEAD == state))) {
-		cds_sched_handle_cpu_hot_plug();
-		return NOTIFY_OK;
-	}
-
-	switch (state) {
-	case CPU_ONLINE:
+	if (cpu_up) {
 		if (affine_cpu != 0)
-			return NOTIFY_OK;
+			return;
 
 		for_each_online_cpu(i) {
 			if (i == 0)
@@ -390,10 +401,9 @@ __cds_cpu_hotplug_notify(struct notifier_block *block,
 			pref_cpu = i;
 			break;
 		}
-		break;
-	case CPU_DEAD:
+	} else {
 		if (cpu != affine_cpu)
-			return NOTIFY_OK;
+			return;
 
 		affine_cpu = 0;
 		for_each_online_cpu(i) {
@@ -405,44 +415,43 @@ __cds_cpu_hotplug_notify(struct notifier_block *block,
 	}
 
 	if (pref_cpu == 0)
-		return NOTIFY_OK;
+		return;
 
-	if (!cds_set_cpus_allowed_ptr(pSchedContext->ol_rx_thread, pref_cpu))
+	if (pSchedContext->ol_rx_thread &&
+	    !cds_set_cpus_allowed_ptr_with_cpu(pSchedContext->ol_rx_thread,
+					       pref_cpu))
 		affine_cpu = pref_cpu;
-
-	return NOTIFY_OK;
 }
 
 /**
- * vos_cpu_hotplug_notify - cpu core on-off notification handler wrapper
- * @block:	notifier block
- * @state:	state of core
- * @hcpu:	target cpu core
+ * cds_cpu_hotplug_notify - cpu core up/down notification handler wrapper
+ * @cpu: CPU Id of the CPU generating the event
+ * @cpu_up: true if the CPU is online
  *
- * pre-registered core status change notify callback function
- * will handle only ONLINE, OFFLINE notification
- * based on cpu architecture, rx thread affinity will be different
- * wrapper function
- *
- * Return: 0 success
- *         1 fail
+ * Return: None
  */
-static int cds_cpu_hotplug_notify(struct notifier_block *block,
-				unsigned long state, void *hcpu)
+static void cds_cpu_hotplug_notify(uint32_t cpu, bool cpu_up)
 {
-	int ret;
+	struct qdf_op_sync *op_sync;
 
-	cds_ssr_protect(__func__);
-	ret = __cds_cpu_hotplug_notify(block, state, hcpu);
-	cds_ssr_unprotect(__func__);
+	if (qdf_op_protect(&op_sync))
+		return;
 
-	return ret;
+	__cds_cpu_hotplug_notify(cpu, cpu_up);
+
+	qdf_op_unprotect(op_sync);
 }
 
-static struct notifier_block cds_cpu_hotplug_notifier = {
-	.notifier_call = cds_cpu_hotplug_notify,
-};
-#endif
+static void cds_cpu_online_cb(void *context, uint32_t cpu)
+{
+	cds_cpu_hotplug_notify(cpu, true);
+}
+
+static void cds_cpu_before_offline_cb(void *context, uint32_t cpu)
+{
+	cds_cpu_hotplug_notify(cpu, false);
+}
+#endif /* QCA_CONFIG_SMP */
 
 /**
  * cds_sched_open() - initialize the CDS Scheduler
@@ -464,22 +473,17 @@ QDF_STATUS cds_sched_open(void *p_cds_context,
 		p_cds_sched_context pSchedContext,
 		uint32_t SchedCtxSize)
 {
-	QDF_TRACE(QDF_MODULE_ID_QDF, QDF_TRACE_LEVEL_INFO_HIGH,
-		  "%s: Opening the CDS Scheduler", __func__);
+	cds_debug("Opening the CDS Scheduler");
 	/* Sanity checks */
-	if ((p_cds_context == NULL) || (pSchedContext == NULL)) {
-		QDF_TRACE(QDF_MODULE_ID_QDF, QDF_TRACE_LEVEL_ERROR,
-			  "%s: Null params being passed", __func__);
+	if ((!p_cds_context) || (!pSchedContext)) {
+		cds_err("Null params being passed");
 		return QDF_STATUS_E_FAILURE;
 	}
 	if (sizeof(cds_sched_context) != SchedCtxSize) {
-		QDF_TRACE(QDF_MODULE_ID_QDF, QDF_TRACE_LEVEL_INFO_HIGH,
-			  "%s: Incorrect CDS Sched Context size passed",
-			  __func__);
+		cds_debug("Incorrect CDS Sched Context size passed");
 		return QDF_STATUS_E_INVAL;
 	}
 	qdf_mem_zero(pSchedContext, sizeof(cds_sched_context));
-	pSchedContext->pVContext = p_cds_context;
 #ifdef QCA_CONFIG_SMP
 	spin_lock_init(&pSchedContext->ol_rx_thread_lock);
 	init_waitqueue_head(&pSchedContext->ol_rx_wait_queue);
@@ -496,10 +500,14 @@ QDF_STATUS cds_sched_open(void *p_cds_context,
 	spin_unlock_bh(&pSchedContext->cds_ol_rx_pkt_freeq_lock);
 	if (cds_alloc_ol_rx_pkt_freeq(pSchedContext) != QDF_STATUS_SUCCESS)
 		goto pkt_freeqalloc_failure;
-	register_hotcpu_notifier(&cds_cpu_hotplug_notifier);
-	pSchedContext->cpu_hot_plug_notifier = &cds_cpu_hotplug_notifier;
+	qdf_cpuhp_register(&pSchedContext->cpuhp_event_handle,
+			   NULL,
+			   cds_cpu_online_cb,
+			   cds_cpu_before_offline_cb);
 	mutex_init(&pSchedContext->affinity_lock);
 	pSchedContext->high_throughput_required = false;
+	pSchedContext->rx_affinity_required = false;
+	pSchedContext->active_staid = OL_TXRX_INVALID_LOCAL_PEER_ID;
 #endif
 	gp_cds_sched_context = pSchedContext;
 
@@ -509,30 +517,23 @@ QDF_STATUS cds_sched_open(void *p_cds_context,
 						       "cds_ol_rx_thread");
 	if (IS_ERR(pSchedContext->ol_rx_thread)) {
 
-		QDF_TRACE(QDF_MODULE_ID_QDF, QDF_TRACE_LEVEL_FATAL,
-			  "%s: Could not Create CDS OL RX Thread",
-			  __func__);
+		cds_alert("Could not Create CDS OL RX Thread");
 		goto OL_RX_THREAD_START_FAILURE;
 
 	}
 	wake_up_process(pSchedContext->ol_rx_thread);
-	QDF_TRACE(QDF_MODULE_ID_QDF, QDF_TRACE_LEVEL_INFO_HIGH,
-		  ("CDS OL RX thread Created"));
+	cds_debug("CDS OL RX thread Created");
 	wait_for_completion_interruptible(&pSchedContext->ol_rx_start_event);
-	QDF_TRACE(QDF_MODULE_ID_QDF, QDF_TRACE_LEVEL_INFO_HIGH,
-		  "%s: CDS OL Rx Thread has started", __func__);
+	cds_debug("CDS OL Rx Thread has started");
 #endif
 	/* We're good now: Let's get the ball rolling!!! */
-	QDF_TRACE(QDF_MODULE_ID_QDF, QDF_TRACE_LEVEL_INFO_HIGH,
-		  "%s: CDS Scheduler successfully Opened", __func__);
+	cds_debug("CDS Scheduler successfully Opened");
 	return QDF_STATUS_SUCCESS;
-
 #ifdef QCA_CONFIG_SMP
 OL_RX_THREAD_START_FAILURE:
 #endif
-
 #ifdef QCA_CONFIG_SMP
-	unregister_hotcpu_notifier(&cds_cpu_hotplug_notifier);
+	qdf_cpuhp_unregister(&pSchedContext->cpuhp_event_handle);
 	cds_free_ol_rx_pkt_freeq(gp_cds_sched_context);
 pkt_freeqalloc_failure:
 #endif
@@ -585,9 +586,7 @@ static QDF_STATUS cds_alloc_ol_rx_pkt_freeq(p_cds_sched_context pSchedContext)
 	for (i = 0; i < CDS_MAX_OL_RX_PKT; i++) {
 		pkt = qdf_mem_malloc(sizeof(*pkt));
 		if (!pkt) {
-			QDF_TRACE(QDF_MODULE_ID_QDF, QDF_TRACE_LEVEL_ERROR,
-				  "%s Vos packet allocation for ol rx thread failed",
-				  __func__);
+			cds_err("Vos packet allocation for ol rx thread failed");
 			goto free;
 		}
 		spin_lock_bh(&pSchedContext->cds_ol_rx_pkt_freeq_lock);
@@ -675,6 +674,38 @@ cds_indicate_rxpkt(p_cds_sched_context pSchedContext,
 }
 
 /**
+ * cds_close_rx_thread() - close the Rx thread
+ *
+ * This api closes the Rx thread:
+ *
+ * Return: qdf status
+ */
+QDF_STATUS cds_close_rx_thread(void)
+{
+	cds_debug("invoked");
+
+	if (!gp_cds_sched_context) {
+		cds_err("!gp_cds_sched_context");
+		return QDF_STATUS_E_FAILURE;
+	}
+
+	if (!gp_cds_sched_context->ol_rx_thread)
+		return QDF_STATUS_SUCCESS;
+
+	/* Shut down Tlshim Rx thread */
+	set_bit(RX_SHUTDOWN_EVENT, &gp_cds_sched_context->ol_rx_event_flag);
+	set_bit(RX_POST_EVENT, &gp_cds_sched_context->ol_rx_event_flag);
+	wake_up_interruptible(&gp_cds_sched_context->ol_rx_wait_queue);
+	wait_for_completion(&gp_cds_sched_context->ol_rx_shutdown);
+	gp_cds_sched_context->ol_rx_thread = NULL;
+	cds_drop_rxpkt_by_staid(gp_cds_sched_context, WLAN_MAX_STA_COUNT);
+	cds_free_ol_rx_pkt_freeq(gp_cds_sched_context);
+	qdf_cpuhp_unregister(&gp_cds_sched_context->cpuhp_event_handle);
+
+	return QDF_STATUS_SUCCESS;
+} /* cds_close_rx_thread */
+
+/**
  * cds_drop_rxpkt_by_staid() - api to drop pending rx packets for a sta
  * @pSchedContext: Pointer to the global CDS Sched Context
  * @staId: Station Id
@@ -689,6 +720,7 @@ void cds_drop_rxpkt_by_staid(p_cds_sched_context pSchedContext, uint16_t staId)
 	struct list_head local_list;
 	struct cds_ol_rx_pkt *pkt, *tmp;
 	qdf_nbuf_t buf, next_buf;
+	uint32_t timeout = 0;
 
 	INIT_LIST_HEAD(&local_list);
 	spin_lock_bh(&pSchedContext->ol_rx_queue_lock);
@@ -713,6 +745,18 @@ void cds_drop_rxpkt_by_staid(p_cds_sched_context pSchedContext, uint16_t staId)
 		}
 		cds_free_ol_rx_pkt(pSchedContext, pkt);
 	}
+
+	while (pSchedContext->active_staid == staId &&
+	       timeout <= CDS_ACTIVE_STAID_CLEANUP_TIMEOUT) {
+		if (qdf_in_interrupt())
+			qdf_mdelay(CDS_ACTIVE_STAID_CLEANUP_DELAY);
+		else
+			qdf_sleep(CDS_ACTIVE_STAID_CLEANUP_DELAY);
+		timeout += CDS_ACTIVE_STAID_CLEANUP_DELAY;
+	}
+
+	if (pSchedContext->active_staid == staId)
+		cds_err("Failed to cleanup RX packets for staId:%u", staId);
 }
 
 /**
@@ -734,11 +778,13 @@ static void cds_rx_from_queue(p_cds_sched_context pSchedContext)
 		pkt = list_first_entry(&pSchedContext->ol_rx_thread_queue,
 				       struct cds_ol_rx_pkt, list);
 		list_del(&pkt->list);
+		pSchedContext->active_staid = pkt->staId;
 		spin_unlock_bh(&pSchedContext->ol_rx_queue_lock);
 		sta_id = pkt->staId;
 		pkt->callback(pkt->context, pkt->Rxpkt, sta_id);
 		cds_free_ol_rx_pkt(pSchedContext, pkt);
 		spin_lock_bh(&pSchedContext->ol_rx_queue_lock);
+		pSchedContext->active_staid = OL_TXRX_INVALID_LOCAL_PEER_ID;
 	}
 	spin_unlock_bh(&pSchedContext->ol_rx_queue_lock);
 }
@@ -754,35 +800,19 @@ static void cds_rx_from_queue(p_cds_sched_context pSchedContext)
 static int cds_ol_rx_thread(void *arg)
 {
 	p_cds_sched_context pSchedContext = (p_cds_sched_context) arg;
-	unsigned long pref_cpu = 0;
 	bool shutdown = false;
-	int status, i;
+	int status;
 
+#ifdef RX_THREAD_PRIORITY
+	struct sched_param scheduler_params = {0};
+
+	scheduler_params.sched_priority = 1;
+	sched_setscheduler(current, SCHED_FIFO, &scheduler_params);
+#else
 	set_user_nice(current, -1);
-#ifdef MSM_PLATFORM
-	set_wake_up_idle(true);
 #endif
 
-	/* Find the available cpu core other than cpu 0 and
-	 * bind the thread
-	 */
-	/* Find the available cpu core other than cpu 0 and
-	 * bind the thread */
-	for_each_online_cpu(i) {
-		if (i == 0)
-			continue;
-		pref_cpu = i;
-			break;
-	}
-
-	if (pref_cpu != 0 && (!cds_set_cpus_allowed_ptr(current, pref_cpu)))
-		affine_cpu = pref_cpu;
-
-	if (!arg) {
-		QDF_TRACE(QDF_MODULE_ID_QDF, QDF_TRACE_LEVEL_ERROR,
-			  "%s: Bad Args passed", __func__);
-		return 0;
-	}
+	qdf_set_wake_up_idle(true);
 
 	complete(&pSchedContext->ol_rx_start_event);
 
@@ -809,10 +839,7 @@ static int cds_ol_rx_thread(void *arg)
 					complete
 						(&pSchedContext->ol_suspend_rx_event);
 				}
-				QDF_TRACE(QDF_MODULE_ID_QDF,
-					  QDF_TRACE_LEVEL_INFO,
-					  "%s: Shutting down OL RX Thread",
-					  __func__);
+				cds_debug("Shutting down OL RX Thread");
 				shutdown = true;
 				break;
 			}
@@ -834,9 +861,23 @@ static int cds_ol_rx_thread(void *arg)
 		}
 	}
 
-	QDF_TRACE(QDF_MODULE_ID_QDF, QDF_TRACE_LEVEL_DEBUG,
-		  "%s: Exiting CDS OL rx thread", __func__);
+	cds_debug("Exiting CDS OL rx thread");
 	complete_and_exit(&pSchedContext->ol_rx_shutdown, 0);
+
+	return 0;
+}
+
+void cds_resume_rx_thread(void)
+{
+	p_cds_sched_context cds_sched_context;
+
+	cds_sched_context = get_cds_sched_ctxt();
+	if (!cds_sched_context) {
+		cds_err("cds_sched_context is NULL");
+		return;
+	}
+
+	complete(&cds_sched_context->ol_resume_rx_event);
 }
 #endif
 
@@ -853,30 +894,15 @@ static int cds_ol_rx_thread(void *arg)
  */
 QDF_STATUS cds_sched_close(void)
 {
-	QDF_TRACE(QDF_MODULE_ID_QDF, QDF_TRACE_LEVEL_INFO_HIGH,
-		  "%s: invoked", __func__);
+	cds_debug("invoked");
 
-	if (gp_cds_sched_context == NULL) {
-		QDF_TRACE(QDF_MODULE_ID_QDF, QDF_TRACE_LEVEL_ERROR,
-			  "%s: gp_cds_sched_context == NULL", __func__);
+	if (!gp_cds_sched_context) {
+		cds_err("!gp_cds_sched_context");
 		return QDF_STATUS_E_FAILURE;
 	}
 
-#ifdef QCA_CONFIG_SMP
-	if (!gp_cds_sched_context->ol_rx_thread)
-		return QDF_STATUS_SUCCESS;
+	cds_close_rx_thread();
 
-	/* Shut down Tlshim Rx thread */
-	set_bit(RX_SHUTDOWN_EVENT, &gp_cds_sched_context->ol_rx_event_flag);
-	set_bit(RX_POST_EVENT, &gp_cds_sched_context->ol_rx_event_flag);
-	wake_up_interruptible(&gp_cds_sched_context->ol_rx_wait_queue);
-	wait_for_completion(&gp_cds_sched_context->ol_rx_shutdown);
-	gp_cds_sched_context->ol_rx_thread = NULL;
-	cds_drop_rxpkt_by_staid(gp_cds_sched_context, WLAN_MAX_STA_COUNT);
-	cds_free_ol_rx_pkt_freeq(gp_cds_sched_context);
-	unregister_hotcpu_notifier(&cds_cpu_hotplug_notifier);
-	gp_cds_sched_context->cpu_hot_plug_notifier = NULL;
-#endif
 	gp_cds_sched_context = NULL;
 	return QDF_STATUS_SUCCESS;
 } /* cds_sched_close() */
@@ -889,9 +915,8 @@ QDF_STATUS cds_sched_close(void)
 p_cds_sched_context get_cds_sched_ctxt(void)
 {
 	/* Make sure that Vos Scheduler context has been initialized */
-	if (gp_cds_sched_context == NULL)
-		QDF_TRACE(QDF_MODULE_ID_QDF, QDF_TRACE_LEVEL_ERROR,
-			  "%s: gp_cds_sched_context == NULL", __func__);
+	if (!gp_cds_sched_context)
+		cds_err("!gp_cds_sched_context");
 
 	return gp_cds_sched_context;
 }
@@ -904,133 +929,8 @@ p_cds_sched_context get_cds_sched_ctxt(void)
  */
 void cds_ssr_protect_init(void)
 {
-	int i = 0;
-
 	spin_lock_init(&ssr_protect_lock);
-
-	while (i < MAX_SSR_PROTECT_LOG) {
-		ssr_protect_log[i].func = NULL;
-		ssr_protect_log[i].free = true;
-		ssr_protect_log[i].pid =  0;
-		i++;
-	}
-
 	INIT_LIST_HEAD(&shutdown_notifier_head);
-}
-
-/**
- * cds_print_external_threads() - print external threads stuck in driver
- *
- * Return:
- *        void
- */
-void cds_print_external_threads(void)
-{
-	int i = 0;
-	unsigned long irq_flags;
-
-	spin_lock_irqsave(&ssr_protect_lock, irq_flags);
-
-	while (i < MAX_SSR_PROTECT_LOG) {
-		if (!ssr_protect_log[i].free) {
-			QDF_TRACE(QDF_MODULE_ID_QDF, QDF_TRACE_LEVEL_ERROR,
-				  "PID %d is executing %s",
-				  ssr_protect_log[i].pid,
-				  ssr_protect_log[i].func);
-		}
-		i++;
-	}
-
-	spin_unlock_irqrestore(&ssr_protect_lock, irq_flags);
-}
-
-/**
- * cds_ssr_protect() - start ssr protection
- * @caller_func: name of calling function.
- *
- * This function is called to keep track of active driver entry points
- *
- * Return: none
- */
-void cds_ssr_protect(const char *caller_func)
-{
-	int count;
-	int i = 0;
-	bool status = false;
-	unsigned long irq_flags;
-
-	count = atomic_inc_return(&ssr_protect_entry_count);
-
-	spin_lock_irqsave(&ssr_protect_lock, irq_flags);
-
-	while (i < MAX_SSR_PROTECT_LOG) {
-		if (ssr_protect_log[i].free) {
-			ssr_protect_log[i].func = caller_func;
-			ssr_protect_log[i].free = false;
-			ssr_protect_log[i].pid = current->pid;
-			status = true;
-			break;
-		}
-		i++;
-	}
-
-	spin_unlock_irqrestore(&ssr_protect_lock, irq_flags);
-
-	/*
-	 * Dump the protect log at intervals if count is consistently growing.
-	 * Long running functions should tend to dominate the protect log, so
-	 * hopefully, dumping at multiples of log size will prevent spamming the
-	 * logs while telling us which calls are taking a long time to finish.
-	 */
-	if (count >= MAX_SSR_PROTECT_LOG && count % MAX_SSR_PROTECT_LOG == 0) {
-		QDF_TRACE(QDF_MODULE_ID_QDF, QDF_TRACE_LEVEL_ERROR,
-			  "Protect Log overflow; Dumping contents:");
-		cds_print_external_threads();
-	}
-
-	if (!status)
-		QDF_TRACE(QDF_MODULE_ID_QDF, QDF_TRACE_LEVEL_ERROR,
-			  "%s can not be protected; PID:%d, entry_count:%d",
-			  caller_func, current->pid, count);
-}
-
-/**
- * cds_ssr_unprotect() - stop ssr protection
- * @caller_func: name of calling function.
- *
- * Return: none
- */
-void cds_ssr_unprotect(const char *caller_func)
-{
-	int count;
-	int i = 0;
-	bool status = false;
-	unsigned long irq_flags;
-
-	count = atomic_dec_return(&ssr_protect_entry_count);
-
-	spin_lock_irqsave(&ssr_protect_lock, irq_flags);
-
-	while (i < MAX_SSR_PROTECT_LOG) {
-		if (!ssr_protect_log[i].free) {
-			if ((ssr_protect_log[i].pid == current->pid) &&
-			     !strcmp(ssr_protect_log[i].func, caller_func)) {
-				ssr_protect_log[i].func = NULL;
-				ssr_protect_log[i].free = true;
-				ssr_protect_log[i].pid =  0;
-				status = true;
-				break;
-			}
-		}
-		i++;
-	}
-
-	spin_unlock_irqrestore(&ssr_protect_lock, irq_flags);
-
-	if (!status)
-		QDF_TRACE(QDF_MODULE_ID_QDF, QDF_TRACE_LEVEL_ERROR,
-			  "%s was not protected; PID:%d, entry_count:%d",
-			  caller_func, current->pid, count);
 }
 
 /**
@@ -1058,7 +958,7 @@ QDF_STATUS cds_shutdown_notifier_register(void (*cb)(void *priv), void *priv)
 
 	notifier = qdf_mem_malloc(sizeof(*notifier));
 
-	if (notifier == NULL)
+	if (!notifier)
 		return QDF_STATUS_E_NOMEM;
 
 	/*
@@ -1141,60 +1041,6 @@ void cds_shutdown_notifier_call(void)
 }
 
 /**
- * cds_wait_for_external_threads_completion() - wait for external threads
- *					completion before proceeding further
- * @caller_func: name of calling function.
- *
- * Return: true if there is no active entry points in driver
- *	   false if there is at least one active entry in driver
- */
-bool cds_wait_for_external_threads_completion(const char *caller_func)
-{
-	int count = MAX_SSR_WAIT_ITERATIONS;
-	int r;
-
-	while (count) {
-
-		r = atomic_read(&ssr_protect_entry_count);
-
-		if (!r)
-			break;
-
-		if (--count) {
-			QDF_TRACE(QDF_MODULE_ID_QDF, QDF_TRACE_LEVEL_ERROR,
-				  "%s: Waiting for %d active entry points to exit",
-				  __func__, r);
-			msleep(SSR_WAIT_SLEEP_TIME);
-			if (count & 0x1) {
-				QDF_TRACE(QDF_MODULE_ID_QDF,
-					QDF_TRACE_LEVEL_ERROR,
-					"%s: in middle of waiting for active entry points:",
-					__func__);
-				cds_print_external_threads();
-			}
-		}
-	}
-
-	/* at least one external thread is executing */
-	if (!count) {
-		QDF_TRACE(QDF_MODULE_ID_QDF, QDF_TRACE_LEVEL_ERROR,
-			  "Timed-out waiting for active entry points:");
-		cds_print_external_threads();
-		return false;
-	}
-
-	QDF_TRACE(QDF_MODULE_ID_QDF, QDF_TRACE_LEVEL_INFO,
-		  "Allowing SSR/Driver unload for %s", caller_func);
-
-	return true;
-}
-
-int cds_return_external_threads_count(void)
-{
-	return  atomic_read(&ssr_protect_entry_count);
-}
-
-/**
  * cds_get_gfp_flags(): get GFP flags
  *
  * Based on the scheduled context, return GFP flags
@@ -1209,3 +1055,4 @@ int cds_get_gfp_flags(void)
 
 	return flags;
 }
+

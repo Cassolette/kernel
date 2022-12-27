@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017 The Linux Foundation. All rights reserved.
+ * Copyright (c) 2017-2018, 2020 The Linux Foundation. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -15,6 +15,7 @@
  * TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
  * PERFORMANCE OF THIS SOFTWARE.
  */
+
 /**
  * DOC: Implements public API for pmo to interact with target/WMI
  */
@@ -35,22 +36,18 @@ QDF_STATUS pmo_tgt_enable_arp_offload_req(struct wlan_objmgr_vdev *vdev,
 	QDF_STATUS status;
 	struct wlan_pmo_tx_ops pmo_tx_ops;
 
-	PMO_ENTER();
-
 	vdev_ctx = pmo_vdev_get_priv(vdev);
 
 	psoc = pmo_vdev_get_psoc(vdev);
 
 	arp_offload_req = qdf_mem_malloc(sizeof(*arp_offload_req));
 	if (!arp_offload_req) {
-		pmo_err("unable to allocate arp_offload_req");
 		status = QDF_STATUS_E_NOMEM;
 		goto out;
 	}
 
 	ns_offload_req = qdf_mem_malloc(sizeof(*ns_offload_req));
 	if (!ns_offload_req) {
-		pmo_err("unable to allocate ns_offload_req");
 		status = QDF_STATUS_E_NOMEM;
 		goto out;
 	}
@@ -62,13 +59,9 @@ QDF_STATUS pmo_tgt_enable_arp_offload_req(struct wlan_objmgr_vdev *vdev,
 		sizeof(*ns_offload_req));
 	qdf_spin_unlock_bh(&vdev_ctx->pmo_vdev_lock);
 
-	pmo_debug("ARP Offload vdev_id: %d enable: %d",
-		vdev_id,
-		arp_offload_req->enable);
-	pmo_debug("NS Offload vdev_id: %d enable: %d ns_count: %u",
-		vdev_id,
-		ns_offload_req->enable,
-		ns_offload_req->num_ns_offload_count);
+	pmo_debug("vdev_id: %d: ARP offload %d NS offload %d ns_count %u",
+		  vdev_id, arp_offload_req->enable, ns_offload_req->enable,
+		  ns_offload_req->num_ns_offload_count);
 
 	pmo_tx_ops = GET_PMO_TX_OPS_FROM_PSOC(psoc);
 	if (!pmo_tx_ops.send_arp_offload_req) {
@@ -78,14 +71,23 @@ QDF_STATUS pmo_tgt_enable_arp_offload_req(struct wlan_objmgr_vdev *vdev,
 	}
 	status = pmo_tx_ops.send_arp_offload_req(
 			vdev, arp_offload_req, ns_offload_req);
-	if (status != QDF_STATUS_SUCCESS)
+	if (status != QDF_STATUS_SUCCESS) {
 		pmo_err("Failed to send ARP offload");
+		goto out;
+	}
+
+	qdf_spin_lock_bh(&vdev_ctx->pmo_vdev_lock);
+	if (vdev_ctx->vdev_arp_req.enable)
+		vdev_ctx->vdev_arp_req.is_offload_applied = true;
+	if (vdev_ctx->vdev_ns_req.enable)
+		vdev_ctx->vdev_ns_req.is_offload_applied = true;
+	qdf_spin_unlock_bh(&vdev_ctx->pmo_vdev_lock);
+
 out:
 	if (arp_offload_req)
 		qdf_mem_free(arp_offload_req);
 	if (ns_offload_req)
 		qdf_mem_free(ns_offload_req);
-	PMO_EXIT();
 
 	return status;
 }
@@ -100,7 +102,7 @@ QDF_STATUS pmo_tgt_disable_arp_offload_req(struct wlan_objmgr_vdev *vdev,
 	QDF_STATUS status;
 	struct wlan_pmo_tx_ops pmo_tx_ops;
 
-	PMO_ENTER();
+	pmo_enter();
 
 	vdev_ctx = pmo_vdev_get_priv(vdev);
 
@@ -108,14 +110,12 @@ QDF_STATUS pmo_tgt_disable_arp_offload_req(struct wlan_objmgr_vdev *vdev,
 
 	arp_offload_req = qdf_mem_malloc(sizeof(*arp_offload_req));
 	if (!arp_offload_req) {
-		pmo_err("unable to allocate arp_offload_req");
 		status = QDF_STATUS_E_NOMEM;
 		goto out;
 	}
 
 	ns_offload_req = qdf_mem_malloc(sizeof(*ns_offload_req));
 	if (!ns_offload_req) {
-		pmo_err("unable to allocate ns_offload_req");
 		status = QDF_STATUS_E_NOMEM;
 		goto out;
 	}
@@ -146,12 +146,17 @@ QDF_STATUS pmo_tgt_disable_arp_offload_req(struct wlan_objmgr_vdev *vdev,
 	if (status != QDF_STATUS_SUCCESS)
 		pmo_err("Failed to send ARP offload");
 
+	qdf_spin_lock_bh(&vdev_ctx->pmo_vdev_lock);
+	vdev_ctx->vdev_arp_req.is_offload_applied = false;
+	vdev_ctx->vdev_ns_req.is_offload_applied = false;
+	qdf_spin_unlock_bh(&vdev_ctx->pmo_vdev_lock);
+
 out:
 	if (arp_offload_req)
 		qdf_mem_free(arp_offload_req);
 	if (ns_offload_req)
 		qdf_mem_free(ns_offload_req);
-	PMO_EXIT();
+	pmo_exit();
 
 	return status;
 }

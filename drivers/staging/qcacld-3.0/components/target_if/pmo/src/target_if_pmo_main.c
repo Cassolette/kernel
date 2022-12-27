@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017 The Linux Foundation. All rights reserved.
+ * Copyright (c) 2017-2021 The Linux Foundation. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -23,7 +23,46 @@
 
 #include "target_if_pmo.h"
 #include "wlan_pmo_common_public_struct.h"
+#include "wlan_pmo_icmp.h"
 
+#ifdef WLAN_FEATURE_PACKET_FILTERING
+static inline
+void tgt_if_pmo_reg_pkt_filter_ops(struct wlan_pmo_tx_ops *pmo_tx_ops)
+{
+	pmo_tx_ops->send_set_pkt_filter =
+		target_if_pmo_send_pkt_filter_req;
+	pmo_tx_ops->send_clear_pkt_filter =
+		target_if_pmo_clear_pkt_filter_req;
+}
+#else
+static inline void
+tgt_if_pmo_reg_pkt_filter_ops(struct wlan_pmo_tx_ops *pmo_tx_ops)
+{
+}
+#endif
+#ifdef WLAN_FEATURE_IGMP_OFFLOAD
+static void
+update_pmo_igmp_tx_ops(struct wlan_pmo_tx_ops *pmo_tx_ops)
+{
+	pmo_tx_ops->send_igmp_offload_req =
+		target_if_pmo_send_igmp_offload_req;
+}
+#else
+static inline void
+update_pmo_igmp_tx_ops(struct wlan_pmo_tx_ops *pmo_tx_ops)
+{}
+#endif
+#ifdef WLAN_FEATURE_ICMP_OFFLOAD
+static void tgt_if_pmo_icmp_tx_ops(struct wlan_pmo_tx_ops *pmo_tx_ops)
+{
+	pmo_tx_ops->send_icmp_offload_req =
+		target_if_pmo_send_icmp_offload_req;
+}
+#else
+static inline void
+tgt_if_pmo_icmp_tx_ops(struct wlan_pmo_tx_ops *pmo_tx_ops)
+{}
+#endif
 void target_if_pmo_register_tx_ops(struct wlan_pmo_tx_ops *pmo_tx_ops)
 {
 	if (!pmo_tx_ops) {
@@ -43,6 +82,8 @@ void target_if_pmo_register_tx_ops(struct wlan_pmo_tx_ops *pmo_tx_ops)
 		target_if_pmo_disable_wow_wakeup_event;
 	pmo_tx_ops->send_add_wow_pattern =
 		target_if_pmo_send_wow_patterns_to_fw;
+	pmo_tx_ops->del_wow_pattern =
+		target_if_pmo_del_wow_patterns_to_fw;
 	pmo_tx_ops->send_enhance_mc_offload_req =
 		target_if_pmo_send_enhance_mc_offload_req;
 	pmo_tx_ops->send_set_mc_filter_req =
@@ -81,10 +122,15 @@ void target_if_pmo_register_tx_ops(struct wlan_pmo_tx_ops *pmo_tx_ops)
 		target_if_pmo_psoc_update_bus_suspend;
 	pmo_tx_ops->psoc_get_host_credits =
 		target_if_pmo_psoc_get_host_credits;
+	update_pmo_igmp_tx_ops(pmo_tx_ops);
 	pmo_tx_ops->psoc_get_pending_cmnds =
 		target_if_pmo_psoc_get_pending_cmnds;
 	pmo_tx_ops->update_target_suspend_flag =
 		target_if_pmo_update_target_suspend_flag;
+	pmo_tx_ops->update_target_suspend_acked_flag =
+		target_if_pmo_update_target_suspend_acked_flag;
+	pmo_tx_ops->is_target_suspended =
+		target_if_pmo_is_target_suspended;
 	pmo_tx_ops->psoc_send_wow_enable_req =
 		target_if_pmo_psoc_send_wow_enable_req;
 	pmo_tx_ops->psoc_send_supend_req =
@@ -97,10 +143,13 @@ void target_if_pmo_register_tx_ops(struct wlan_pmo_tx_ops *pmo_tx_ops)
 		target_if_pmo_psoc_send_host_wakeup_ind;
 	pmo_tx_ops->psoc_send_target_resume_req =
 		target_if_pmo_psoc_send_target_resume_req;
-	pmo_tx_ops->send_set_pkt_filter =
-		target_if_pmo_send_pkt_filter_req;
-	pmo_tx_ops->send_clear_pkt_filter =
-		target_if_pmo_clear_pkt_filter_req;
-
+	pmo_tx_ops->psoc_send_d0wow_enable_req =
+		target_if_pmo_psoc_send_d0wow_enable_req;
+	pmo_tx_ops->psoc_send_d0wow_disable_req =
+		target_if_pmo_psoc_send_d0wow_disable_req;
+	pmo_tx_ops->psoc_send_idle_roam_suspend_mode =
+		target_if_pmo_psoc_send_idle_monitor_cmd;
+	tgt_if_pmo_reg_pkt_filter_ops(pmo_tx_ops);
+	tgt_if_pmo_icmp_tx_ops(pmo_tx_ops);
 }
 

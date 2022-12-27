@@ -1,8 +1,5 @@
 /*
- * Copyright (c) 2012-2017 The Linux Foundation. All rights reserved.
- *
- * Previously licensed under the ISC license by Qualcomm Atheros, Inc.
- *
+ * Copyright (c) 2012-2021 The Linux Foundation. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -19,12 +16,6 @@
  * PERFORMANCE OF THIS SOFTWARE.
  */
 
-/*
- * This file was originally distributed by Qualcomm Atheros, Inc.
- * under proprietary terms before Copyright ownership was assigned
- * to the Linux Foundation.
- */
-
 /**
  * DOC: wlan_hdd_cfg80211.h
  *
@@ -37,8 +28,65 @@
 #include <wlan_cfg80211_scan.h>
 #include <wlan_cfg80211.h>
 #include <wlan_cfg80211_tdls.h>
+#include <qca_vendor.h>
+#include <wlan_cfg80211_spectral.h>
 
 struct hdd_context;
+
+/* QCA_NL80211_VENDOR_SUBCMD_ROAM policy */
+extern const struct nla_policy wlan_hdd_set_roam_param_policy[
+			QCA_WLAN_VENDOR_ATTR_ROAMING_PARAM_MAX + 1];
+
+/* QCA_NL80211_VENDOR_SUBCMD_GET_WIFI_INFO policy */
+extern const struct nla_policy qca_wlan_vendor_get_wifi_info_policy[
+			QCA_WLAN_VENDOR_ATTR_WIFI_INFO_GET_MAX + 1];
+
+/* QCA_NL80211_VENDOR_SUBCMD_SET_WIFI_CONFIGURATION policy */
+extern const struct nla_policy wlan_hdd_wifi_config_policy[
+			QCA_WLAN_VENDOR_ATTR_CONFIG_MAX + 1];
+
+/* QCA_NL80211_VENDOR_SUBCMD_WIFI_LOGGER_START policy */
+extern const struct nla_policy qca_wlan_vendor_wifi_logger_start_policy[
+			QCA_WLAN_VENDOR_ATTR_WIFI_LOGGER_START_MAX + 1];
+
+/* QCA_NL80211_VENDOR_SUBCMD_ND_OFFLOAD policy */
+extern const struct nla_policy ns_offload_set_policy[
+			QCA_WLAN_VENDOR_ATTR_ND_OFFLOAD_MAX + 1];
+
+/* QCA_NL80211_VENDOR_SUBCMD_GET_PREFERRED_FREQ_LIST policy */
+extern const struct nla_policy get_preferred_freq_list_policy[
+			QCA_WLAN_VENDOR_ATTR_GET_PREFERRED_FREQ_LIST_MAX + 1];
+
+/* QCA_NL80211_VENDOR_SUBCMD_SET_PROBABLE_OPER_CHANNEL policy */
+extern const struct nla_policy set_probable_oper_channel_policy[
+			QCA_WLAN_VENDOR_ATTR_PROBABLE_OPER_CHANNEL_MAX + 1];
+
+/* QCA_NL80211_VENDOR_SUBCMD_NO_DFS_FLAG policy */
+extern const struct nla_policy wlan_hdd_set_no_dfs_flag_config_policy[
+			QCA_WLAN_VENDOR_ATTR_SET_NO_DFS_FLAG_MAX + 1];
+
+/* QCA_NL80211_VENDOR_SUBCMD_GET_RING_DATA policy */
+extern const struct nla_policy qca_wlan_vendor_wifi_logger_get_ring_data_policy[
+			QCA_WLAN_VENDOR_ATTR_WIFI_LOGGER_GET_RING_DATA_MAX + 1];
+
+/* QCA_NL80211_VENDOR_SUBCMD_OFFLOADED_PACKETS policy */
+extern const struct nla_policy offloaded_packet_policy[
+			QCA_WLAN_VENDOR_ATTR_OFFLOADED_PACKETS_MAX + 1];
+
+/* QCA_NL80211_VENDOR_SUBCMD_SETBAND policy */
+extern const struct nla_policy setband_policy[QCA_WLAN_VENDOR_ATTR_MAX + 1];
+
+/* QCA_NL80211_VENDOR_SUBCMD_ACS_POLICY policy */
+extern const struct nla_policy wlan_hdd_set_acs_dfs_config_policy[
+			QCA_WLAN_VENDOR_ATTR_ACS_DFS_MAX + 1];
+
+/* QCA_NL80211_VENDOR_SUBCMD_STA_CONNECT_ROAM_POLICY policy */
+extern const struct nla_policy wlan_hdd_set_sta_roam_config_policy[
+			QCA_WLAN_VENDOR_ATTR_STA_CONNECT_ROAM_POLICY_MAX + 1];
+
+/* QCA_NL80211_VENDOR_SUBCMD_WISA  policy */
+extern const struct nla_policy wlan_hdd_wisa_cmd_policy[
+			QCA_WLAN_VENDOR_ATTR_WISA_MAX + 1];
 
 /* value for initial part of frames and number of bytes to be compared */
 #define GAS_INITIAL_REQ "\x04\x0a"
@@ -65,9 +113,6 @@ struct hdd_context;
 #define SA_QUERY_FRAME_RSP "\x08\x01"
 #define SA_QUERY_FRAME_RSP_SIZE 2
 
-#define HDD_P2P_WILDCARD_SSID "DIRECT-"
-#define HDD_P2P_WILDCARD_SSID_LEN 7
-
 #define WNM_BSS_ACTION_FRAME "\x0a\x07"
 #define WNM_BSS_ACTION_FRAME_SIZE 2
 
@@ -84,8 +129,6 @@ struct hdd_context;
 #define VENDOR1_AP_OUI_TYPE "\x00\xE0\x4C"
 #define VENDOR1_AP_OUI_TYPE_SIZE 3
 
-#define WLAN_BSS_MEMBERSHIP_SELECTOR_VHT_PHY 126
-#define WLAN_BSS_MEMBERSHIP_SELECTOR_HT_PHY 127
 #define BASIC_RATE_MASK   0x80
 #define RATE_MASK         0x7f
 
@@ -110,24 +153,46 @@ struct hdd_context;
 #ifndef WLAN_AKM_SUITE_FT_FILS_SHA384
 #define WLAN_AKM_SUITE_FT_FILS_SHA384 0x000FAC11
 #endif
+#ifndef WLAN_AKM_SUITE_DPP_RSN
+#define WLAN_AKM_SUITE_DPP_RSN 0x506f9a02
+#endif
+
+#ifndef WLAN_AKM_SUITE_OWE
+#define WLAN_AKM_SUITE_OWE 0x000FAC12
+#endif
+
+#ifndef WLAN_AKM_SUITE_EAP_SHA256
+#define WLAN_AKM_SUITE_EAP_SHA256 0x000FAC0B
+#endif
+
+#ifndef WLAN_AKM_SUITE_EAP_SHA384
+#define WLAN_AKM_SUITE_EAP_SHA384 0x000FAC0C
+#endif
+
+#ifndef WLAN_AKM_SUITE_SAE
+#define WLAN_AKM_SUITE_SAE 0x000FAC08
+#endif
+
+#ifndef WLAN_AKM_SUITE_FT_SAE
+#define WLAN_AKM_SUITE_FT_SAE 0x000FAC09
+#endif
+
+#ifndef WLAN_AKM_SUITE_FT_EAP_SHA_384
+#define WLAN_AKM_SUITE_FT_EAP_SHA_384 0x000FAC0D
+#endif
 
 #ifdef FEATURE_WLAN_TDLS
 #define WLAN_IS_TDLS_SETUP_ACTION(action) \
-	((SIR_MAC_TDLS_SETUP_REQ <= action) && \
-	(SIR_MAC_TDLS_SETUP_CNF >= action))
+	((TDLS_SETUP_REQUEST <= action) && \
+	(TDLS_SETUP_CONFIRM >= action))
 #if !defined(TDLS_MGMT_VERSION2)
 #define TDLS_MGMT_VERSION2 0
 #endif
 
 #endif
 
-#ifdef WLAN_FEATURE_LINK_LAYER_STATS
-void wlan_hdd_clear_link_layer_stats(struct hdd_adapter *adapter);
-#else
-static inline void wlan_hdd_clear_link_layer_stats(struct hdd_adapter *adapter) {}
-#endif
+#define HDD_SET_BIT(__param, __val)    ((__param) |= (1 << (__val)))
 
-#define MAX_CHANNEL (NUM_24GHZ_CHANNELS + NUM_5GHZ_CHANNELS)
 #define MAX_SCAN_SSID 10
 
 #define IS_CHANNEL_VALID(channel) ((channel >= 0 && channel < 15) \
@@ -141,8 +206,6 @@ static inline void wlan_hdd_clear_link_layer_stats(struct hdd_adapter *adapter) 
 #if defined(CFG80211_DEL_STA_V2) || (LINUX_VERSION_CODE >= KERNEL_VERSION(3, 19, 0)) || defined(WITH_BACKPORTS)
 #define USE_CFG80211_DEL_STA_V2
 #endif
-
-#define OL_TXRX_INVALID_TDLS_PEER_ID 0xff
 
 /**
  * enum eDFS_CAC_STATUS: CAC status
@@ -194,6 +257,8 @@ typedef enum {
 #define WIFI_FEATURE_CONTROL_ROAMING    0x800000  /* Enable/Disable roaming */
 #define WIFI_FEATURE_IE_WHITELIST       0x1000000 /* Support Probe IE white listing */
 #define WIFI_FEATURE_SCAN_RAND          0x2000000 /* Support MAC & Probe Sequence Number randomization */
+#define WIFI_FEATURE_SET_LATENCY_MODE   0x40000000 /* Set latency mode */
+
 
 /* Support Tx Power Limit setting */
 #define WIFI_FEATURE_SET_TX_POWER_LIMIT 0x4000000
@@ -203,57 +268,130 @@ typedef enum {
 #define WIFI_TDLS_EXTERNAL_CONTROL_SUPPORT	BIT(1)
 #define WIIF_TDLS_OFFCHANNEL_SUPPORT		BIT(2)
 
-#define CFG_NON_AGG_RETRY_MAX                  (31)
-#define CFG_AGG_RETRY_MAX                      (31)
-#define CFG_MGMT_RETRY_MAX                     (31)
+#define CFG_NON_AGG_RETRY_MAX                  (64)
+#define CFG_AGG_RETRY_MAX                      (64)
 #define CFG_CTRL_RETRY_MAX                     (31)
 #define CFG_PROPAGATION_DELAY_MAX              (63)
 #define CFG_PROPAGATION_DELAY_BASE             (64)
 #define CFG_AGG_RETRY_MIN                      (5)
+#define CFG_NON_AGG_RETRY_MIN                  (5)
 
-struct cfg80211_bss *wlan_hdd_cfg80211_update_bss_db(struct hdd_adapter *adapter,
-						tCsrRoamInfo *roam_info);
+#define CFG_NO_SUPPORT_UL_MUMIMO		(0)
+#define CFG_FULL_BW_SUPPORT_UL_MUMIMO		(1)
+#define CFG_PARTIAL_BW_SUPPORT_UL_MUMIMO	(2)
+#define CFG_FULL_PARTIAL_BW_SUPPORT_UL_MUMIMO	(3)
 
-int wlan_hdd_cfg80211_pmksa_candidate_notify(struct hdd_adapter *adapter,
-					tCsrRoamInfo *roam_info,
-					int index, bool preauth);
+#define PCL_CHANNEL_SUPPORT_GO			BIT(0)
+#define PCL_CHANNEL_SUPPORT_CLI			BIT(1)
+#define PCL_CHANNEL_EXCLUDE_IN_GO_NEG		BIT(3)
 
-#ifdef FEATURE_WLAN_LFR_METRICS
-QDF_STATUS wlan_hdd_cfg80211_roam_metrics_preauth(struct hdd_adapter *adapter,
-						tCsrRoamInfo *roam_info);
+#define CONNECTIVITY_CHECK_SET_ARP \
+	QCA_WLAN_VENDOR_CONNECTIVITY_CHECK_SET_ARP
+#define CONNECTIVITY_CHECK_SET_DNS \
+	QCA_WLAN_VENDOR_CONNECTIVITY_CHECK_SET_DNS
+#define CONNECTIVITY_CHECK_SET_TCP_HANDSHAKE \
+	QCA_WLAN_VENDOR_CONNECTIVITY_CHECK_SET_TCP_HANDSHAKE
+#define CONNECTIVITY_CHECK_SET_ICMPV4 \
+	QCA_WLAN_VENDOR_CONNECTIVITY_CHECK_SET_ICMPV4
+#define CONNECTIVITY_CHECK_SET_ICMPV6 \
+	QCA_WLAN_VENDOR_CONNECTIVITY_CHECK_SET_ICMPV6
+#define CONNECTIVITY_CHECK_SET_TCP_SYN \
+	QCA_WLAN_VENDOR_CONNECTIVITY_CHECK_SET_TCP_SYN
+#define CONNECTIVITY_CHECK_SET_TCP_SYN_ACK \
+	QCA_WLAN_VENDOR_CONNECTIVITY_CHECK_SET_TCP_SYN_ACK
+#define CONNECTIVITY_CHECK_SET_TCP_ACK \
+	QCA_WLAN_VENDOR_CONNECTIVITY_CHECK_SET_TCP_ACK
 
-QDF_STATUS wlan_hdd_cfg80211_roam_metrics_preauth_status(struct hdd_adapter *
-							 adapter,
-							 tCsrRoamInfo *
-							 roam_info,
-							 bool preauth_status);
+extern const struct nla_policy
+wlan_hdd_wifi_test_config_policy[
+	QCA_WLAN_VENDOR_ATTR_WIFI_TEST_CONFIG_MAX + 1];
 
-QDF_STATUS wlan_hdd_cfg80211_roam_metrics_handover(struct hdd_adapter *adapter,
-						   tCsrRoamInfo *roam_info);
-#endif
+#define RSNXE_DEFAULT 0
+#define RSNXE_OVERRIDE_1 1
+#define RSNXE_OVERRIDE_2 2
+#define CSA_DEFAULT 0
+#define CSA_IGNORE 1
+#define SA_QUERY_TIMEOUT_DEFAULT 0
+#define SA_QUERY_TIMEOUT_IGNORE 1
+#define FILS_DISCV_FRAMES_DISABLE 0
+#define FILS_DISCV_FRAMES_ENABLE 1
 
-#ifdef FEATURE_WLAN_WAPI
-void wlan_hdd_cfg80211_set_key_wapi(struct hdd_adapter *adapter, uint8_t key_index,
-				    const uint8_t *mac_addr, const uint8_t *key,
-				    int key_Len);
-#endif
-struct hdd_context *hdd_cfg80211_wiphy_alloc(int priv_size);
+#define FEATURE_VENDOR_SUBCMD_WIFI_TEST_CONFIGURATION                    \
+{                                                                        \
+	.info.vendor_id = QCA_NL80211_VENDOR_ID,                         \
+	.info.subcmd =                                                   \
+		QCA_NL80211_VENDOR_SUBCMD_WIFI_TEST_CONFIGURATION,       \
+	.flags = WIPHY_VENDOR_CMD_NEED_WDEV |                            \
+		WIPHY_VENDOR_CMD_NEED_NETDEV |                           \
+		WIPHY_VENDOR_CMD_NEED_RUNNING,                           \
+	.doit = wlan_hdd_cfg80211_set_wifi_test_config,                  \
+	vendor_command_policy(wlan_hdd_wifi_test_config_policy,          \
+			      QCA_WLAN_VENDOR_ATTR_WIFI_TEST_CONFIG_MAX) \
+},
 
-int wlan_hdd_cfg80211_tdls_scan(struct wiphy *wiphy,
-				struct cfg80211_scan_request *request,
-				uint8_t source);
+extern const struct nla_policy
+	qca_wlan_vendor_set_nud_stats_policy
+	[QCA_ATTR_NUD_STATS_SET_MAX + 1];
+
+#define FEATURE_VENDOR_SUBCMD_NUD_STATS_SET				    \
+{									    \
+		.info.vendor_id = QCA_NL80211_VENDOR_ID,		    \
+		.info.subcmd = QCA_NL80211_VENDOR_SUBCMD_NUD_STATS_SET,     \
+		.flags = WIPHY_VENDOR_CMD_NEED_WDEV |			    \
+			WIPHY_VENDOR_CMD_NEED_NETDEV |			    \
+			WIPHY_VENDOR_CMD_NEED_RUNNING,			    \
+		.doit = wlan_hdd_cfg80211_set_nud_stats,		    \
+		vendor_command_policy(qca_wlan_vendor_set_nud_stats_policy, \
+				      QCA_ATTR_NUD_STATS_SET_MAX)	    \
+},
+
+extern const struct nla_policy
+	qca_wlan_vendor_set_trace_level_policy
+	[QCA_WLAN_VENDOR_ATTR_SET_TRACE_LEVEL_MAX + 1];
+
+#define FEATURE_VENDOR_SUBCMD_SET_TRACE_LEVEL				\
+{									\
+	.info.vendor_id = QCA_NL80211_VENDOR_ID,			\
+	.info.subcmd = QCA_NL80211_VENDOR_SUBCMD_SET_TRACE_LEVEL,	\
+	.flags = WIPHY_VENDOR_CMD_NEED_WDEV |				\
+		 WIPHY_VENDOR_CMD_NEED_NETDEV |				\
+		 WIPHY_VENDOR_CMD_NEED_RUNNING,				\
+	.doit = wlan_hdd_cfg80211_set_trace_level,			\
+	vendor_command_policy(qca_wlan_vendor_set_trace_level_policy,	\
+			      QCA_WLAN_VENDOR_ATTR_SET_TRACE_LEVEL_MAX)	\
+},
+
+/**
+ * hdd_cfg80211_wiphy_alloc() - Allocate wiphy
+ *
+ * Allocate wiphy and hdd context.
+ *
+ * Return: hdd context on success and NULL on failure.
+ */
+struct hdd_context *hdd_cfg80211_wiphy_alloc(void);
 
 int wlan_hdd_cfg80211_scan(struct wiphy *wiphy,
 			   struct cfg80211_scan_request *request);
 
 int wlan_hdd_cfg80211_init(struct device *dev,
-			   struct wiphy *wiphy, struct hdd_config *pCfg);
+			   struct wiphy *wiphy, struct hdd_config *config);
 
 void wlan_hdd_cfg80211_deinit(struct wiphy *wiphy);
 
 void wlan_hdd_update_wiphy(struct hdd_context *hdd_ctx);
 
-void wlan_hdd_update_11n_mode(struct hdd_config *cfg);
+void wlan_hdd_update_11n_mode(struct hdd_context *hdd_ctx);
+
+/**
+ * wlan_hdd_update_wiphy_supported_band() - Updates wiphy band info when
+ * receive FW ready event
+ * @hdd_ctx: HDD context
+ *
+ * Updates wiphy band info
+ *
+ * Return: QDF Status
+ */
+QDF_STATUS wlan_hdd_update_wiphy_supported_band(struct hdd_context *hdd_ctx);
 
 int wlan_hdd_cfg80211_register(struct wiphy *wiphy);
 
@@ -274,18 +412,20 @@ void wlan_hdd_cfg80211_deregister_frames(struct hdd_adapter *adapter);
 void hdd_reg_notifier(struct wiphy *wiphy,
 				 struct regulatory_request *request);
 
-extern void hdd_conn_set_connection_state(struct hdd_adapter *adapter,
-					  eConnectionState connState);
 QDF_STATUS wlan_hdd_validate_operation_channel(struct hdd_adapter *adapter,
-					       int channel);
-#ifdef FEATURE_WLAN_TDLS
-int wlan_hdd_cfg80211_send_tdls_discover_req(struct wiphy *wiphy,
-					     struct net_device *dev, u8 *peer);
-#endif
+					       uint32_t ch_freq);
 
-void *wlan_hdd_change_country_code_cb(void *adapter);
-void hdd_select_cbmode(struct hdd_adapter *adapter, uint8_t operationChannel,
-		       struct ch_params *ch_params);
+/**
+ * hdd_select_cbmode() - select channel bonding mode
+ * @adapter: Pointer to adapter
+ * @oper_freq: Operating frequency (MHz)
+ * @sec_ch_2g_freq: secondary channel freq
+ * @ch_params: channel info struct to populate
+ *
+ * Return: none
+ */
+void hdd_select_cbmode(struct hdd_adapter *adapter, qdf_freq_t oper_freq,
+		       qdf_freq_t sec_ch_2g_freq, struct ch_params *ch_params);
 
 /**
  * wlan_hdd_is_ap_supports_immediate_power_save() - to find certain vendor APs
@@ -300,7 +440,7 @@ void hdd_select_cbmode(struct hdd_adapter *adapter, uint8_t operationChannel,
  * Return: true or false based on findings
  */
 bool wlan_hdd_is_ap_supports_immediate_power_save(uint8_t *ies, int length);
-void wlan_hdd_del_station(struct hdd_adapter *adapter);
+int wlan_hdd_del_station(struct hdd_adapter *adapter);
 
 #if defined(USE_CFG80211_DEL_STA_V2)
 int wlan_hdd_cfg80211_del_station(struct wiphy *wiphy,
@@ -318,11 +458,6 @@ int wlan_hdd_cfg80211_del_station(struct wiphy *wiphy,
 #endif
 #endif /* USE_CFG80211_DEL_STA_V2 */
 
-
-#if  defined(QCA_WIFI_FTM)     && defined(CONFIG_NL80211_TESTMODE)
-void wlan_hdd_testmode_rx_event(void *buf, size_t buf_len);
-#endif
-
 int wlan_hdd_send_avoid_freq_event(struct hdd_context *hdd_ctx,
 				   struct ch_avoid_ind_type *avoid_freq_list);
 
@@ -330,21 +465,21 @@ int wlan_hdd_send_avoid_freq_event(struct hdd_context *hdd_ctx,
  * wlan_hdd_send_hang_reason_event() - Send hang reason to the userspace
  * @hdd_ctx: Pointer to hdd context
  * @reason: cds recovery reason
+ * @data: Hang Data
+ * @data_len: Hang Data len
  *
  * Return: 0 on success or failure reason
  */
-int wlan_hdd_send_hang_reason_event(struct hdd_context *hdd_ctx, uint32_t reason);
+int wlan_hdd_send_hang_reason_event(struct hdd_context *hdd_ctx,
+				    uint32_t reason, uint8_t *data,
+				    size_t data_len);
 
-int wlan_hdd_send_avoid_freq_for_dnbs(struct hdd_context *hdd_ctx, uint8_t op_chan);
-
-#ifdef FEATURE_WLAN_EXTSCAN
-void wlan_hdd_cfg80211_extscan_callback(void *ctx,
-					const uint16_t evType, void *pMsg);
-#endif /* FEATURE_WLAN_EXTSCAN */
+int wlan_hdd_send_avoid_freq_for_dnbs(struct hdd_context *hdd_ctx,
+				      qdf_freq_t op_freq);
 
 /**
  * wlan_hdd_rso_cmd_status_cb() - HDD callback to read RSO command status
- * @ctx: void pointer to hdd context
+ * @hdd_handle: opaque handle for the hdd context
  * @rso_status: rso command status
  *
  * This callback function is invoked by firmware to update
@@ -352,79 +487,104 @@ void wlan_hdd_cfg80211_extscan_callback(void *ctx,
  *
  * Return: None
  */
-void wlan_hdd_rso_cmd_status_cb(void *ctx, struct rso_cmd_status *rso_status);
-
-void hdd_rssi_threshold_breached(void *hddctx,
-				 struct rssi_breach_event *data);
-
-struct cfg80211_bss *wlan_hdd_cfg80211_update_bss_list(struct hdd_adapter *adapter,
-						tSirMacAddr bssid);
-
-int wlan_hdd_cfg80211_update_bss(struct wiphy *wiphy,
-						struct hdd_adapter *adapter,
-						uint32_t scan_timestamp);
+void wlan_hdd_rso_cmd_status_cb(hdd_handle_t hdd_handle,
+				struct rso_cmd_status *rso_status);
 
 void wlan_hdd_cfg80211_acs_ch_select_evt(struct hdd_adapter *adapter);
 
-#ifdef WLAN_FEATURE_ROAM_OFFLOAD
-int wlan_hdd_send_roam_auth_event(struct hdd_adapter *adapter, uint8_t *bssid,
-		uint8_t *req_rsn_ie, uint32_t req_rsn_length, uint8_t
-		*rsp_rsn_ie, uint32_t rsp_rsn_length, tCsrRoamInfo
-		*roam_info_ptr);
+#ifdef WLAN_CFR_ENABLE
+/*
+ * hdd_cfr_data_send_nl_event() - send cfr data through nl event
+ * @vdev_id: vdev id
+ * @pid: process pid to which send data event unicast way
+ * @data: pointer to the cfr data
+ * @data_len: length of data
+ *
+ * Return: void
+ */
+void hdd_cfr_data_send_nl_event(uint8_t vdev_id, uint32_t pid,
+				const void *data, uint32_t data_len);
+
+#define FEATURE_CFR_DATA_VENDOR_EVENTS                                  \
+[QCA_NL80211_VENDOR_SUBCMD_PEER_CFR_CAPTURE_CFG_INDEX] = {              \
+        .vendor_id = QCA_NL80211_VENDOR_ID,                             \
+        .subcmd = QCA_NL80211_VENDOR_SUBCMD_PEER_CFR_CAPTURE_CFG,       \
+},
 #else
-static inline int wlan_hdd_send_roam_auth_event(struct hdd_adapter *adapter,
-		uint8_t *bssid, uint8_t *req_rsn_ie, uint32_t req_rsn_length,
-		uint8_t *rsp_rsn_ie, uint32_t rsp_rsn_length, tCsrRoamInfo
-		*roam_info_ptr)
+#define FEATURE_CFR_DATA_VENDOR_EVENTS
+#endif
+
+#ifdef WLAN_FEATURE_ROAM_OFFLOAD
+/**
+ * hdd_send_roam_scan_ch_list_event() - roam scan ch list event to user space
+ * @hdd_ctx: HDD context
+ * @vdev_id: vdev id
+ * @buf_len: length of frequency list
+ * @buf: pointer to buffer of frequency list
+ *
+ * Return: None
+ */
+void hdd_send_roam_scan_ch_list_event(struct hdd_context *hdd_ctx,
+				      uint8_t vdev_id, uint16_t buf_len,
+				      uint8_t *buf);
+#else
+static inline
+void hdd_send_roam_scan_ch_list_event(struct hdd_context *hdd_ctx,
+				      uint8_t vdev_id, uint16_t buf_len,
+				      uint8_t *buf)
 {
-	return 0;
 }
 #endif
 
 int wlan_hdd_cfg80211_update_apies(struct hdd_adapter *adapter);
-int wlan_hdd_request_pre_cac(uint8_t channel);
-int wlan_hdd_sap_cfg_dfs_override(struct hdd_adapter *adapter);
 
-enum policy_mgr_con_mode wlan_hdd_convert_nl_iftype_to_hdd_type(
-					enum nl80211_iftype type);
+/**
+ * wlan_hdd_request_pre_cac() - Start pre CAC in the driver
+ * @hdd_ctx: the HDD context to operate against
+ * @chan_freq: channel freq option provided by userspace
+ *
+ * Sets the driver to the required hardware mode and start an adapter for
+ * pre CAC which will mimic an AP.
+ *
+ * Return: Zero on success, non-zero value on error
+ */
+int wlan_hdd_request_pre_cac(struct hdd_context *hdd_ctx, uint32_t chan_freq);
+int wlan_hdd_sap_cfg_dfs_override(struct hdd_adapter *adapter);
 
 int wlan_hdd_enable_dfs_chan_scan(struct hdd_context *hdd_ctx,
 				  bool enable_dfs_channels);
 
-int wlan_hdd_cfg80211_update_band(struct hdd_context *hdd_ctx, struct wiphy *wiphy,
-				  eCsrBand eBand);
+/**
+ * wlan_hdd_cfg80211_update_band() - Update band of operation
+ * @hdd_ctx: The global HDD context
+ * @wiphy: The wiphy being configured
+ * @new_band: The new bad of operation
+ *
+ * This function is called from the supplicant through a
+ * private ioctl to change the band value
+ *
+ * Return: 0 on success, else a negative errno if the operation could
+ *         not be completed
+ */
+int wlan_hdd_cfg80211_update_band(struct hdd_context *hdd_ctx,
+				  struct wiphy *wiphy,
+				  enum band_info new_band);
 
 /**
- * wlan_hdd_try_disconnect() - try disconnnect from previous connection
- * @adapter: Pointer to adapter
+ * wlan_hdd_change_hw_mode_for_given_chnl() - change HW mode for given channel
+ * @adapter: pointer to adapter
+ * @chan_freq: given channel frequency
+ * @reason: reason for HW mode change is needed
  *
- * This function is used to disconnect from previous connection
+ * This API decides and sets hardware mode to DBS based on given channel.
+ * For example, some of the platforms require DBS hardware mode to operate
+ * in 2.4G channel
  *
- * Return: 0 for success, non-zero for failure
+ * Return: 0 for success and non-zero for failure
  */
-int wlan_hdd_try_disconnect(struct hdd_adapter *adapter);
-
-#if defined(CFG80211_DISCONNECTED_V2) || \
-(LINUX_VERSION_CODE >= KERNEL_VERSION(4, 2, 0))
-static inline void wlan_hdd_cfg80211_indicate_disconnect(struct net_device *dev,
-							bool locally_generated,
-							int reason)
-{
-	cfg80211_disconnected(dev, reason, NULL, 0,
-				locally_generated, GFP_KERNEL);
-}
-#else
-static inline void wlan_hdd_cfg80211_indicate_disconnect(struct net_device *dev,
-							bool locally_generated,
-							int reason)
-{
-	cfg80211_disconnected(dev, reason, NULL, 0,
-				GFP_KERNEL);
-}
-#endif
-struct cfg80211_bss *
-wlan_hdd_cfg80211_inform_bss_frame(struct hdd_adapter *adapter,
-				   struct bss_description *bss_desc);
+int wlan_hdd_change_hw_mode_for_given_chnl(struct hdd_adapter *adapter,
+					   uint32_t chan_freq,
+					   enum policy_mgr_conn_update_reason reason);
 
 /**
  * hdd_rate_info_bw: an HDD internal rate bandwidth representation
@@ -445,21 +605,32 @@ enum hdd_rate_info_bw {
 };
 
 /**
+ * hdd_chain_mode : Representation of Number of chains available.
+ * @HDD_CHAIN_MODE_1X1: Chain mask Not Configurable as only one chain available
+ * @HDD_CHAIN_MODE_2X2: Chain mask configurable as both chains available
+ */
+enum hdd_chain_mode {
+	HDD_CHAIN_MODE_1X1 = 1,
+	HDD_CHAIN_MODE_2X2 = 3,
+};
+
+/**
  * hdd_set_rate_bw(): Set the bandwidth for the given rate_info
  * @info: The rate info for which the bandwidth should be set
  * @hdd_bw: HDD representation of a rate info bandwidth
  */
 void hdd_set_rate_bw(struct rate_info *info, enum hdd_rate_info_bw hdd_bw);
 
-/**
- * hdd_lost_link_info_cb() - callback function to get lost link information
- * @context: HDD context
- * @lost_link_info: lost link information
+/*
+ * hdd_get_sap_operating_band_by_adapter: Get current adapter operating channel
+ * for sap.
+ * @adapter: Pointer to adapter
  *
- * Return: none
+ * Return : Corresponding band for SAP operating channel
  */
-void hdd_lost_link_info_cb(void *context,
-			struct sir_lost_link_info *lost_link_info);
+
+uint8_t hdd_get_sap_operating_band_by_adapter(struct hdd_adapter *adapter);
+
 /*
  * hdd_get_sap_operating_band:  Get current operating channel
  * for sap.
@@ -468,40 +639,6 @@ void hdd_lost_link_info_cb(void *context,
  * Return : Corresponding band for SAP operating channel
  */
 uint8_t hdd_get_sap_operating_band(struct hdd_context *hdd_ctx);
-
-/**
- * wlan_hdd_try_disconnect() - try disconnnect from previous connection
- * @adapter: Pointer to adapter
- *
- * This function is used to disconnect from previous connection
- *
- * Return: 0 for success, non-zero for failure
- */
-int wlan_hdd_try_disconnect(struct hdd_adapter *adapter);
-
-/**
- * hdd_update_cca_info_cb() - stores congestion value in station context
- * @context : HDD context
- * @congestion : congestion
- * @vdev_id : vdev id
- *
- * Return: None
- */
-void hdd_update_cca_info_cb(void *context, uint32_t congestion,
-			uint32_t vdev_id);
-
-/**
- * wlan_hdd_get_adjacent_chan(): Gets next/previous channel
- * to the channel passed.
- * @chan: Channel
- * @upper: If "true" then next channel is returned or else
- * previous channel is returned.
- *
- * This function returns the next/previous adjacent-channel to
- * the channel passed. If "upper = true" then next channel is
- * returned else previous is returned.
- */
-int wlan_hdd_get_adjacent_chan(uint8_t chan, bool upper);
 
 /**
  * wlan_hdd_merge_avoid_freqs(): Merge two tHddAvoidFreqList
@@ -517,18 +654,20 @@ int wlan_hdd_merge_avoid_freqs(struct ch_avoid_ind_type *destFreqList,
 
 /**
  * hdd_bt_activity_cb() - callback function to receive bt activity
- * @context: HDD context
+ * @hdd_handle: Opaque handle to the HDD context
  * @bt_activity: specifies the kind of bt activity
  *
  * Return: none
  */
-void hdd_bt_activity_cb(void *context, uint32_t bt_activity);
+void hdd_bt_activity_cb(hdd_handle_t hdd_handle, uint32_t bt_activity);
 
+#ifdef WLAN_FEATURE_GTK_OFFLOAD
 /**
  * wlan_hdd_save_gtk_offload_params() - Save gtk offload parameters in STA
  *                                      context for offload operations.
  * @adapter: Adapter context
  * @kck_ptr: KCK buffer pointer
+ * @kck_len: KCK length
  * @kek_ptr: KEK buffer pointer
  * @kek_len: KEK length
  * @replay_ctr: Pointer to 64 bit long replay counter
@@ -537,9 +676,136 @@ void hdd_bt_activity_cb(void *context, uint32_t bt_activity);
  * Return: None
  */
 void wlan_hdd_save_gtk_offload_params(struct hdd_adapter *adapter,
-					     uint8_t *kck_ptr,
-					     uint8_t *kek_ptr,
-					     uint32_t kek_len,
-					     uint8_t *replay_ctr,
-					     bool big_endian);
+				      uint8_t *kck_ptr, uint8_t  kck_len,
+				      uint8_t *kek_ptr, uint32_t kek_len,
+				      uint8_t *replay_ctr, bool big_endian);
+#else
+void wlan_hdd_save_gtk_offload_params(struct hdd_adapter *adapter,
+				      uint8_t *kck_ptr, uint8_t kck_len,
+				      uint8_t *kek_ptr, uint32_t kek_len,
+				      uint8_t *replay_ctr, bool big_endian)
+{}
+#endif
+
+
+/**
+ * wlan_hdd_flush_pmksa_cache() - flush pmksa cache for adapter
+ * @adapter: Adapter context
+ *
+ * Return: qdf status
+ */
+QDF_STATUS wlan_hdd_flush_pmksa_cache(struct hdd_adapter *adapter);
+
+/*
+ * wlan_hdd_send_mode_change_event() - API to send hw mode change event to
+ * userspace
+ *
+ * Return : 0 on success and errno on failure
+ */
+int wlan_hdd_send_mode_change_event(void);
+
+/**
+ * wlan_hdd_restore_channels() - Restore the channels which were cached
+ * and disabled in wlan_hdd_disable_channels api.
+ * @hdd_ctx: Pointer to the HDD context
+ *
+ * Return: 0 on success, Error code on failure
+ */
+int wlan_hdd_restore_channels(struct hdd_context *hdd_ctx);
+
+/*
+ * wlan_hdd_send_sta_authorized_event: Function to send station authorized
+ * event to user space in case of SAP
+ * @adapter: Pointer to the adapter
+ * @hdd_ctx: HDD Context
+ * @mac_addr: MAC address of the STA for whic the Authorized event needs to
+ * be sent
+ * This api is used to send station authorized event to user space
+ */
+QDF_STATUS wlan_hdd_send_sta_authorized_event(
+					struct hdd_adapter *adapter,
+					struct hdd_context *hdd_ctx,
+					const struct qdf_mac_addr *mac_addr);
+
+/**
+ * hdd_set_dynamic_antenna_mode() - set dynamic antenna mode
+ * @adapter: Pointer to network adapter
+ * @num_rx_chains: number of chains to be used for receiving data
+ * @num_tx_chains: number of chains to be used for transmitting data
+ *
+ * This function will set dynamic antenna mode
+ *
+ * Return: 0 for success
+ */
+int hdd_set_dynamic_antenna_mode(struct hdd_adapter *adapter,
+				 uint8_t num_rx_chains,
+				 uint8_t num_tx_chains);
+
+/**
+ * hdd_convert_cfgdot11mode_to_80211mode() - Function to convert cfg dot11 mode
+ *  to 80211 mode
+ * @mode: cfg dot11 mode
+ *
+ * Return: 80211 mode
+ */
+enum qca_wlan_802_11_mode
+hdd_convert_cfgdot11mode_to_80211mode(enum csr_cfgdot11mode mode);
+
+/**
+ * hdd_send_update_owe_info_event - Send update OWE info event
+ * @adapter: Pointer to adapter
+ * @sta_addr: MAC address of peer STA
+ * @owe_ie: OWE IE
+ * @owe_ie_len: Length of OWE IE
+ *
+ * Send update OWE info event to hostapd
+ *
+ * Return: none
+ */
+#if defined(CFG80211_EXTERNAL_DH_UPDATE_SUPPORT) || \
+(LINUX_VERSION_CODE > KERNEL_VERSION(5, 2, 0))
+void hdd_send_update_owe_info_event(struct hdd_adapter *adapter,
+				    uint8_t sta_addr[],
+				    uint8_t *owe_ie,
+				    uint32_t owe_ie_len);
+#else
+static inline void hdd_send_update_owe_info_event(struct hdd_adapter *adapter,
+						  uint8_t sta_addr[],
+						  uint8_t *owe_ie,
+						  uint32_t owe_ie_len)
+{
+}
+#endif
+
+/**
+ * hdd_set_phy_mode() - set phy mode
+ * @adapter: Handle to hdd_adapter
+ * @vendor_phy_mode: phy mode to set
+ *
+ * Return: 0 on success, negative errno on failure
+ */
+int hdd_set_phy_mode(struct hdd_adapter *adapter,
+		     enum qca_wlan_vendor_phy_mode vendor_phy_mode);
+
+/**
+ * hdd_is_legacy_connection() - Is adapter connection is legacy
+ * @adapter: Handle to hdd_adapter
+ *
+ * Return: true if connection mode is legacy, false otherwise.
+ */
+bool hdd_is_legacy_connection(struct hdd_adapter *adapter);
+
+struct hdd_hostapd_state;
+
+/**
+ * hdd_softap_deauth_all_sta() - Deauth all sta in the sta list
+ * @adapter: pointer to adapter structure
+ * @hapd_state: pointer to hostapd state structure
+ * @param: pointer to del sta params
+ *
+ * Return: QDF_STATUS on success, corresponding QDF failure status on failure
+ */
+QDF_STATUS hdd_softap_deauth_all_sta(struct hdd_adapter *adapter,
+				     struct hdd_hostapd_state *hapd_state,
+				     struct csr_del_sta_params *param);
 #endif

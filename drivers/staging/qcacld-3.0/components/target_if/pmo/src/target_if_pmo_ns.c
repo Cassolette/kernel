@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017 The Linux Foundation. All rights reserved.
+ * Copyright (c) 2017-2018 The Linux Foundation. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -34,6 +34,7 @@ QDF_STATUS target_if_pmo_send_ns_offload_req(
 	uint8_t vdev_id;
 	struct wlan_objmgr_psoc *psoc;
 	QDF_STATUS status;
+	wmi_unified_t wmi_handle;
 
 	if (!vdev) {
 		target_if_err("vdev ptr passed is NULL");
@@ -47,11 +48,16 @@ QDF_STATUS target_if_pmo_send_ns_offload_req(
 		return QDF_STATUS_E_INVAL;
 	}
 
-	status = wmi_unified_enable_arp_ns_offload_cmd(
-			GET_WMI_HDL_FROM_PSOC(psoc),
-			arp_offload_req,
-			ns_offload_req,
-			vdev_id);
+	wmi_handle = get_wmi_unified_hdl_from_psoc(psoc);
+	if (!wmi_handle) {
+		target_if_err("Invalid wmi handle");
+		return QDF_STATUS_E_INVAL;
+	}
+
+	status = wmi_unified_enable_arp_ns_offload_cmd(wmi_handle,
+						       arp_offload_req,
+						       ns_offload_req,
+						       vdev_id);
 	if (status != QDF_STATUS_SUCCESS)
 		target_if_err("Failed to enable ARP NDP/NSffload");
 

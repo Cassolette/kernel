@@ -1,8 +1,5 @@
 /*
- * Copyright (c) 2012-2017 The Linux Foundation. All rights reserved.
- *
- * Previously licensed under the ISC license by Qualcomm Atheros, Inc.
- *
+ * Copyright (c) 2012-2021 The Linux Foundation. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -19,15 +16,10 @@
  * PERFORMANCE OF THIS SOFTWARE.
  */
 
-/*
- * This file was originally distributed by Qualcomm Atheros, Inc.
- * under proprietary terms before Copyright ownership was assigned
- * to the Linux Foundation.
- */
-
 #if !defined(__LIM_SESSION_H)
 #define __LIM_SESSION_H
 
+#include "wlan_cm_public_struct.h"
 /**=========================================================================
 
    \file  lim_session.h
@@ -38,26 +30,18 @@
 
    ========================================================================*/
 
-/* Powersave Offload Implementation */
-typedef enum ePowersaveState {
-	PMM_FULL_POWER,
-	PMM_POWER_SAVE
-} tPowersaveState;
-
 /* Master Structure: This will be part of PE Session Entry */
 typedef struct sPowersaveoffloadInfo {
-	tPowersaveState psstate;
 	uint8_t bcnmiss;
 } tPowersaveoffloadInfo, tpPowersaveoffloadInfo;
 
-#ifdef WLAN_FEATURE_11W
-typedef struct tagComebackTimerInfo {
-	tpAniSirGlobal pMac;
-	uint8_t sessionID;
-	tLimMlmStates limPrevMlmState;  /* Previous MLM State */
-	tLimMlmStates limMlmState;      /* MLM State */
-} tComebackTimerInfo;
-#endif /* WLAN_FEATURE_11W */
+struct comeback_timer_info {
+	struct mac_context *mac;
+	uint8_t vdev_id;
+	uint8_t retried;
+	tLimMlmStates lim_prev_mlm_state;  /* Previous MLM State */
+	tLimMlmStates lim_mlm_state;       /* MLM State */
+};
 /*--------------------------------------------------------------------------
    Include Files
    ------------------------------------------------------------------------*/
@@ -68,10 +52,6 @@ typedef struct tagComebackTimerInfo {
 /* Maximum Number of WEP KEYS */
 #define MAX_WEP_KEYS 4
 
-/* Maximum allowable size of a beacon frame */
-#define SCH_MAX_BEACON_SIZE    512
-
-#define SCH_MAX_PROBE_RESP_SIZE 512
 #define SCH_PROTECTION_RESET_TIME 4000
 
 /*--------------------------------------------------------------------------
@@ -96,48 +76,172 @@ typedef struct join_params {
 	tSirResultCodes result_code;
 } join_params;
 
+struct reassoc_params {
+	uint16_t prot_status_code;
+	tSirResultCodes result_code;
+	struct pe_session *session;
+};
+
 #ifdef WLAN_FEATURE_11AX_BSS_COLOR
 #define MAX_BSS_COLOR_VALUE 63
 #define TIME_BEACON_NOT_UPDATED 30000
 #define BSS_COLOR_SWITCH_COUNTDOWN 5
+#define OBSS_COLOR_COLLISION_DETECTION_STA_PERIOD_MS 120000
+#define OBSS_COLOR_COLLISION_DETECTION_AP_PERIOD_MS 120000
+#define OBSS_COLOR_COLLISION_SCAN_PERIOD_MS 200
+#define OBSS_COLOR_COLLISION_FREE_SLOT_EXPIRY_MS 50000
 struct bss_color_info {
 	qdf_time_t timestamp;
 	uint64_t seen_count;
 };
 #endif
 
-typedef struct sPESession       /* Added to Support BT-AMP */
-{
+/**
+ * struct obss_detection_cfg - current obss detection cfg set to firmware
+ * @obss_11b_ap_detect_mode: detection mode for 11b access point.
+ * @obss_11b_sta_detect_mode: detection mode for 11b station.
+ * @obss_11g_ap_detect_mode: detection mode for 11g access point.
+ * @obss_11a_detect_mode: detection mode for 11a access point.
+ * @obss_ht_legacy_detect_mode: detection mode for ht ap with legacy mode.
+ * @obss_ht_mixed_detect_mode: detection mode for ht ap with mixed mode.
+ * @obss_ht_20mhz_detect_mode: detection mode for ht ap with 20mhz mode.
+ */
+struct obss_detection_cfg {
+	uint8_t obss_11b_ap_detect_mode;
+	uint8_t obss_11b_sta_detect_mode;
+	uint8_t obss_11g_ap_detect_mode;
+	uint8_t obss_11a_detect_mode;
+	uint8_t obss_ht_legacy_detect_mode;
+	uint8_t obss_ht_mixed_detect_mode;
+	uint8_t obss_ht_20mhz_detect_mode;
+};
+
+#define ADAPTIVE_11R_STA_IE_LEN   0x0B
+#define ADAPTIVE_11R_STA_OUI      "\x00\x00\x0f\x22"
+#define ADAPTIVE_11R_OUI_LEN      0x04
+#define ADAPTIVE_11R_OUI_SUBTYPE  0x00
+#define ADAPTIVE_11R_OUI_VERSION  0x01
+#define ADAPTIVE_11R_DATA_LEN      0x04
+#define ADAPTIVE_11R_OUI_DATA     "\x00\x00\x00\x01"
+
+#ifdef WLAN_FEATURE_11BE_MLO
+/**
+ * struct mlo_link_ie - IE per link to populate mlo ie
+ * @link_ds: DS IE
+ * @link_edca: ecsa IE
+ * @link_wmm_params: wmm params IE
+ * @link_wmm_caps: wmm caps IE
+ * @link_csa: csa IE
+ * @link_ecsa:ecsa IE
+ * @link_swt_time: switch time IE
+ * @link_quiet: quiet IE
+ * @link_ht_cap: ht cap IE
+ * @link_ht_info: ht info IE
+ * @link_cap: link caps IE
+ * @link_ext_cap: link extend cap IE
+ * @link_vht_cap: vht cap IE
+ * @link_vht_op: vht op IE
+ * @link_qcn_ie: qcn IE
+ * @link_he_cap: he cap IE
+ * @link_he_op: he op IE
+ * @link_he_6ghz_band_cap: 6G band cap IE
+ * @link_eht_cap: eht cap IE
+ * @link_eht_op: eht op IE
+ * @max_chan_swt_time: MLOTD
+ * @bss_param_change_cnt: bss param change count
+ */
+struct mlo_link_ie {
+	tDot11fIEDSParams                    link_ds;
+	tDot11fIEEDCAParamSet                link_edca;
+	tDot11fIEWMMParams                   link_wmm_params;
+	tDot11fIEWMMCaps                     link_wmm_caps;
+	tDot11fIEChanSwitchAnn               link_csa;
+	tDot11fIEext_chan_switch_ann         link_ecsa;
+	tDot11fIEmax_chan_switch_time        link_swt_time;
+	tDot11fIEQuiet                       link_quiet;
+	tDot11fIEHTCaps                      link_ht_cap;
+	tDot11fIEHTInfo                      link_ht_info;
+	tDot11fFfCapabilities                link_cap;
+	tDot11fIEExtCap                      link_ext_cap;
+	tDot11fIEVHTCaps                     link_vht_cap;
+	tDot11fIEVHTOperation                link_vht_op;
+	tDot11fIEqcn_ie                      link_qcn_ie;
+	tDot11fIEhe_cap                      link_he_cap;
+	tDot11fIEhe_op                       link_he_op;
+	tDot11fIEhe_6ghz_band_cap            link_he_6ghz_band_cap;
+	tDot11fIEeht_cap                     link_eht_cap;
+	tDot11fIEeht_op                      link_eht_op;
+	uint32_t                             max_chan_swt_time;
+	uint8_t                              bss_param_change_cnt;
+};
+
+/**
+ * struct mlo_link_ie_info - information per link to populate mlo ie
+ * @upt_bcn_mlo_ie: notify partner links to update their mlo ie of bcn temp
+ * @mlo_rnr_updated: link already notified partner link to update rnr
+ * @bss_param_change: bss param changed
+ * @bcn_tmpl_exist: bcn template is generated or not
+ * @link_ie: IEs which will be used for generating partner mlo IE
+ */
+struct mlo_link_ie_info {
+	bool upt_bcn_mlo_ie;
+	bool mlo_rnr_updated;
+	bool bss_param_change;
+	bool bcn_tmpl_exist;
+	struct mlo_link_ie link_ie;
+};
+#endif
+
+/**
+ * struct pe_session - per-vdev PE context
+ * @available: true if the entry is available, false if it is in use
+ * @peSessionId: unique ID assigned to the entry
+ * @vdev_id: ID of the vdev for which this entry is applicable
+ * @vdev: the actual vdev for which this entry is applicable
+ * @connected_akm: AKM of current connection
+ * @is_adaptive_11R_connection: flag to check if we are connecting
+ * @ap_ecsa_wakelock: wakelock to complete CSA operation.
+ * @ap_ecsa_runtime_lock: runtime lock to complete SAP CSA operation.
+ * to Adaptive 11R network
+ * @prev_auth_seq_num: Sequence number of previously received auth frame to
+ * detect duplicate frames.
+ * @prev_auth_mac_addr: mac_addr of the sta correspond to @prev_auth_seq_num
+ */
+struct pe_session {
 	/* To check session table is in use or free */
 	uint8_t available;
+	wlan_cm_id cm_id;
 	uint16_t peSessionId;
-	uint8_t smeSessionId;
-	uint16_t transactionId;
+	union {
+		uint8_t smeSessionId;
+		uint8_t vdev_id;
+	};
+	struct wlan_objmgr_vdev *vdev;
 
-	/* In AP role: BSSID and selfMacAddr will be the same. */
+	/* In AP role: BSSID and self_mac_addr will be the same. */
 	/* In STA role: they will be different */
 	tSirMacAddr bssId;
-	tSirMacAddr selfMacAddr;
+	tSirMacAddr self_mac_addr;
 	tSirMacSSid ssId;
-	uint8_t bssIdx;
 	uint8_t valid;
 	tLimMlmStates limMlmState;      /* MLM State */
 	tLimMlmStates limPrevMlmState;  /* Previous MLM State */
 	tLimSmeStates limSmeState;      /* SME State */
 	tLimSmeStates limPrevSmeState;  /* Previous SME State */
 	tLimSystemRole limSystemRole;
-	tSirBssType bssType;
-	uint8_t operMode;       /* AP - 0; STA - 1 ; */
+	enum bss_type bssType;
 	tSirNwType nwType;
-	tpSirSmeStartBssReq pLimStartBssReq;    /* handle to smestart bss req */
-	tpSirSmeJoinReq pLimJoinReq;    /* handle to sme join req */
-	tpSirSmeJoinReq pLimReAssocReq; /* handle to sme reassoc req */
+	struct start_bss_req *pLimStartBssReq; /* handle to start bss req */
+	struct join_req *lim_join_req;    /* handle to sme join req */
+	struct join_req *pLimReAssocReq; /* handle to sme reassoc req */
 	tpLimMlmJoinReq pLimMlmJoinReq; /* handle to MLM join Req */
 	void *pLimMlmReassocRetryReq;   /* keep reasoc req for retry */
 	void *pLimMlmReassocReq;        /* handle to MLM reassoc Req */
 	uint16_t channelChangeReasonCode;
 	uint8_t dot11mode;
 	uint8_t htCapability;
+	enum ani_akm_type connected_akm;
+
 	/* Supported Channel Width Set: 0-20MHz 1 - 40MHz */
 	uint8_t htSupportedChannelWidthSet;
 	/* Recommended Tx Width Set
@@ -147,20 +251,18 @@ typedef struct sPESession       /* Added to Support BT-AMP */
 	uint8_t htRecommendedTxWidthSet;
 	/* Identifies the 40 MHz extension channel */
 	ePhyChanBondState htSecondaryChannelOffset;
-	tSirRFBand limRFBand;
-	uint8_t limIbssActive;  /* TO SUPPORT CONCURRENCY */
+	enum reg_wifi_band limRFBand;
 
 	/* These global varibales moved to session Table to support BT-AMP : Oct 9th review */
 	tAniAuthType limCurrentAuthType;
 	uint16_t limCurrentBssCaps;
 	uint8_t limCurrentBssQosCaps;
-	uint16_t limCurrentBssPropCap;
 	uint8_t limSentCapsChangeNtf;
 	uint16_t limAID;
 
 	/* Parameters  For Reassociation */
 	tSirMacAddr limReAssocbssId;
-	tSirMacChanNum limReassocChannelId;
+	uint32_t lim_reassoc_chan_freq;
 	/* CB paramaters required/duplicated for Reassoc since re-assoc mantains its own params in lim */
 	uint8_t reAssocHtSupportedChannelWidthSet;
 	uint8_t reAssocHtRecommendedTxWidthSet;
@@ -168,41 +270,33 @@ typedef struct sPESession       /* Added to Support BT-AMP */
 	tSirMacSSid limReassocSSID;
 	uint16_t limReassocBssCaps;
 	uint8_t limReassocBssQosCaps;
-	uint16_t limReassocBssPropCap;
 
 	/* Assoc or ReAssoc Response Data/Frame */
 	void *limAssocResponseData;
 
 	/** BSS Table parameters **/
 
-	/*
-	 * staId:  Start BSS: this is the  Sta Id for the BSS.
-	 * Join: this is the selfStaId
-	 * In both cases above, the peer STA ID wll be stored in dph hash table.
-	 */
-	uint16_t staId;
 	uint16_t statypeForBss; /* to know session is for PEER or SELF */
 	uint8_t shortSlotTimeSupported;
 	uint8_t dtimPeriod;
 	tSirMacRateSet rateSet;
 	tSirMacRateSet extRateSet;
 	tSirMacHTOperatingMode htOperMode;
-	uint8_t currentOperChannel;
-	uint8_t currentReqChannel;
+	qdf_freq_t curr_op_freq;
+	uint32_t curr_req_chan_freq;
 	uint8_t LimRxedBeaconCntDuringHB;
 
 	/* Time stamp of the last beacon received from the BSS to which STA is connected. */
 	uint64_t lastBeaconTimeStamp;
 	/* RX Beacon count for the current BSS to which STA is connected. */
 	uint32_t currentBssBeaconCnt;
-	uint8_t lastBeaconDtimCount;
-	uint8_t lastBeaconDtimPeriod;
+	uint8_t bcon_dtim_period;
 
 	uint32_t bcnLen;
 	uint8_t *beacon;        /* Used to store last beacon / probe response before assoc. */
 
 	uint32_t assocReqLen;
-	uint8_t *assocReq;      /* Used to store association request frame sent out while associating. */
+	uint8_t *assoc_req;      /* Used to store association request frame */
 
 	uint32_t assocRspLen;
 	uint8_t *assocRsp;      /* Used to store association response received while associating */
@@ -215,8 +309,6 @@ typedef struct sPESession       /* Added to Support BT-AMP */
 	uint8_t *tspecIes;
 #endif
 	uint32_t encryptType;
-
-	bool bTkipCntrMeasActive;       /* Used to keep record of TKIP counter measures start/stop */
 
 	uint8_t gLimProtectionControl;  /* used for 11n protection */
 
@@ -283,16 +375,16 @@ typedef struct sPESession       /* Added to Support BT-AMP */
 	uint8_t limWmeEnabled:1;        /* WME */
 	uint8_t limWsmEnabled:1;        /* WSM */
 	uint8_t limHcfEnabled:1;
-	uint8_t lim11dEnabled:1;
-#ifdef WLAN_FEATURE_11W
 	uint8_t limRmfEnabled:1;        /* 11W */
-#endif
 	uint32_t lim11hEnable;
 
 	int8_t maxTxPower;   /* MIN (Regulatory and local power constraint) */
-	enum tQDF_ADAPTER_MODE pePersona;
+	int8_t min_11h_pwr;
+	int8_t max_11h_pwr;
+	enum QDF_OPMODE opmode;
 	int8_t txMgmtPower;
 	bool is11Rconnection;
+	bool is_adaptive_11r_connection;
 
 #ifdef FEATURE_WLAN_ESE
 	bool isESEconnection;
@@ -300,10 +392,8 @@ typedef struct sPESession       /* Added to Support BT-AMP */
 #endif
 	bool isFastTransitionEnabled;
 	bool isFastRoamIniFeatureEnabled;
-	tSirNoAParam p2pNoA;
 	tSirP2PNoaAttr p2pGoPsUpdate;
 	uint32_t defaultAuthFailureTimeout;
-	tSirP2PNoaStart p2pGoPsNoaStartInd;
 
 	/* EDCA QoS parameters
 	 * gLimEdcaParams - These EDCA parameters are used locally on AP or STA.
@@ -318,9 +408,9 @@ typedef struct sPESession       /* Added to Support BT-AMP */
 	 * used on station. Specific AC values may be downgraded depending on
 	 * admission control for that particular AC.
 	 */
-	tSirMacEdcaParamRecord gLimEdcaParams[MAX_NUM_AC];      /* used locally */
-	tSirMacEdcaParamRecord gLimEdcaParamsBC[MAX_NUM_AC];    /* used for broadcast */
-	tSirMacEdcaParamRecord gLimEdcaParamsActive[MAX_NUM_AC];
+	tSirMacEdcaParamRecord gLimEdcaParams[QCA_WLAN_AC_ALL];      /* used locally */
+	tSirMacEdcaParamRecord gLimEdcaParamsBC[QCA_WLAN_AC_ALL];    /* used for broadcast */
+	tSirMacEdcaParamRecord gLimEdcaParamsActive[QCA_WLAN_AC_ALL];
 
 	uint8_t gLimEdcaParamSetCount;
 
@@ -348,7 +438,6 @@ typedef struct sPESession       /* Added to Support BT-AMP */
 	/*Flag to Track Status/Indicate HBFailure on this session */
 	bool LimHBFailureStatus;
 	uint32_t gLimPhyMode;
-	uint8_t amsduSupportedInBA;
 	uint8_t txLdpcIniFeatureEnabled;
 	/**
 	 * Following is the place holder for free peer index pool.
@@ -365,8 +454,7 @@ typedef struct sPESession       /* Added to Support BT-AMP */
 	  * AP network
 	  */
 	uint32_t peerAIDBitmap[2];
-	bool tdls_prohibited;
-	bool tdls_chan_swit_prohibited;
+	bool tdls_send_set_state_disable;
 #endif
 	bool fWaitForProbeRsp;
 	bool fIgnoreCapsChange;
@@ -375,10 +463,8 @@ typedef struct sPESession       /* Added to Support BT-AMP */
 	int8_t rssi;
 #endif
 	uint8_t max_amsdu_num;
-	uint8_t isCoalesingInIBSSAllowed;
-
-	tSirHTConfig htConfig;
-	struct sir_vht_config vht_config;
+	struct mlme_ht_capabilities_info ht_config;
+	struct wlan_vht_config vht_config;
 	/*
 	 * Place holder for StartBssReq message
 	 * received by SME state machine
@@ -437,7 +523,7 @@ typedef struct sPESession       /* Added to Support BT-AMP */
 
 	bool isCiscoVendorAP;
 
-	tSirAddIeParams addIeParams;
+	struct add_ie_params add_ie_params;
 
 	uint8_t *pSchProbeRspTemplate;
 	/* Beginning portion of the beacon frame to be written to TFP */
@@ -450,7 +536,7 @@ typedef struct sPESession       /* Added to Support BT-AMP */
 	uint16_t schBeaconOffsetEnd;
 	bool isOSENConnection;
 	/*  DSCP to UP mapping for HS 2.0 */
-	tSirQosMapSet QosMapSet;
+	struct qos_map_set QosMapSet;
 
 #ifdef WLAN_FEATURE_ROAM_OFFLOAD
 	bool bRoamSynchInProgress;
@@ -459,14 +545,16 @@ typedef struct sPESession       /* Added to Support BT-AMP */
 	/* Fast Transition (FT) */
 	tftPEContext ftPEContext;
 	bool isNonRoamReassoc;
-#ifdef WLAN_FEATURE_11W
-	qdf_mc_timer_t pmfComebackTimer;
-	tComebackTimerInfo pmfComebackTimerInfo;
-#endif /* WLAN_FEATURE_11W */
+	qdf_mc_timer_t pmf_retry_timer;
+	struct comeback_timer_info pmf_retry_timer_info;
 	uint8_t  is_key_installed;
-	/* timer for reseting protection fileds at regular intervals */
+	/* timer for resetting protection fileds at regular intervals */
 	qdf_mc_timer_t protection_fields_reset_timer;
-	void *mac_ctx;
+	/* timer to decrement CSA/ECSA count */
+	qdf_mc_timer_t ap_ecsa_timer;
+	qdf_wake_lock_t ap_ecsa_wakelock;
+	qdf_runtime_lock_t ap_ecsa_runtime_lock;
+	struct mac_context *mac_ctx;
 	/*
 	 * variable to store state of various protection struct like
 	 * gLimOlbcParams, gLimOverlap11gParams, gLimOverlapHt20Params etc
@@ -489,6 +577,7 @@ typedef struct sPESession       /* Added to Support BT-AMP */
 	/* flag to indicate country code in beacon */
 	uint8_t country_info_present;
 	uint8_t nss;
+	bool nss_forced_1x1;
 	bool add_bss_failed;
 	/* To hold OBSS Scan IE Parameters */
 	struct obss_scanparam obss_ht40_scanparam;
@@ -499,7 +588,6 @@ typedef struct sPESession       /* Added to Support BT-AMP */
 	uint16_t beacon_tx_rate;
 	uint8_t *access_policy_vendor_ie;
 	uint8_t access_policy;
-	bool ignore_assoc_disallowed;
 	bool send_p2p_conf_frame;
 	bool process_ho_fail;
 	/* Number of STAs that do not support ECSA capability */
@@ -509,54 +597,120 @@ typedef struct sPESession       /* Added to Support BT-AMP */
 	tDot11fIEhe_cap he_config;
 	tDot11fIEhe_op he_op;
 	uint32_t he_sta_obsspd;
+	bool he_6ghz_band;
 #ifdef WLAN_FEATURE_11AX_BSS_COLOR
 	tDot11fIEbss_color_change he_bss_color_change;
 	struct bss_color_info bss_color_info[MAX_BSS_COLOR_VALUE];
 	uint8_t bss_color_changing;
 #endif
 #endif
+
+	struct deauth_retry_params deauth_retry;
 	bool enable_bcast_probe_rsp;
 	uint8_t ht_client_cnt;
 	bool force_24ghz_in_ht20;
 	bool ch_switch_in_progress;
+	bool he_with_wep_tkip;
 #ifdef WLAN_FEATURE_FILS_SK
 	struct pe_fils_session *fils_info;
-	struct qdf_mac_addr dst_mac;
-	struct qdf_mac_addr src_mac;
-	uint16_t hlp_data_len;
-	uint8_t *hlp_data;
 #endif
 	/* previous auth frame's sequence number */
 	uint16_t prev_auth_seq_num;
-} tPESession, *tpPESession;
+	tSirMacAddr prev_auth_mac_addr;
+	struct obss_detection_cfg obss_offload_cfg;
+	struct obss_detection_cfg current_obss_detection;
+	bool is_session_obss_offload_enabled;
+	bool is_obss_reset_timer_initialized;
+	bool sae_pmk_cached;
+	bool recvd_deauth_while_roaming;
+	bool recvd_disassoc_while_roaming;
+	bool deauth_disassoc_rc;
+	enum wmi_obss_color_collision_evt_type obss_color_collision_dec_evt;
+	bool is_session_obss_color_collision_det_enabled;
+	tSirMacEdcaParamRecord ap_mu_edca_params[QCA_WLAN_AC_ALL];
+	bool mu_edca_present;
+	int8_t def_max_tx_pwr;
+	bool active_ba_64_session;
+	bool is_mbssid_enabled;
+#ifdef WLAN_SUPPORT_TWT
+	uint8_t peer_twt_requestor;
+	uint8_t peer_twt_responder;
+#endif
+	bool enable_session_twt_support;
+	uint32_t cac_duration_ms;
+	tSirResultCodes stop_bss_reason;
+	uint16_t prot_status_code;
+	tSirResultCodes result_code;
+	uint32_t dfs_regdomain;
+	/* AP power type */
+	uint8_t ap_power_type;
+	bool same_ctry_code;  /* If AP Country IE has same country code as */
+	/* STA programmed country */
+	uint8_t ap_power_type_6g;  /* AP power type for 6G (LPI, SP, or VLP) */
+#ifdef WLAN_FEATURE_11BE
+	bool eht_capable;
+	tDot11fIEeht_cap eht_config;
+	tDot11fIEeht_op eht_op;
+#ifdef WLAN_FEATURE_11BE_MLO
+	struct mlo_link_ie_info mlo_link_info;
+	struct mlo_partner_info ml_partner_info;
+#endif
+#endif /* WLAN_FEATURE_11BE */
+};
 
 /*-------------------------------------------------------------------------
    Function declarations and documenation
    ------------------------------------------------------------------------*/
 
+#ifdef WLAN_ALLOCATE_GLOBAL_BUFFERS_DYNAMICALLY
 /**
- * pe_create_session() - creates a new PE session given the BSSID
+ * pe_allocate_dph_node_array_buffer() - Allocate g_dph_node_array
+ * memory dynamically
  *
- * @pMac:          pointer to global adapter context
- * @bssid:         BSSID of the new session
- * @sessionId:     session ID is returned here, if session is created.
- * @numSta:        number of stations
- * @bssType:       bss type of new session to do conditional memory allocation.
+ * Return: QDF_STATUS_SUCCESS on success, QDF_STATUS_E_NOMEM on failure
+ */
+QDF_STATUS pe_allocate_dph_node_array_buffer(void);
+
+/**
+ * pe_free_dph_node_array_buffer() - Free memory allocated dynamically
+ *
+ * Return: None
+ */
+void pe_free_dph_node_array_buffer(void);
+#else /* WLAN_ALLOCATE_GLOBAL_BUFFERS_DYNAMICALLY */
+static inline QDF_STATUS pe_allocate_dph_node_array_buffer(void)
+{
+	return QDF_STATUS_SUCCESS;
+}
+
+static inline void pe_free_dph_node_array_buffer(void)
+{
+}
+#endif /* WLAN_ALLOCATE_GLOBAL_BUFFERS_DYNAMICALLY */
+
+/**
+ * pe_create_session() - Creates a new PE session given the BSSID
+ * @mac: pointer to global adapter context
+ * @bssid: BSSID of the new session
+ * @sessionId: PE session ID is returned here, if PE session is created.
+ * @numSta: number of stations
+ * @bssType: bss type of new session to do conditional memory allocation.
+ * @vdev_id: vdev_id
  *
  * This function returns the session context and the session ID if the session
  * corresponding to the passed BSSID is found in the PE session table.
  *
  * Return: ptr to the session context or NULL if session can not be created.
  */
-tpPESession pe_create_session(tpAniSirGlobal pMac,
-			      uint8_t *bssid,
-			      uint8_t *sessionId,
-			      uint16_t numSta, tSirBssType bssType);
+struct pe_session *pe_create_session(struct mac_context *mac,
+				     uint8_t *bssid, uint8_t *sessionId,
+				     uint16_t numSta, enum bss_type bssType,
+				     uint8_t vdev_id);
 
 /**
  * pe_find_session_by_bssid() - looks up the PE session given the BSSID.
  *
- * @pMac:          pointer to global adapter context
+ * @mac:          pointer to global adapter context
  * @bssid:         BSSID of the new session
  * @sessionId:     session ID is returned here, if session is created.
  *
@@ -565,27 +719,42 @@ tpPESession pe_create_session(tpAniSirGlobal pMac,
  *
  * Return: pointer to the session context or NULL if session is not found.
  */
-tpPESession pe_find_session_by_bssid(tpAniSirGlobal pMac, uint8_t *bssid,
+struct pe_session *pe_find_session_by_bssid(struct mac_context *mac, uint8_t *bssid,
 				     uint8_t *sessionId);
 
 /**
- * pe_find_session_by_bss_idx() - looks up the PE session given the bssIdx.
- *
- * @pMac:          pointer to global adapter context
- * @bssIdx:        bss index of the session
- *
- * This function returns the session context  if the session
- * corresponding to the given bssIdx is found in the PE session table.
+ * pe_find_session_by_vdev_id() - looks up the PE session given the vdev_id.
+ * @mac:             pointer to global adapter context
+ * @vdev_id:         vdev id the session
  *
  * Return: pointer to the session context or NULL if session is not found.
  */
-tpPESession pe_find_session_by_bss_idx(tpAniSirGlobal pMac, uint8_t bssIdx);
+struct pe_session *pe_find_session_by_vdev_id(struct mac_context *mac,
+					      uint8_t vdev_id);
+
+/**
+ * pe_find_session_by_vdev_id_and_state() - Find PE session by vdev_id and
+ * mlm state.
+ * @mac:             pointer to global adapter context
+ * @vdev_id:         vdev id the session
+ * @vdev_id:         vdev id the session
+ *
+ * During LFR2 roaming, new pe session is created before old pe session
+ * deleted, the 2 pe sessions have different pe session id, but same vdev id,
+ * can't get correct pe session by vdev id at this time.
+ *
+ * Return: pointer to the session context or NULL if session is not found.
+ */
+struct pe_session
+*pe_find_session_by_vdev_id_and_state(struct mac_context *mac,
+				      uint8_t vdev_id,
+				      enum eLimMlmStates lim_state);
 
 /**
  * pe_find_session_by_peer_sta() - looks up the PE session given the Peer
  * Station Address.
  *
- * @pMac:          pointer to global adapter context
+ * @mac:          pointer to global adapter context
  * @sa:            Peer STA Address of the session
  * @sessionId:     session ID is returned here, if session is found.
  *
@@ -595,14 +764,14 @@ tpPESession pe_find_session_by_bss_idx(tpAniSirGlobal pMac, uint8_t bssIdx);
  *
  * Return: pointer to the session context or NULL if session is not found.
  */
-tpPESession pe_find_session_by_peer_sta(tpAniSirGlobal pMac, uint8_t *sa,
+struct pe_session *pe_find_session_by_peer_sta(struct mac_context *mac, uint8_t *sa,
 					uint8_t *sessionId);
 
 /**
  * pe_find_session_by_session_id() - looks up the PE session given the session
  * ID.
  *
- * @pMac:          pointer to global adapter context
+ * @mac:          pointer to global adapter context
  * @sessionId:     session ID for which session context needs to be looked up.
  *
  * This function returns the session context  if the session corresponding to
@@ -610,48 +779,32 @@ tpPESession pe_find_session_by_peer_sta(tpAniSirGlobal pMac, uint8_t *sa,
  *
  * Return: pointer to the session context or NULL if session is not found.
  */
-tpPESession pe_find_session_by_session_id(tpAniSirGlobal pMac,
+struct pe_session *pe_find_session_by_session_id(struct mac_context *mac,
 					  uint8_t sessionId);
-
-/**
- * pe_find_session_by_bssid() - looks up the PE session given staid.
- *
- * @pMac:          pointer to global adapter context
- * @staid:         StaId of the session
- * @sessionId:     session ID is returned here, if session is found.
- *
- * This function returns the session context and the session ID if the session
- * corresponding to the given StaId is found in the PE session table.
- *
- * Return: pointer to the session context or NULL if session is not found.
- */
-tpPESession pe_find_session_by_sta_id(tpAniSirGlobal pMac, uint8_t staid,
-				      uint8_t *sessionId);
 
 /**
  * pe_delete_session() - deletes the PE session given the session ID.
  *
- * @pMac:          pointer to global adapter context
+ * @mac:          pointer to global adapter context
  * @sessionId:     session ID to delete.
  *
  * Return: void
  */
-void pe_delete_session(tpAniSirGlobal pMac, tpPESession psessionEntry);
-
+void pe_delete_session(struct mac_context *mac, struct pe_session *pe_session);
 
 /**
- * pe_find_session_by_sme_session_id() - looks up the PE session for given sme
- * session id
- * @mac_ctx:          pointer to global adapter context
- * @sme_session_id:   sme session id
+ * pe_find_session_by_scan_id() - looks up the PE session for given scan id
+ * @mac_ctx:   pointer to global adapter context
+ * @scan_id:   scan id
  *
- * looks up the PE session for given sme session id
+ * looks up the PE session for given scan id
  *
- * Return: pe session entry for given sme session if found else NULL
+ * Return: pe session entry for given scan id if found else NULL
  */
-tpPESession pe_find_session_by_sme_session_id(tpAniSirGlobal mac_ctx,
-					      uint8_t sme_session_id);
-uint8_t pe_get_active_session_count(tpAniSirGlobal mac_ctx);
+struct pe_session *pe_find_session_by_scan_id(struct mac_context *mac_ctx,
+				       uint32_t scan_id);
+
+uint8_t pe_get_active_session_count(struct mac_context *mac_ctx);
 #ifdef WLAN_FEATURE_FILS_SK
 /**
  * pe_delete_fils_info: API to delete fils session info
@@ -659,6 +812,46 @@ uint8_t pe_get_active_session_count(tpAniSirGlobal mac_ctx);
  *
  * Return: void
  */
-void pe_delete_fils_info(tpPESession session);
+void pe_delete_fils_info(struct pe_session *session);
 #endif
+
+/**
+ * lim_set_bcn_probe_filter - set the beacon/probe filter in mac context
+ *
+ * @mac_ctx: pointer to global mac context
+ * @session: pointer to the PE session
+ * @sap_channel: Operating Channel of the session for SAP sessions
+ *
+ * Sets the beacon/probe filter in the global mac context to filter
+ * and drop beacon/probe frames before posting it to PE queue
+ *
+ * Return: None
+ */
+void lim_set_bcn_probe_filter(struct mac_context *mac_ctx,
+				struct pe_session *session,
+				uint8_t sap_channel);
+
+/**
+ * lim_reset_bcn_probe_filter - clear the beacon/probe filter in mac context
+ *
+ * @mac_ctx: pointer to the global mac context
+ * @session: pointer to the PE session whose filter is to be cleared
+ *
+ * Return: None
+ */
+void lim_reset_bcn_probe_filter(struct mac_context *mac_ctx, struct pe_session *session);
+
+/**
+ * lim_update_bcn_probe_filter - Update the beacon/probe filter in mac context
+ *
+ * @mac_ctx: pointer to the global mac context
+ * @session: pointer to the PE session whose filter is to be cleared
+ *
+ * This API is applicable only for SAP sessions to update the SAP channel
+ * in the filter during a channel switch
+ *
+ * Return: None
+ */
+void lim_update_bcn_probe_filter(struct mac_context *mac_ctx, struct pe_session *session);
+
 #endif /* #if !defined( __LIM_SESSION_H ) */
