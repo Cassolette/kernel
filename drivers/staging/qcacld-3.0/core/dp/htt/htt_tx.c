@@ -819,8 +819,7 @@ int htt_tx_send_std(htt_pdev_handle pdev, qdf_nbuf_t msdu, uint16_t msdu_id)
 
 }
 
-#ifndef CONFIG_HL_SUPPORT
-#ifdef FEATURE_RUNTIME_PM
+#if !defined(CONFIG_HL_SUPPORT) && defined(FEATURE_RUNTIME_PM)
 /**
  * htt_tx_resume_handler() - resume callback for the htt endpoint
  * @context: a pointer to the htt context
@@ -836,7 +835,6 @@ void htt_tx_resume_handler(void *context)
 #else
 void
 htt_tx_resume_handler(void *context) { }
-#endif
 #endif
 
 qdf_nbuf_t
@@ -1043,6 +1041,9 @@ int htt_tx_send_std(htt_pdev_handle pdev, qdf_nbuf_t msdu, uint16_t msdu_id)
 {
 	return htt_tx_send_base(pdev, msdu, msdu_id, pdev->download_len, 0);
 }
+
+void
+htt_tx_resume_handler(void *context) { }
 
 #endif /*ATH_11AC_TXCOMPACT */
 
