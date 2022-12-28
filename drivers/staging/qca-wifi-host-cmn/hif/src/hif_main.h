@@ -558,5 +558,11 @@ void hif_uninit_rri_on_ddr(struct hif_softc *scn);
 static inline
 void hif_uninit_rri_on_ddr(struct hif_softc *scn) {}
 #endif
+
+#ifdef HAS_CE
 void hif_cleanup_static_buf_to_target(struct hif_softc *scn);
+#else
+static inline
+void hif_cleanup_static_buf_to_target(struct hif_softc *scn) {}
+#endif
 #endif /* __HIF_MAIN_H__ */

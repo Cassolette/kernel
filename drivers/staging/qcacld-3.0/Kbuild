@@ -2536,18 +2536,21 @@ ifeq ($(CONFIG_HIF_PCI), y)
 HIF_OBJS += $(HIF_PCIE_OBJS)
 HIF_OBJS += $(HIF_CE_OBJS)
 HIF_OBJS += $(WLAN_COMMON_ROOT)/$(HIF_DISPATCHER_DIR)/multibus_pci.o
+cppflags-y += -DHAS_CE
 endif
 
 ifeq ($(CONFIG_HIF_IPCI), y)
 HIF_OBJS += $(HIF_IPCIE_OBJS)
 HIF_OBJS += $(HIF_CE_OBJS)
 HIF_OBJS += $(WLAN_COMMON_ROOT)/$(HIF_DISPATCHER_DIR)/multibus_ipci.o
+cppflags-y += -DHAS_CE
 endif
 
 ifeq ($(CONFIG_HIF_SNOC), y)
 HIF_OBJS += $(HIF_SNOC_OBJS)
 HIF_OBJS += $(HIF_CE_OBJS)
 HIF_OBJS += $(WLAN_COMMON_ROOT)/$(HIF_DISPATCHER_DIR)/multibus_snoc.o
+cppflags-y += -DHAS_CE
 endif
 
 ifeq ($(CONFIG_HIF_SDIO), y)
