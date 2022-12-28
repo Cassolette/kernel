@@ -471,6 +471,10 @@ static void lim_process_sae_auth_frame(struct mac_context *mac_ctx,
 static inline void  lim_process_sae_auth_frame(struct mac_context *mac_ctx,
 		uint8_t *rx_pkt_info, struct pe_session *pe_session)
 {}
+
+void lim_sae_auth_cleanup_retry(struct mac_context *mac_ctx,
+				uint8_t vdev_id)
+{}
 #endif
 
 #ifdef WLAN_FEATURE_RTT_11AZ_SUPPORT
