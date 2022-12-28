@@ -2558,7 +2558,6 @@ endif
 
 ifeq ($(CONFIG_HIF_USB), y)
 HIF_OBJS += $(HIF_USB_OBJS)
-HIF_OBJS += $(HIF_CE_OBJS)
 HIF_OBJS += $(WLAN_COMMON_ROOT)/$(HIF_DISPATCHER_DIR)/multibus_usb.o
 endif
 
