@@ -6342,6 +6342,14 @@ CONFIG_FB_TFT_WATTEROTT=m
 # CONFIG_WFX is not set
 # CONFIG_SPMI_HISI3670 is not set
 # CONFIG_MFD_HI6421_SPMI is not set
+
+#
+# Qualcomm Atheros CLD WLAN module
+#
+CONFIG_QCA_CLD_WLAN=m
+CONFIG_QCA_CLD_WLAN_PROFILE="qca6174"
+# end of Qualcomm Atheros CLD WLAN module
+
 # CONFIG_GOLDFISH is not set
 # CONFIG_CHROME_PLATFORMS is not set
 # CONFIG_MELLANOX_PLATFORM is not set
@@ -8230,6 +8238,3 @@ CONFIG_LKDTM=y
 # CONFIG_MEMTEST is not set
 # end of Kernel Testing and Coverage
 # end of Kernel hacking
-
-CONFIG_QCA_CLD_WLAN=m
-CONFIG_QCA_CLD_WLAN_PROFILE="qca6174"
