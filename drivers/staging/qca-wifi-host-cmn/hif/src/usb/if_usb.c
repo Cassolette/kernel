@@ -463,6 +463,8 @@ void hif_usb_reg_tbl_attach(struct hif_softc *scn)
 			break;
 		}
 
+		hif_info("target_type = %d, target_version = 0x%x",
+				tgt_info->target_type, tgt_info->target_version);
 		if (ret)
 			return;
 
