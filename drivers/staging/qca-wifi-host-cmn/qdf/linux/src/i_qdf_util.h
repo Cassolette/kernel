@@ -1,8 +1,5 @@
 /*
- * Copyright (c) 2014-2017 The Linux Foundation. All rights reserved.
- *
- * Previously licensed under the ISC license by Qualcomm Atheros, Inc.
- *
+ * Copyright (c) 2014-2021 The Linux Foundation. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -19,12 +16,6 @@
  * PERFORMANCE OF THIS SOFTWARE.
  */
 
-/*
- * This file was originally distributed by Qualcomm Atheros, Inc.
- * under proprietary terms before Copyright ownership was assigned
- * to the Linux Foundation.
- */
-
 /**
  * DOC: i_qdf_util.h
  * This file provides OS dependent API's.
@@ -38,12 +29,12 @@
 #include <linux/types.h>
 #include <linux/mm.h>
 #include <linux/errno.h>
+#include <linux/average.h>
 
 #include <linux/random.h>
 #include <linux/io.h>
 
 #include <qdf_types.h>
-#include <qdf_status.h>
 #include <asm/byteorder.h>
 
 #if LINUX_VERSION_CODE  <= KERNEL_VERSION(3, 3, 8)
@@ -69,75 +60,24 @@ typedef wait_queue_head_t __qdf_wait_queue_head_t;
 
 /* Generic compiler-dependent macros if defined by the OS */
 #define __qdf_wait_queue_interruptible(wait_queue, condition) \
-		wait_event_interruptible(wait_queue, condition)
+	wait_event_interruptible(wait_queue, condition)
+
+#define __qdf_wait_queue_timeout(wait_queue, condition, timeout) \
+	wait_event_timeout(wait_queue, condition, timeout)
+
 
 #define __qdf_init_waitqueue_head(_q) init_waitqueue_head(_q)
 
 #define __qdf_wake_up_interruptible(_q) wake_up_interruptible(_q)
+
+#define __qdf_wake_up(_q) wake_up(_q)
 
 #define __qdf_wake_up_completion(_q) wake_up_completion(_q)
 
 #define __qdf_unlikely(_expr)   unlikely(_expr)
 #define __qdf_likely(_expr)     likely(_expr)
 
-/**
- * __qdf_status_to_os_return() - translates qdf_status types to linux return types
- * @status: status to translate
- *
- * Translates error types that linux may want to handle specially.
- *
- * return: 0 or the linux error code that most closely matches the QDF_STATUS.
- * defaults to -1 (EPERM)
- */
-static inline int __qdf_status_to_os_return(QDF_STATUS status)
-{
-	switch (status) {
-	case QDF_STATUS_SUCCESS:
-		return 0;
-	case QDF_STATUS_E_RESOURCES:
-		return -EBUSY;
-	case QDF_STATUS_E_NOMEM:
-		return -ENOMEM;
-	case QDF_STATUS_E_AGAIN:
-		return -EAGAIN;
-	case QDF_STATUS_E_INVAL:
-		return -EINVAL;
-	case QDF_STATUS_E_FAULT:
-		return -EFAULT;
-	case QDF_STATUS_E_ALREADY:
-		return -EALREADY;
-	case QDF_STATUS_E_BADMSG:
-		return -EBADMSG;
-	case QDF_STATUS_E_BUSY:
-		return -EBUSY;
-	case QDF_STATUS_E_CANCELED:
-		return -ECANCELED;
-	case QDF_STATUS_E_ABORTED:
-		return -ECONNABORTED;
-	case QDF_STATUS_E_PERM:
-		return -EPERM;
-	case QDF_STATUS_E_EXISTS:
-		return -EEXIST;
-	case QDF_STATUS_E_NOENT:
-		return -ENOENT;
-	case QDF_STATUS_E_E2BIG:
-		return -E2BIG;
-	case QDF_STATUS_E_NOSPC:
-		return -ENOSPC;
-	case QDF_STATUS_E_ADDRNOTAVAIL:
-		return -EADDRNOTAVAIL;
-	case QDF_STATUS_E_ENXIO:
-		return -ENXIO;
-	case QDF_STATUS_E_NETDOWN:
-		return -ENETDOWN;
-	case QDF_STATUS_E_IO:
-		return -EIO;
-	case QDF_STATUS_E_NETRESET:
-		return -ENETRESET;
-	default:
-		return -EPERM;
-	}
-}
+#define __qdf_bitmap(name, bits) DECLARE_BITMAP(name, bits)
 
 /**
  * __qdf_set_bit() - set bit in address
@@ -171,6 +111,18 @@ static inline unsigned long __qdf_find_first_bit(unsigned long *addr,
 					unsigned long nbits)
 {
 	return find_first_bit(addr, nbits);
+}
+
+static inline bool __qdf_bitmap_empty(unsigned long *addr,
+				      unsigned long nbits)
+{
+	return bitmap_empty(addr, nbits);
+}
+
+static inline int __qdf_bitmap_and(unsigned long *dst, unsigned long *src1,
+				   unsigned long *src2, unsigned long nbits)
+{
+	return bitmap_and(dst, src1, src2, nbits);
 }
 
 /**
@@ -217,16 +169,34 @@ static inline bool __qdf_is_macaddr_equal(struct qdf_mac_addr *mac_addr1,
 	return 0 == memcmp(mac_addr1, mac_addr2, QDF_MAC_ADDR_SIZE);
 }
 
-/**
- * qdf_in_interrupt - returns true if in interrupt context
- */
-#define qdf_in_interrupt          in_interrupt
+#define __qdf_in_interrupt in_interrupt
 
-/**
- * @brief memory barriers.
- */
 #define __qdf_min(_a, _b) min(_a, _b)
 #define __qdf_max(_a, _b) max(_a, _b)
+
+/**
+ * Setting it to blank as feature is not intended to be supported
+ * on linux version less than 4.3
+ */
+#if LINUX_VERSION_CODE  < KERNEL_VERSION(4, 3, 0)
+#define __QDF_DECLARE_EWMA(name, _factor, _weight)
+
+#define __qdf_ewma_tx_lag int
+#define __qdf_ewma_rx_rssi int
+#else
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 11, 0)
+#define __QDF_DECLARE_EWMA(name, _factor, _weight) \
+	DECLARE_EWMA(name, ilog2(_factor), _weight)
+#else
+#define __QDF_DECLARE_EWMA(name, _factor, _weight) \
+	DECLARE_EWMA(name, _factor, _weight)
+#endif
+
+#define __qdf_ewma_tx_lag struct ewma_tx_lag
+#define __qdf_ewma_rx_rssi struct ewma_rx_rssi
+#endif
+
+#define __qdf_ffz(mask) (~(mask) == 0 ? -1 : ffz(mask))
 
 #define MEMINFO_KB(x)  ((x) << (PAGE_SHIFT - 10))   /* In kilobytes */
 
@@ -238,7 +208,7 @@ static inline bool __qdf_is_macaddr_equal(struct qdf_mac_addr *mac_addr1,
 			pr_err("Assertion failed! %s:%s %s:%d\n", \
 			       # expr, __func__, __FILE__, __LINE__); \
 			dump_stack(); \
-			QDF_BUG(0); \
+			QDF_BUG_ON_ASSERT(0); \
 		} \
 } while (0)
 
@@ -247,10 +217,10 @@ static inline bool __qdf_is_macaddr_equal(struct qdf_mac_addr *mac_addr1,
  */
 #define __qdf_target_assert(expr)  do {    \
 	if (unlikely(!(expr))) {                                 \
-		qdf_print("Assertion failed! %s:%s %s:%d\n",   \
+		qdf_err("Assertion failed! %s:%s %s:%d",   \
 		#expr, __FUNCTION__, __FILE__, __LINE__);      \
 		dump_stack();                                      \
-		panic("Take care of the TARGET ASSERT first\n");          \
+		QDF_DEBUG_PANIC("Take care of the TARGET ASSERT first\n");  \
 	}     \
 } while (0)
 
@@ -294,6 +264,37 @@ static inline bool __qdf_is_macaddr_equal(struct qdf_mac_addr *mac_addr1,
 #define __qdf_iowrite32(offset, value)     iowrite32(value, offset)
 
 #define __qdf_roundup(x, y) roundup(x, y)
+#define __qdf_ceil(x, y) DIV_ROUND_UP(x, y)
+
+#if LINUX_VERSION_CODE  < KERNEL_VERSION(4, 3, 0)
+#define  __qdf_ewma_tx_lag_init(tx_lag)
+#define  __qdf_ewma_tx_lag_add(tx_lag, value)
+#define  __qdf_ewma_tx_lag_read(tx_lag)
+
+#define  __qdf_ewma_rx_rssi_init(rx_rssi)
+#define  __qdf_ewma_rx_rssi_add(rx_rssi, value)
+#define  __qdf_ewma_rx_rssi_read(rx_rssi)
+#else
+#define  __qdf_ewma_tx_lag_init(tx_lag) \
+	ewma_tx_lag_init(tx_lag)
+
+#define  __qdf_ewma_tx_lag_add(tx_lag, value) \
+	ewma_tx_lag_add(tx_lag, value)
+
+#define  __qdf_ewma_tx_lag_read(tx_lag) \
+	ewma_tx_lag_read(tx_lag)
+
+#define  __qdf_ewma_rx_rssi_init(rx_rssi) \
+	ewma_rx_rssi_init(rx_rssi)
+
+#define  __qdf_ewma_rx_rssi_add(rx_rssi, value) \
+	ewma_rx_rssi_add(rx_rssi, value)
+
+#define  __qdf_ewma_rx_rssi_read(rx_rssi) \
+	ewma_rx_rssi_read(rx_rssi)
+#endif
+
+#define __qdf_prefetch(x)     prefetch(x)
 
 #ifdef QCA_CONFIG_SMP
 /**
@@ -440,6 +441,63 @@ uint64_t __qdf_do_div(uint64_t dividend, uint32_t divisor)
 	do_div(dividend, divisor);
 	/*do_div macro updates dividend with Quotient of dividend/divisor */
 	return dividend;
+}
+
+/**
+ * __qdf_do_div_rem() - wrapper function for kernel macro(do_div)
+ *                      to get remainder.
+ * @dividend: Dividend value
+ * @divisor : Divisor value
+ *
+ * Return: remainder
+ */
+static inline
+uint64_t __qdf_do_div_rem(uint64_t dividend, uint32_t divisor)
+{
+	return do_div(dividend, divisor);
+}
+
+/**
+ * __qdf_hex_to_bin() - Wrapper function to kernel API to get unsigned
+ * integer from hexa decimal ASCII character.
+ * @ch: hexa decimal ASCII character
+ *
+ * Return: For hexa decimal ASCII char return actual decimal value
+ *	   else -1 for bad input.
+ */
+static inline
+int __qdf_hex_to_bin(char ch)
+{
+	return hex_to_bin(ch);
+}
+
+/**
+ * __qdf_hex_str_to_binary() - Wrapper function to get array of unsigned
+ * integers from string of hexa decimal ASCII characters.
+ * @dst: output array to hold converted values
+ * @src: input string of hexa decimal ASCII characters
+ * @count: size of dst string
+ *
+ * Return: For a string of hexa decimal ASCII characters return 0
+ *	   else -1 for bad input.
+ */
+static inline
+int __qdf_hex_str_to_binary(u8 *dst, const char *src, size_t count)
+{
+	return hex2bin(dst, src, count);
+}
+
+/**
+ * __qdf_fls() - find last set bit in a given 32 bit input
+ * @x: 32 bit mask
+ *
+ * Return: zero if the input is zero, otherwise returns the bit
+ * position of the last set bit, where the LSB is 1 and MSB is 32.
+ */
+static inline
+int __qdf_fls(uint32_t x)
+{
+	return fls(x);
 }
 
 #endif /*_I_QDF_UTIL_H*/

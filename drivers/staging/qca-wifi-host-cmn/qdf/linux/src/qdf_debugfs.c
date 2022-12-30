@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017 The Linux Foundation. All rights reserved.
+ * Copyright (c) 2017-2021 The Linux Foundation. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -46,12 +46,13 @@ QDF_STATUS qdf_debugfs_init(void)
 }
 qdf_export_symbol(qdf_debugfs_init);
 
-QDF_STATUS qdf_debugfs_exit(void)
+void qdf_debugfs_exit(void)
 {
+	if (!qdf_debugfs_root)
+		return;
+
 	debugfs_remove_recursive(qdf_debugfs_root);
 	qdf_debugfs_root = NULL;
-
-	return QDF_STATUS_SUCCESS;
 }
 qdf_export_symbol(qdf_debugfs_exit);
 
@@ -59,6 +60,7 @@ qdf_dentry_t qdf_debugfs_get_root(void)
 {
 	return qdf_debugfs_root;
 }
+qdf_export_symbol(qdf_debugfs_get_root);
 
 umode_t qdf_debugfs_get_filemode(uint16_t mode)
 {
@@ -163,30 +165,32 @@ void qdf_debugfs_printf(qdf_debugfs_file_t file, const char *f, ...)
 	va_end(args);
 }
 
+qdf_export_symbol(qdf_debugfs_printf);
+
 #if (LINUX_VERSION_CODE >= KERNEL_VERSION(4, 4, 0))
 
 void qdf_debugfs_hexdump(qdf_debugfs_file_t file, const uint8_t *buf,
-			 qdf_size_t len)
+			 qdf_size_t len, int rowsize, int groupsize)
 {
-	seq_hex_dump(file, "", DUMP_PREFIX_OFFSET, 16, 4, buf, len, false);
+	seq_hex_dump(file, "", DUMP_PREFIX_OFFSET, rowsize, groupsize, buf, len,
+		     false);
 }
 
+qdf_export_symbol(qdf_debugfs_hexdump);
 #else
 
 void qdf_debugfs_hexdump(qdf_debugfs_file_t file, const uint8_t *buf,
-			 qdf_size_t len)
+			 qdf_size_t len, int rowsize, int groupsize)
 {
-	const size_t rowsize = 16;
-	const size_t groupsize = 4;
 	char *dst;
-	size_t dstlen, readlen;
+	size_t dstlen, readlen, remaining = len;
 	int prefix = 0;
 	size_t commitlen;
 
-	while (len > 0 && (file->size > file->count)) {
+	while (remaining > 0 && (file->size > file->count)) {
 		seq_printf(file, "%.8x: ", prefix);
 
-		readlen = min(len, rowsize);
+		readlen = qdf_min(remaining, (qdf_size_t)rowsize);
 		dstlen = seq_get_buf(file, &dst);
 		hex_dump_to_buffer(buf, readlen, rowsize, groupsize, dst,
 				   dstlen, false);
@@ -194,13 +198,21 @@ void qdf_debugfs_hexdump(qdf_debugfs_file_t file, const uint8_t *buf,
 		seq_commit(file, commitlen);
 		seq_putc(file, '\n');
 
-		len = (len > rowsize) ? len - rowsize : 0;
+		remaining = (remaining > rowsize) ? remaining - rowsize : 0;
 		buf += readlen;
 		prefix += rowsize;
 	}
 }
 
+qdf_export_symbol(qdf_debugfs_hexdump);
 #endif
+
+bool qdf_debugfs_overflow(qdf_debugfs_file_t file)
+{
+	return seq_has_overflowed(file);
+}
+
+qdf_export_symbol(qdf_debugfs_overflow);
 
 void qdf_debugfs_write(qdf_debugfs_file_t file, const uint8_t *buf,
 		       qdf_size_t len)
@@ -254,10 +266,12 @@ static ssize_t qdf_seq_write(struct file *filp, const char __user *ubuf,
 	fops = seq->private;
 	if (fops && fops->write) {
 		buf = qdf_mem_malloc(len + 1);
-		buf[len] = '\0';
-		rc = simple_write_to_buffer(buf, len, ppos, ubuf, len);
-		fops->write(fops->priv, buf, len + 1);
-		qdf_mem_free(buf);
+		if (buf) {
+			buf[len] = '\0';
+			rc = simple_write_to_buffer(buf, len, ppos, ubuf, len);
+			fops->write(fops->priv, buf, len + 1);
+			qdf_mem_free(buf);
+		}
 	}
 
 	return rc;
@@ -313,7 +327,7 @@ qdf_dentry_t qdf_debugfs_create_file(const char *name, uint16_t mode,
 
 	if (IS_ERR_OR_NULL(file)) {
 		QDF_TRACE(QDF_MODULE_ID_QDF, QDF_TRACE_LEVEL_ERROR,
-			  "%s creation failed %p", name, file);
+			  "%s creation failed 0x%pK", name, file);
 		file = NULL;
 	}
 
@@ -321,84 +335,88 @@ qdf_dentry_t qdf_debugfs_create_file(const char *name, uint16_t mode,
 }
 qdf_export_symbol(qdf_debugfs_create_file);
 
-qdf_dentry_t qdf_debugfs_create_u8(const char *name, uint16_t mode,
-				   qdf_dentry_t parent, u8 *value)
+void qdf_debugfs_create_u8(const char *name, uint16_t mode,
+			   qdf_dentry_t parent, u8 *value)
 {
 	umode_t filemode;
 
 	if (!name)
-		return NULL;
+		return;
 
 	if (!parent)
 		parent = qdf_debugfs_get_root();
 
 	filemode = qdf_debugfs_get_filemode(mode);
-	return debugfs_create_u8(name, filemode, parent, value);
+	debugfs_create_u8(name, filemode, parent, value);
 }
 
-qdf_dentry_t qdf_debugfs_create_u16(const char *name, uint16_t mode,
-				    qdf_dentry_t parent, u16 *value)
+void qdf_debugfs_create_u16(const char *name, uint16_t mode,
+			    qdf_dentry_t parent, u16 *value)
 {
 	umode_t filemode;
 
 	if (!name)
-		return NULL;
+		return;
 
 	if (!parent)
 		parent = qdf_debugfs_get_root();
 
 	filemode = qdf_debugfs_get_filemode(mode);
-	return debugfs_create_u16(name, filemode, parent, value);
+	debugfs_create_u16(name, filemode, parent, value);
 }
+
 qdf_export_symbol(qdf_debugfs_create_u16);
 
-qdf_dentry_t qdf_debugfs_create_u32(const char *name,
-				    uint16_t mode,
-				    qdf_dentry_t parent, u32 *value)
+void qdf_debugfs_create_u32(const char *name,
+			    uint16_t mode,
+			    qdf_dentry_t parent, u32 *value)
 {
 	umode_t filemode;
 
 	if (!name)
-		return NULL;
+		return;
 
 	if (!parent)
 		parent = qdf_debugfs_get_root();
 
 	filemode = qdf_debugfs_get_filemode(mode);
-	return debugfs_create_u32(name, filemode, parent, value);
+	debugfs_create_u32(name, filemode, parent, value);
 }
+
 qdf_export_symbol(qdf_debugfs_create_u32);
 
-qdf_dentry_t qdf_debugfs_create_u64(const char *name, uint16_t mode,
-				    qdf_dentry_t parent, u64 *value)
+void qdf_debugfs_create_u64(const char *name, uint16_t mode,
+			    qdf_dentry_t parent, u64 *value)
 {
 	umode_t filemode;
 
 	if (!name)
-		return NULL;
+		return;
 
 	if (!parent)
 		parent = qdf_debugfs_get_root();
 
 	filemode = qdf_debugfs_get_filemode(mode);
-	return debugfs_create_u64(name, filemode, parent, value);
+	debugfs_create_u64(name, filemode, parent, value);
 }
+
 qdf_export_symbol(qdf_debugfs_create_u64);
 
-qdf_dentry_t qdf_debugfs_create_atomic(const char *name, uint16_t mode,
-				       qdf_dentry_t parent, qdf_atomic_t *value)
+void qdf_debugfs_create_atomic(const char *name, uint16_t mode,
+			       qdf_dentry_t parent, qdf_atomic_t *value)
 {
 	umode_t filemode;
 
 	if (!name)
-		return NULL;
+		return;
 
 	if (!parent)
 		parent = qdf_debugfs_get_root();
 
 	filemode = qdf_debugfs_get_filemode(mode);
-	return debugfs_create_atomic_t(name, filemode, parent, value);
+	debugfs_create_atomic_t(name, filemode, parent, value);
 }
+
 qdf_export_symbol(qdf_debugfs_create_atomic);
 
 static int qdf_debugfs_string_show(struct seq_file *seq, void *pos)
@@ -458,3 +476,107 @@ void qdf_debugfs_remove_file(qdf_dentry_t d)
 	debugfs_remove(d);
 }
 qdf_export_symbol(qdf_debugfs_remove_file);
+
+static int qdf_debugfs_single_show(struct seq_file *seq, void *v)
+{
+	struct qdf_debugfs_fops *fops = seq->private;
+
+	if (fops && fops->show)
+		fops->show(seq, fops->priv);
+
+	return 0;
+}
+
+/* .open() */
+static int qdf_debugfs_single_open(struct inode *inode, struct file *file)
+{
+	return single_open(file, qdf_debugfs_single_show,
+			   inode->i_private);
+}
+
+/* File operations for the simplified version */
+static const struct file_operations qdf_debugfs_fops_simple = {
+	.owner          = THIS_MODULE,
+	.open           = qdf_debugfs_single_open,
+	.release        = single_release,
+	.read           = seq_read,
+	.llseek         = seq_lseek,
+};
+
+qdf_dentry_t qdf_debugfs_create_file_simplified(
+	const char *name, uint16_t mode,
+	qdf_dentry_t parent, struct qdf_debugfs_fops *fops)
+{
+	qdf_dentry_t file;
+	umode_t filemode;
+
+	if (!name || !fops)
+		return NULL;
+
+	if (!parent)
+		parent = qdf_debugfs_get_root();
+
+	filemode = qdf_debugfs_get_filemode(mode);
+	file = debugfs_create_file(name, filemode, parent, fops,
+				   &qdf_debugfs_fops_simple);
+
+	if (IS_ERR_OR_NULL(file)) {
+		QDF_TRACE(QDF_MODULE_ID_QDF, QDF_TRACE_LEVEL_ERROR,
+			  "%s creation failed 0x%pK", name, file);
+		file = NULL;
+	}
+
+	return file;
+}
+qdf_export_symbol(qdf_debugfs_create_file_simplified);
+
+int qdf_debugfs_printer(void *priv, const char *fmt, ...)
+{
+	struct seq_file *file = priv;
+	va_list args;
+
+	va_start(args, fmt);
+	seq_vprintf(file, fmt, args);
+	seq_puts(file, "\n");
+	va_end(args);
+
+	return 0;
+}
+qdf_export_symbol(qdf_debugfs_printer);
+
+qdf_dentry_t qdf_debugfs_create_blob(const char *name, umode_t mode,
+				     qdf_dentry_t parent,
+				     qdf_debugfs_blob_wrap_t blob)
+{
+	return debugfs_create_blob(name, mode, parent, blob);
+}
+
+qdf_export_symbol(qdf_debugfs_create_blob);
+
+qdf_dentry_t qdf_debugfs_create_entry(const char *name, uint16_t mode,
+				      qdf_dentry_t parent,
+				      qdf_entry_t data,
+				      const qdf_file_ops_t fops)
+{
+	qdf_dentry_t file;
+	umode_t filemode;
+
+	if (!name || !fops)
+		return NULL;
+
+	if (!parent)
+		parent = qdf_debugfs_get_root();
+
+	filemode = qdf_debugfs_get_filemode(mode);
+	file = debugfs_create_file(name, filemode, parent, data, fops);
+
+	if (IS_ERR_OR_NULL(file)) {
+		QDF_TRACE(QDF_MODULE_ID_QDF, QDF_TRACE_LEVEL_ERROR,
+			  "%s creation failed 0x%pK", name, file);
+		file = NULL;
+	}
+
+	return file;
+}
+
+qdf_export_symbol(qdf_debugfs_create_entry);

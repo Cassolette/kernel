@@ -1,8 +1,5 @@
 /*
- * Copyright (c) 2014-2017 The Linux Foundation. All rights reserved.
- *
- * Previously licensed under the ISC license by Qualcomm Atheros, Inc.
- *
+ * Copyright (c) 2014-2019,2021 The Linux Foundation. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -19,23 +16,18 @@
  * PERFORMANCE OF THIS SOFTWARE.
  */
 
-/*
- * This file was originally distributed by Qualcomm Atheros, Inc.
- * under proprietary terms before Copyright ownership was assigned
- * to the Linux Foundation.
- */
-
 /**
  * DOC: qdf_defer.c
  * This file provides OS dependent deferred API's.
  */
 
 #include <linux/kernel.h>
-#include <linux/version.h>
 #include <linux/module.h>
 #include <linux/workqueue.h>
 
 #include "i_qdf_defer.h"
+#include <qdf_module.h>
+#include <qdf_defer.h>
 
 /**
  * __qdf_defer_func() - defer work handler
@@ -47,39 +39,116 @@ void __qdf_defer_func(struct work_struct *work)
 {
 	__qdf_work_t *ctx = container_of(work, __qdf_work_t, work);
 
-	if (ctx->fn == NULL) {
+	if (!ctx->fn) {
 		QDF_TRACE(QDF_MODULE_ID_QDF, QDF_TRACE_LEVEL_ERROR,
 			  "No callback registered !!");
 		return;
 	}
 	ctx->fn(ctx->arg);
 }
-EXPORT_SYMBOL(__qdf_defer_func);
+qdf_export_symbol(__qdf_defer_func);
 
-#if LINUX_VERSION_CODE <= KERNEL_VERSION(2, 6, 19)
-/**
- * __qdf_defer_delayed_func() - defer work handler
- * @dwork: Pointer to defer work
- *
- * Return: none
- */
+#ifdef ENHANCED_OS_ABSTRACTION
 void
-__qdf_defer_delayed_func(struct work_struct *dwork)
+qdf_create_bh(qdf_bh_t  *bh, qdf_defer_fn_t  func, void  *arg)
 {
-	return;
+	__qdf_init_bh(bh, func, arg);
 }
-#else
-void
-__qdf_defer_delayed_func(struct work_struct *dwork)
+
+void qdf_sched_bh(qdf_bh_t *bh)
 {
-	__qdf_delayed_work_t  *ctx = container_of(dwork, __qdf_delayed_work_t,
-		 dwork.work);
-	if (ctx->fn == NULL) {
-		QDF_TRACE(QDF_MODULE_ID_QDF, QDF_TRACE_LEVEL_ERROR,
-			  "BugCheck: Callback is not initilized while creating delayed work queue");
-		return;
-	}
-	ctx->fn(ctx->arg);
+	__qdf_sched_bh(bh);
 }
+
+void qdf_destroy_bh(qdf_bh_t *bh)
+{
+	__qdf_disable_bh(bh);
+}
+
+void qdf_destroy_work(qdf_handle_t hdl, qdf_work_t *work)
+{
+	__qdf_disable_work(work);
+}
+
+qdf_export_symbol(qdf_destroy_work);
+
+void qdf_flush_work(qdf_work_t *work)
+{
+	__qdf_flush_work(work);
+}
+
+qdf_export_symbol(qdf_flush_work);
+
+uint32_t qdf_disable_work(qdf_work_t *work)
+{
+	return __qdf_disable_work(work);
+}
+
+qdf_export_symbol(qdf_disable_work);
+
+bool qdf_cancel_work(qdf_work_t *work)
+{
+	return __qdf_cancel_work(work);
+}
+
+qdf_export_symbol(qdf_cancel_work);
+
+qdf_workqueue_t *qdf_create_workqueue(char *name)
+{
+	return  __qdf_create_workqueue(name);
+}
+
+qdf_export_symbol(qdf_create_workqueue);
+
+qdf_workqueue_t *qdf_create_singlethread_workqueue(char *name)
+{
+	return  __qdf_create_singlethread_workqueue(name);
+}
+
+qdf_export_symbol(qdf_create_singlethread_workqueue);
+
+void qdf_destroy_workqueue(qdf_handle_t hdl,
+			   qdf_workqueue_t *wqueue)
+{
+	return  __qdf_destroy_workqueue(wqueue);
+}
+
+qdf_export_symbol(qdf_destroy_workqueue);
+
+qdf_workqueue_t *qdf_alloc_unbound_workqueue(char *name)
+{
+	return  __qdf_alloc_unbound_workqueue(name);
+}
+
+qdf_export_symbol(qdf_alloc_unbound_workqueue);
+
+QDF_STATUS qdf_create_work(qdf_handle_t hdl, qdf_work_t  *work,
+			   qdf_defer_fn_t  func, void  *arg)
+{
+	return __qdf_init_work(work, func, arg);
+}
+
+qdf_export_symbol(qdf_create_work);
+
+void qdf_sched_work(qdf_handle_t hdl, qdf_work_t *work)
+{
+	__qdf_sched_work(work);
+}
+
+qdf_export_symbol(qdf_sched_work);
+
+bool
+qdf_queue_work(qdf_handle_t hdl, qdf_workqueue_t *wqueue, qdf_work_t *work)
+{
+	return  __qdf_queue_work(wqueue, work);
+}
+
+qdf_export_symbol(qdf_queue_work);
+
+void qdf_flush_workqueue(qdf_handle_t hdl, qdf_workqueue_t *wqueue)
+{
+	return  __qdf_flush_workqueue(wqueue);
+}
+
+qdf_export_symbol(qdf_flush_workqueue);
 #endif
-EXPORT_SYMBOL(__qdf_defer_delayed_func);

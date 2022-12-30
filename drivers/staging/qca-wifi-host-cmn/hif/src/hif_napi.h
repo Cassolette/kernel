@@ -1,8 +1,5 @@
 /*
- * Copyright (c) 2015-2017 The Linux Foundation. All rights reserved.
- *
- * Previously licensed under the ISC license by Qualcomm Atheros, Inc.
- *
+ * Copyright (c) 2015-2019 The Linux Foundation. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -17,12 +14,6 @@
  * PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR OTHER
  * TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
  * PERFORMANCE OF THIS SOFTWARE.
- */
-
-/*
- * This file was originally distributed by Qualcomm Atheros, Inc.
- * under proprietary terms before Copyright ownership was assigned
- * to the Linux Foundation.
  */
 
 #ifndef __HIF_NAPI_H__
@@ -96,6 +87,37 @@ enum qca_napi_event {
 #define NAPI_ID2PIPE(i) ((i)-1)
 #define NAPI_PIPE2ID(p) ((p)+1)
 
+#ifdef RECEIVE_OFFLOAD
+/**
+ * hif_napi_rx_offld_flush_cb_register() - Register flush callback for Rx offld
+ * @hif_hdl: pointer to hif context
+ * @offld_flush_handler: register offld flush callback
+ *
+ * Return: None
+ */
+void hif_napi_rx_offld_flush_cb_register(struct hif_opaque_softc *hif_hdl,
+					 void (rx_ol_flush_handler)(void *arg));
+
+/**
+ * hif_napi_rx_offld_flush_cb_deregister() - Degregister offld flush_cb
+ * @hif_hdl: pointer to hif context
+ *
+ * Return: NONE
+ */
+void hif_napi_rx_offld_flush_cb_deregister(struct hif_opaque_softc *hif_hdl);
+#endif /* RECEIVE_OFFLOAD */
+
+/**
+ * hif_napi_get_lro_info() - returns the address LRO data for napi_id
+ * @hif: pointer to hif context
+ * @napi_id: napi instance
+ *
+ * Description:
+ *    Returns the address of the LRO structure
+ *
+ * Return:
+ *  <addr>: address of the LRO structure
+ */
 void *hif_napi_get_lro_info(struct hif_opaque_softc *hif_hdl, int napi_id);
 
 enum qca_blacklist_op {
@@ -124,6 +146,15 @@ int hif_napi_destroy(struct hif_opaque_softc  *hif,
 
 struct qca_napi_data *hif_napi_get_all(struct hif_opaque_softc   *hif);
 
+/**
+ * hif_get_napi() - get NAPI corresponding to napi_id
+ * @napi_id: NAPI instance
+ * @napid: Handle NAPI
+ *
+ * Return: napi corresponding napi_id
+ */
+struct qca_napi_info *hif_get_napi(int napi_id, struct qca_napi_data *napid);
+
 int hif_napi_event(struct hif_opaque_softc     *hif,
 		   enum  qca_napi_event event,
 		   void                *data);
@@ -131,11 +162,13 @@ int hif_napi_event(struct hif_opaque_softc     *hif,
 /* called from the ISR within hif, so, ce is known */
 int hif_napi_enabled(struct hif_opaque_softc *hif, int ce);
 
+bool hif_napi_created(struct hif_opaque_softc *hif, int ce);
+
 /* called from hdd (napi_poll), using napi id as a selector */
 void hif_napi_enable_irq(struct hif_opaque_softc *hif, int id);
 
 /* called by ce_tasklet.c::ce_dispatch_interrupt*/
-int hif_napi_schedule(struct hif_opaque_softc *scn, int ce_id);
+bool hif_napi_schedule(struct hif_opaque_softc *scn, int ce_id);
 
 /* called by hdd_napi, which is called by kernel */
 int hif_napi_poll(struct hif_opaque_softc *hif_ctx,
@@ -153,6 +186,19 @@ int hif_napi_poll(struct hif_opaque_softc *hif_ctx,
 #define HNC_ACT_COLLAPSE (1)
 #define HNC_ACT_DISPERSE (-1)
 
+/**
+ * hif_update_napi_max_poll_time() - updates NAPI max poll time
+ * @ce_state: ce state
+ * @ce_id: Copy engine ID
+ * @cpu_id: cpu id
+ *
+ * This API updates NAPI max poll time per CE per SPU.
+ *
+ * Return: void
+ */
+void hif_update_napi_max_poll_time(struct CE_state *ce_state,
+				   int ce_id,
+				   int cpu_id);
 /**
  * Local interface to HIF implemented functions of NAPI CPU affinity management.
  * Note:
@@ -191,6 +237,10 @@ static inline struct qca_napi_data *hif_napi_get_all(
 				struct hif_opaque_softc *hif)
 { return NULL; }
 
+static inline struct qca_napi_info *hif_get_napi(int napi_id,
+						 struct qca_napi_data *napid)
+{ return NULL; }
+
 static inline int hif_napi_event(struct hif_opaque_softc     *hif,
 				 enum  qca_napi_event event,
 				 void                *data)
@@ -200,16 +250,33 @@ static inline int hif_napi_event(struct hif_opaque_softc     *hif,
 static inline int hif_napi_enabled(struct hif_opaque_softc *hif, int ce)
 { return 0; }
 
+static inline bool hif_napi_created(struct hif_opaque_softc *hif, int ce)
+{ return false; }
+
 /* called from hdd (napi_poll), using napi id as a selector */
 static inline void hif_napi_enable_irq(struct hif_opaque_softc *hif, int id)
 { return; }
 
-static inline int hif_napi_schedule(struct hif_opaque_softc *hif, int ce_id)
-{ return 0; }
+static inline bool hif_napi_schedule(struct hif_opaque_softc *hif, int ce_id)
+{ return false; }
 
 static inline int hif_napi_poll(struct napi_struct *napi, int budget)
 { return -EPERM; }
 
+/**
+ * hif_update_napi_max_poll_time() - updates NAPI max poll time
+ * @ce_state: ce state
+ * @ce_id: Copy engine ID
+ * @cpu_id: cpu id
+ *
+ * This API updates NAPI max poll time per CE per SPU.
+ *
+ * Return: void
+ */
+static inline void hif_update_napi_max_poll_time(struct CE_state *ce_state,
+						 int ce_id,
+						 int cpu_id)
+{ return; }
 #endif /* FEATURE_NAPI */
 
 #if defined(HIF_IRQ_AFFINITY) && defined(FEATURE_NAPI)

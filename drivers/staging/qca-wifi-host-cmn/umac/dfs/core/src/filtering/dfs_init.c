@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013, 2016-2017 The Linux Foundation. All rights reserved.
+ * Copyright (c) 2013, 2016-2019, 2021 The Linux Foundation. All rights reserved.
  * Copyright (c) 2002-2010, Atheros Communications Inc.
  *
  * Permission to use, copy, modify, and/or distribute this software for any
@@ -22,6 +22,9 @@
 
 #include "../dfs.h"
 #include "wlan_dfs_lmac_api.h"
+#include <wlan_objmgr_vdev_obj.h>
+#include <wlan_reg_services_api.h>
+#include "wlan_dfs_utils_api.h"
 
 /**
  * dfs_reset_filtertype() - Reset filtertype.
@@ -35,9 +38,9 @@ static inline void dfs_reset_filtertype(
 	struct dfs_delayline *dl;
 
 	for (j = 0; j < ft->ft_numfilters; j++) {
-		rf = &(ft->ft_filters[j]);
+		rf = ft->ft_filters[j];
 		dl = &(rf->rf_dl);
-		if (dl != NULL) {
+		if (dl) {
 			qdf_mem_zero(dl, sizeof(*dl));
 			dl->dl_lastelem = (0xFFFFFFFF) & DFS_MAX_DL_MASK;
 		}
@@ -51,19 +54,13 @@ void dfs_reset_alldelaylines(struct wlan_dfs *dfs)
 	int i;
 
 	if (!dfs) {
-		dfs_err(dfs, WLAN_DEBUG_DFS_ALWAYS,  "dfs is NULL");
+		dfs_err(dfs, WLAN_DEBUG_DFS_ALWAYS, "dfs is NULL");
 		return;
 	}
 	pl = dfs->pulses;
 
 	if (!pl) {
-		dfs_err(dfs, WLAN_DEBUG_DFS_ALWAYS,  "pl==NULL, dfs=%p", dfs);
-		return;
-	}
-
-	if (!(dfs->dfs_b5radars)) {
-		dfs_err(dfs, WLAN_DEBUG_DFS_ALWAYS,  "pl==NULL, b5radars=%p",
-				dfs->dfs_b5radars);
+		dfs_err(dfs, WLAN_DEBUG_DFS_ALWAYS, "pl is NULL");
 		return;
 	}
 
@@ -72,10 +69,19 @@ void dfs_reset_alldelaylines(struct wlan_dfs *dfs)
 	pl->pl_lastelem = DFS_MAX_PULSE_BUFFER_MASK;
 
 	for (i = 0; i < DFS_MAX_RADAR_TYPES; i++) {
-		if (dfs->dfs_radarf[i] != NULL) {
+		if (dfs->dfs_radarf[i]) {
 			ft = dfs->dfs_radarf[i];
 			dfs_reset_filtertype(ft);
 		}
+	}
+
+	if (!(dfs->dfs_b5radars)) {
+		if (dfs->dfs_rinfo.rn_numbin5radars > 0)
+			dfs_err(dfs, WLAN_DEBUG_DFS_ALWAYS,
+				"null dfs_b5radars, numbin5radars=%d domain=%d",
+				dfs->dfs_rinfo.rn_numbin5radars,
+				dfs->dfsdomain);
+		return;
 	}
 
 	for (i = 0; i < dfs->dfs_rinfo.rn_numbin5radars; i++) {
@@ -100,7 +106,7 @@ void dfs_reset_filter_delaylines(struct dfs_filtertype *dft)
 	int i;
 
 	for (i = 0; i < DFS_MAX_NUM_RADAR_FILTERS; i++) {
-		df = &dft->ft_filters[i];
+		df = dft->ft_filters[i];
 		dfs_reset_delayline(&(df->rf_dl));
 	}
 }
@@ -279,6 +285,17 @@ int dfs_init_radar_filters(struct wlan_dfs *dfs,
 				(dfs_radars[p].rp_maxdur ==
 				 dfs->dfs_radarf[n]->ft_maxdur)) {
 				ft = dfs->dfs_radarf[n];
+				/* ft_rssithresh means the minimum rp_rssithresh
+				 * among the same radar type.
+				 * min_rssithresh means the minimum
+				 * rp_rssithresh among all radar type.
+				 */
+				if (ft->ft_rssithresh >
+				    dfs_radars[p].rp_rssithresh)
+					ft->ft_rssithresh =
+						dfs_radars[p].rp_rssithresh;
+				if (min_rssithresh > ft->ft_rssithresh)
+					min_rssithresh = ft->ft_rssithresh;
 				break;
 			}
 		}
@@ -290,12 +307,14 @@ int dfs_init_radar_filters(struct wlan_dfs *dfs,
 				goto bad4;
 		}
 
-		rf = &(ft->ft_filters[ft->ft_numfilters++]);
+		rf = ft->ft_filters[ft->ft_numfilters++];
 		dfs_reset_delayline(&rf->rf_dl);
 		numpulses = dfs_radars[p].rp_numpulses;
 
 		rf->rf_numpulses = numpulses;
 		rf->rf_patterntype = dfs_radars[p].rp_patterntype;
+		rf->rf_sidx_spread = dfs_radars[p].rp_sidx_spread;
+		rf->rf_check_delta_peak = dfs_radars[p].rp_check_delta_peak;
 		rf->rf_pulseid = dfs_radars[p].rp_pulseid;
 		rf->rf_mindur = dfs_radars[p].rp_mindur;
 		rf->rf_maxdur = dfs_radars[p].rp_maxdur;
@@ -335,16 +354,22 @@ int dfs_init_radar_filters(struct wlan_dfs *dfs,
 	dfs_print_filters(dfs);
 
 	dfs->dfs_rinfo.rn_numbin5radars  = numb5radars;
-	if (!(dfs->dfs_b5radars))
+	if (dfs->dfs_b5radars) {
 		qdf_mem_free(dfs->dfs_b5radars);
-
-	dfs->dfs_b5radars = (struct dfs_bin5radars *)qdf_mem_malloc(
-			numb5radars * sizeof(struct dfs_bin5radars));
-	if (!(dfs->dfs_b5radars)) {
-		dfs_alert(dfs, WLAN_DEBUG_DFS_ALWAYS,
-				"cannot allocate memory for bin5 radars");
-		goto bad4;
+		dfs->dfs_b5radars = NULL;
 	}
+
+	if (numb5radars) {
+		dfs->dfs_b5radars = (struct dfs_bin5radars *)qdf_mem_malloc(
+				numb5radars * sizeof(struct dfs_bin5radars));
+		/*
+		 * Malloc can return NULL if numb5radars is zero. But we still
+		 * want to reset the delay lines.
+		 */
+		if (!(dfs->dfs_b5radars))
+			goto bad4;
+	}
+
 	for (n = 0; n < numb5radars; n++) {
 		dfs->dfs_b5radars[n].br_pulse = b5pulses[n];
 		dfs->dfs_b5radars[n].br_pulse.b5_timewindow *= 1000000;
@@ -392,3 +417,77 @@ void dfs_clear_stats(struct wlan_dfs *dfs)
 	dfs->wlan_dfs_stats.last_reset_tstamp =
 	    lmac_get_tsf64(dfs->dfs_pdev_obj);
 }
+
+bool dfs_check_intersect_excl(int low_freq, int high_freq, int center_freq)
+{
+	return ((center_freq > low_freq) && (center_freq < high_freq));
+}
+
+int dfs_check_etsi_overlap(int center_freq, int chan_width,
+			   int en302_502_freq_low, int en302_502_freq_high)
+{
+	int chan_freq_low;
+	int chan_freq_high;
+
+	/* Calculate low/high frequency ranges */
+	chan_freq_low = center_freq - (chan_width / 2);
+	chan_freq_high = center_freq + (chan_width / 2);
+
+	return ((chan_freq_high == en302_502_freq_low) ||
+		dfs_check_intersect_excl(en302_502_freq_low,
+					 en302_502_freq_high,
+					 chan_freq_low) ||
+		dfs_check_intersect_excl(en302_502_freq_low,
+					 en302_502_freq_high,
+					 chan_freq_high));
+}
+
+#ifdef CONFIG_CHAN_FREQ_API
+bool dfs_is_en302_502_applicable(struct wlan_dfs *dfs)
+{
+	int chan_freq;
+	int chan_width;
+	int overlap = 0;
+	struct wlan_objmgr_vdev *vdev = NULL;
+	struct wlan_channel *bss_chan = NULL;
+
+	/* Get centre frequency */
+	chan_freq = dfs->dfs_curchan->dfs_ch_mhz_freq_seg1;
+	vdev = wlan_objmgr_pdev_get_first_vdev(dfs->dfs_pdev_obj, WLAN_DFS_ID);
+	if (!vdev) {
+		dfs_err(dfs, WLAN_DEBUG_DFS_ALWAYS,  "vdev is NULL");
+		return false;
+	}
+
+	bss_chan = wlan_vdev_mlme_get_bss_chan(vdev);
+	wlan_objmgr_vdev_release_ref(vdev, WLAN_DFS_ID);
+	/* Grab width */
+	chan_width = wlan_reg_get_bw_value(bss_chan->ch_width);
+
+	if (WLAN_IS_CHAN_11AC_VHT80_80(dfs->dfs_curchan)) {
+		/* HT80_80 mode has 2 segments and each segment must
+		 * be checked for control channel first.
+		 */
+		overlap = dfs_check_etsi_overlap(
+				chan_freq, chan_width / 2,
+				ETSI_RADAR_EN302_502_FREQ_LOWER,
+				ETSI_RADAR_EN302_502_FREQ_UPPER);
+
+		/* check for extension channel */
+		chan_freq = dfs->dfs_curchan->dfs_ch_mhz_freq_seg2;
+
+		overlap += dfs_check_etsi_overlap(
+				chan_freq, chan_width / 2,
+				ETSI_RADAR_EN302_502_FREQ_LOWER,
+				ETSI_RADAR_EN302_502_FREQ_UPPER);
+	} else {
+		overlap = dfs_check_etsi_overlap(
+				chan_freq, chan_width,
+				ETSI_RADAR_EN302_502_FREQ_LOWER,
+				ETSI_RADAR_EN302_502_FREQ_UPPER);
+	}
+
+	return(wlan_reg_is_regdmn_en302502_applicable(dfs->dfs_pdev_obj) &&
+	       overlap);
+}
+#endif

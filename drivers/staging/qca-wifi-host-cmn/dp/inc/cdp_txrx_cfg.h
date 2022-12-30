@@ -1,8 +1,5 @@
 /*
- * Copyright (c) 2016-2017 The Linux Foundation. All rights reserved.
- *
- * Previously licensed under the ISC license by Qualcomm Atheros, Inc.
- *
+ * Copyright (c) 2016-2019,2021 The Linux Foundation. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -19,11 +16,6 @@
  * PERFORMANCE OF THIS SOFTWARE.
  */
 
-/*
- * This file was originally distributed by Qualcomm Atheros, Inc.
- * under proprietary terms before Copyright ownership was assigned
- * to the Linux Foundation.
- */
 /**
  * @file cdp_txrx_cfg.h
  * @brief Define the host data path configuration API functions
@@ -31,6 +23,8 @@
 #ifndef _CDP_TXRX_CFG_H_
 #define _CDP_TXRX_CFG_H_
 #include "cdp_txrx_handle.h"
+#include <cdp_txrx_cmn.h>
+
 /**
  * cdp_cfg_set_rx_fwd_disabled() - enable/disable rx forwarding
  * @soc - data path soc handle
@@ -45,14 +39,17 @@ static inline void
 cdp_cfg_set_rx_fwd_disabled(ol_txrx_soc_handle soc, struct cdp_cfg *cfg_pdev,
 		uint8_t disable_rx_fwd)
 {
-	if (!soc || !soc->ops || !soc->ops->cfg_ops) {
-		QDF_TRACE(QDF_MODULE_ID_DP, QDF_TRACE_LEVEL_FATAL,
-			"%s invalid instance", __func__);
+	if (!soc || !soc->ops) {
+		dp_cdp_debug("invalid instance");
+		QDF_BUG(0);
 		return;
 	}
 
-	if (soc->ops->cfg_ops->set_cfg_rx_fwd_disabled)
-		return soc->ops->cfg_ops->set_cfg_rx_fwd_disabled(cfg_pdev,
+	if (!soc->ops->cfg_ops ||
+	    !soc->ops->cfg_ops->set_cfg_rx_fwd_disabled)
+		return;
+
+	soc->ops->cfg_ops->set_cfg_rx_fwd_disabled(cfg_pdev,
 			disable_rx_fwd);
 }
 
@@ -70,14 +67,17 @@ static inline void
 cdp_cfg_set_packet_log_enabled(ol_txrx_soc_handle soc,
 		struct cdp_cfg *cfg_pdev, uint8_t val)
 {
-	if (!soc || !soc->ops || !soc->ops->cfg_ops) {
-		QDF_TRACE(QDF_MODULE_ID_DP, QDF_TRACE_LEVEL_FATAL,
-			"%s invalid instance", __func__);
+	if (!soc || !soc->ops) {
+		dp_cdp_debug("invalid instance");
+		QDF_BUG(0);
 		return;
 	}
 
-	if (soc->ops->cfg_ops->set_cfg_packet_log_enabled)
-		return soc->ops->cfg_ops->set_cfg_packet_log_enabled(cfg_pdev,
+	if (!soc->ops->cfg_ops ||
+	    !soc->ops->cfg_ops->set_cfg_packet_log_enabled)
+		return;
+
+	soc->ops->cfg_ops->set_cfg_packet_log_enabled(cfg_pdev,
 				val);
 }
 
@@ -95,22 +95,23 @@ static inline struct cdp_cfg
 *cdp_cfg_attach(ol_txrx_soc_handle soc,
 		qdf_device_t osdev, void *cfg_param)
 {
-	if (!soc || !soc->ops || !soc->ops->cfg_ops) {
-		QDF_TRACE(QDF_MODULE_ID_DP, QDF_TRACE_LEVEL_FATAL,
-			"%s invalid instance", __func__);
+	if (!soc || !soc->ops) {
+		dp_cdp_debug("invalid instance");
+		QDF_BUG(0);
 		return NULL;
 	}
 
-	if (soc->ops->cfg_ops->cfg_attach)
-		return soc->ops->cfg_ops->cfg_attach(osdev, cfg_param);
+	if (!soc->ops->cfg_ops ||
+	    !soc->ops->cfg_ops->cfg_attach)
+		return NULL;
 
-	return NULL;
+	return soc->ops->cfg_ops->cfg_attach(osdev, cfg_param);
 }
 
 /**
  * cdp_cfg_vdev_rx_set_intrabss_fwd() - enable/disable intra bass forwarding
  * @soc - data path soc handle
- * @vdev - virtual interface instance
+ * @vdev_id - virtual interface id
  * @val - enable or disable intra bss forwarding
  *
  * ap isolate, do not forward intra bss traffic
@@ -119,16 +120,19 @@ static inline struct cdp_cfg
  */
 static inline void
 cdp_cfg_vdev_rx_set_intrabss_fwd(ol_txrx_soc_handle soc,
-		struct cdp_vdev *vdev, bool val)
+				 uint8_t vdev_id, bool val)
 {
-	if (!soc || !soc->ops || !soc->ops->cfg_ops) {
-		QDF_TRACE(QDF_MODULE_ID_DP, QDF_TRACE_LEVEL_FATAL,
-			"%s invalid instance", __func__);
+	if (!soc || !soc->ops) {
+		dp_cdp_debug("invalid instance");
+		QDF_BUG(0);
 		return;
 	}
 
-	if (soc->ops->cfg_ops->vdev_rx_set_intrabss_fwd)
-		return soc->ops->cfg_ops->vdev_rx_set_intrabss_fwd(vdev, val);
+	if (!soc->ops->cfg_ops ||
+	    !soc->ops->cfg_ops->vdev_rx_set_intrabss_fwd)
+		return;
+
+	soc->ops->cfg_ops->vdev_rx_set_intrabss_fwd(soc, vdev_id, val);
 }
 
 /**
@@ -144,15 +148,18 @@ cdp_cfg_vdev_rx_set_intrabss_fwd(ol_txrx_soc_handle soc,
 static inline uint8_t
 cdp_cfg_is_rx_fwd_disabled(ol_txrx_soc_handle soc, struct cdp_vdev *vdev)
 {
-	if (!soc || !soc->ops || !soc->ops->cfg_ops) {
-		QDF_TRACE(QDF_MODULE_ID_DP, QDF_TRACE_LEVEL_FATAL,
-			"%s invalid instance", __func__);
+	if (!soc || !soc->ops) {
+		dp_cdp_debug("invalid instance");
+		QDF_BUG(0);
 		return 0;
 	}
 
-	if (soc->ops->cfg_ops->is_rx_fwd_disabled)
-		return soc->ops->cfg_ops->is_rx_fwd_disabled(vdev);
-	return 0;
+	if (!soc->ops->cfg_ops ||
+	    !soc->ops->cfg_ops->is_rx_fwd_disabled)
+		return 0;
+
+	return soc->ops->cfg_ops->is_rx_fwd_disabled(vdev);
+
 }
 
 /**
@@ -168,15 +175,17 @@ static inline void
 cdp_cfg_tx_set_is_mgmt_over_wmi_enabled(ol_txrx_soc_handle soc,
 		uint8_t value)
 {
-	if (!soc || !soc->ops || !soc->ops->cfg_ops) {
-		QDF_TRACE(QDF_MODULE_ID_DP, QDF_TRACE_LEVEL_FATAL,
-			"%s invalid instance", __func__);
+	if (!soc || !soc->ops) {
+		dp_cdp_debug("invalid instance");
+		QDF_BUG(0);
 		return;
 	}
 
-	if (soc->ops->cfg_ops->tx_set_is_mgmt_over_wmi_enabled)
-		return soc->ops->cfg_ops->tx_set_is_mgmt_over_wmi_enabled(
-			value);
+	if (!soc->ops->cfg_ops ||
+	    !soc->ops->cfg_ops->tx_set_is_mgmt_over_wmi_enabled)
+		return;
+
+	soc->ops->cfg_ops->tx_set_is_mgmt_over_wmi_enabled(value);
 }
 
 /**
@@ -192,16 +201,17 @@ cdp_cfg_tx_set_is_mgmt_over_wmi_enabled(ol_txrx_soc_handle soc,
 static inline int
 cdp_cfg_is_high_latency(ol_txrx_soc_handle soc, struct cdp_cfg *cfg_pdev)
 {
-	if (!soc || !soc->ops || !soc->ops->cfg_ops) {
-		QDF_TRACE(QDF_MODULE_ID_DP, QDF_TRACE_LEVEL_FATAL,
-			"%s invalid instance", __func__);
+	if (!soc || !soc->ops) {
+		dp_cdp_debug("invalid instance");
+		QDF_BUG(0);
 		return 0;
 	}
 
-	if (soc->ops->cfg_ops->is_high_latency)
-		return soc->ops->cfg_ops->is_high_latency(cfg_pdev);
+	if (!soc->ops->cfg_ops ||
+	    !soc->ops->cfg_ops->is_high_latency)
+		return 0;
 
-	return 0;
+	return soc->ops->cfg_ops->is_high_latency(cfg_pdev);
 }
 
 /**
@@ -218,17 +228,18 @@ static inline void
 cdp_cfg_set_flow_control_parameters(ol_txrx_soc_handle soc,
 		struct cdp_cfg *cfg_pdev, void *param)
 {
-	if (!soc || !soc->ops || !soc->ops->cfg_ops) {
-		QDF_TRACE(QDF_MODULE_ID_DP, QDF_TRACE_LEVEL_FATAL,
-			"%s invalid instance", __func__);
+	if (!soc || !soc->ops) {
+		dp_cdp_debug("invalid instance");
+		QDF_BUG(0);
 		return;
 	}
 
-	if (soc->ops->cfg_ops->set_flow_control_parameters)
-		return soc->ops->cfg_ops->set_flow_control_parameters(cfg_pdev,
-				param);
+	if (!soc->ops->cfg_ops ||
+	    !soc->ops->cfg_ops->set_flow_control_parameters)
+		return;
 
-	return;
+	soc->ops->cfg_ops->set_flow_control_parameters(cfg_pdev,
+						       param);
 }
 
 /**
@@ -243,16 +254,17 @@ cdp_cfg_set_flow_control_parameters(ol_txrx_soc_handle soc,
 static inline void cdp_cfg_set_flow_steering(ol_txrx_soc_handle soc,
 		struct cdp_cfg *cfg_pdev, uint8_t val)
 {
-	if (!soc || !soc->ops || !soc->ops->cfg_ops) {
-		QDF_TRACE(QDF_MODULE_ID_DP, QDF_TRACE_LEVEL_FATAL,
-			"%s invalid instance", __func__);
+	if (!soc || !soc->ops) {
+		dp_cdp_debug("invalid instance");
+		QDF_BUG(0);
 		return;
 	}
 
-	if (soc->ops->cfg_ops->set_flow_steering)
-		return soc->ops->cfg_ops->set_flow_steering(cfg_pdev, val);
+	if (!soc->ops->cfg_ops ||
+	    !soc->ops->cfg_ops->set_flow_steering)
+		return;
 
-	return;
+	soc->ops->cfg_ops->set_flow_steering(cfg_pdev, val);
 }
 
 static inline void cdp_cfg_get_max_peer_id(ol_txrx_soc_handle soc,
@@ -274,14 +286,122 @@ static inline void
 cdp_cfg_set_ptp_rx_opt_enabled(ol_txrx_soc_handle soc,
 			       struct cdp_cfg *cfg_pdev, uint8_t val)
 {
-	if (!soc || !soc->ops || !soc->ops->cfg_ops) {
-		QDF_TRACE(QDF_MODULE_ID_DP, QDF_TRACE_LEVEL_FATAL,
-			  "%s invalid instance", __func__);
+	if (!soc || !soc->ops) {
+		dp_cdp_debug("invalid instance");
+		QDF_BUG(0);
 		return;
 	}
 
-	if (soc->ops->cfg_ops->set_ptp_rx_opt_enabled)
-		return soc->ops->cfg_ops->set_ptp_rx_opt_enabled(cfg_pdev,
-								 val);
+	if (!soc->ops->cfg_ops ||
+	    !soc->ops->cfg_ops->set_ptp_rx_opt_enabled)
+		return;
+
+	soc->ops->cfg_ops->set_ptp_rx_opt_enabled(cfg_pdev, val);
 }
+
+/**
+ * cdp_cfg_set_new_htt_msg_format() - set htt h2t msg feature
+ * @soc - datapath soc handle
+ * @val - enable or disable new htt h2t msg feature
+ *
+ * Enable whether htt h2t message length includes htc header length
+ *
+ * return NONE
+ */
+static inline void
+cdp_cfg_set_new_htt_msg_format(ol_txrx_soc_handle soc,
+			       uint8_t val)
+{
+	if (!soc || !soc->ops) {
+		dp_cdp_debug("invalid instance");
+		return;
+	}
+
+	if (!soc->ops->cfg_ops ||
+	    !soc->ops->cfg_ops->set_new_htt_msg_format)
+		return;
+
+	soc->ops->cfg_ops->set_new_htt_msg_format(val);
+}
+
+/**
+ * cdp_cfg_set_peer_unmap_conf_support() - set peer unmap conf feature
+ * @soc - datapath soc handle
+ * @val - enable or disable peer unmap conf feature
+ *
+ * Set if peer unmap confirmation feature is supported by both FW and in INI
+ *
+ * return NONE
+ */
+static inline void
+cdp_cfg_set_peer_unmap_conf_support(ol_txrx_soc_handle soc, bool val)
+{
+	if (!soc || !soc->ops) {
+		dp_cdp_debug("invalid instance");
+		QDF_BUG(0);
+		return;
+	}
+
+	if (!soc->ops->cfg_ops ||
+	    !soc->ops->cfg_ops->set_peer_unmap_conf_support)
+		return;
+
+	soc->ops->cfg_ops->set_peer_unmap_conf_support(val);
+}
+
+/**
+ * cdp_cfg_get_peer_unmap_conf_support() - check peer unmap conf feature
+ * @soc - datapath soc handle
+ *
+ * Check if peer unmap confirmation feature is enabled
+ *
+ * return true is peer unmap confirmation feature is enabled else false
+ */
+static inline bool
+cdp_cfg_get_peer_unmap_conf_support(ol_txrx_soc_handle soc)
+{
+	if (!soc || !soc->ops) {
+		dp_cdp_debug("invalid instance");
+		QDF_BUG(0);
+		return false;
+	}
+
+	if (!soc->ops->cfg_ops ||
+	    !soc->ops->cfg_ops->get_peer_unmap_conf_support)
+		return false;
+
+	return soc->ops->cfg_ops->get_peer_unmap_conf_support();
+}
+
+static inline void
+cdp_cfg_set_tx_compl_tsf64(ol_txrx_soc_handle soc,
+			   uint8_t val)
+{
+	if (!soc || !soc->ops) {
+		dp_debug("invalid instance");
+		return;
+	}
+
+	if (!soc->ops->cfg_ops ||
+	    !soc->ops->cfg_ops->set_tx_compl_tsf64)
+		return;
+
+	soc->ops->cfg_ops->set_tx_compl_tsf64(val);
+}
+
+static inline bool
+cdp_cfg_get_tx_compl_tsf64(ol_txrx_soc_handle soc)
+{
+	if (!soc || !soc->ops) {
+		dp_debug("invalid instance");
+		return false;
+	}
+
+	if (!soc->ops->cfg_ops ||
+	    !soc->ops->cfg_ops->get_tx_compl_tsf64)
+		return false;
+
+	return soc->ops->cfg_ops->get_tx_compl_tsf64();
+}
+
 #endif /* _CDP_TXRX_CFG_H_ */

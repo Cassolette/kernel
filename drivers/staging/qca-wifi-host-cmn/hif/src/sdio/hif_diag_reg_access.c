@@ -1,8 +1,5 @@
 /*
- * Copyright (c) 2013-2017 The Linux Foundation. All rights reserved.
- *
- * Previously licensed under the ISC license by Qualcomm Atheros, Inc.
- *
+ * Copyright (c) 2013-2019 The Linux Foundation. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -19,12 +16,6 @@
  * PERFORMANCE OF THIS SOFTWARE.
  */
 
-/*
- * This file was originally distributed by Qualcomm Atheros, Inc.
- * under proprietary terms before Copyright ownership was assigned
- * to the Linux Foundation.
- */
-
 #include "athdefs.h"
 #include "a_types.h"
 #include "a_osapi.h"
@@ -35,6 +26,8 @@
 #include "hif.h"
 #include "if_sdio.h"
 #include "regtable_sdio.h"
+#include "hif_sdio_dev.h"
+#include "qdf_module.h"
 
 #define CPU_DBG_SEL_ADDRESS                      0x00000483
 #define CPU_DBG_ADDRESS                          0x00000484
@@ -262,6 +255,7 @@ QDF_STATUS hif_diag_read_mem(struct hif_opaque_softc *scn,
 
 	return QDF_STATUS_SUCCESS;
 }
+qdf_export_symbol(hif_diag_read_mem);
 
 /**
  * hif_ar6k_read_target_register - call to read target register values
@@ -315,8 +309,8 @@ static QDF_STATUS hif_ar6k_read_target_register(struct hif_sdio_dev *hif_device,
  *
  * Return: None
  */
-static void hif_ar6k_fetch_target_regs(struct hif_sdio_dev *hif_device,
-		 uint32_t *targregs)
+void hif_ar6k_fetch_target_regs(struct hif_sdio_dev *hif_device,
+				uint32_t *targregs)
 {
 	int i;
 	uint32_t val;

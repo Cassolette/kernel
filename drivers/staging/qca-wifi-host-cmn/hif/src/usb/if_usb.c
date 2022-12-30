@@ -1,8 +1,5 @@
 /*
- * Copyright (c) 2013-2017 The Linux Foundation. All rights reserved.
- *
- * Previously licensed under the ISC license by Qualcomm Atheros, Inc.
- *
+ * Copyright (c) 2013-2020 The Linux Foundation. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -19,23 +16,20 @@
  * PERFORMANCE OF THIS SOFTWARE.
  */
 
-/*
- * This file was originally distributed by Qualcomm Atheros, Inc.
- * under proprietary terms before Copyright ownership was assigned
- * to the Linux Foundation.
- */
-
 #include <linux/usb.h>
 #include <linux/usb/hcd.h>
 #include "if_usb.h"
 #include "hif_usb_internal.h"
-#include "bmi_msg.h"		/* TARGET_TYPE_ */
+#include "target_type.h"		/* TARGET_TYPE_ */
 #include "regtable_usb.h"
 #include "ol_fw.h"
 #include "hif_debug.h"
 #include "epping_main.h"
 #include "hif_main.h"
-#include "qwlan_version.h"
+#include "usb_api.h"
+#ifdef CONFIG_PLD_USB_CNSS
+#include "pld_common.h"
+#endif
 
 #define DELAY_FOR_TARGET_READY 200	/* 200ms */
 
@@ -60,9 +54,13 @@ static inline QDF_STATUS
 hif_usb_diag_write_cold_reset(struct hif_softc *scn)
 {
 	struct hif_opaque_softc *hif_hdl = GET_HIF_OPAQUE_HDL(scn);
+	struct hif_target_info *tgt_info = &scn->target_info;
 
+	/* For Genoa, chip-reset is handled in CNSS driver */
+	if (tgt_info->target_type == TARGET_TYPE_QCN7605)
+		return QDF_STATUS_SUCCESS;
 
-	HIF_DBG("%s: resetting SOC", __func__);
+	hif_debug("resetting SOC");
 
 	return hif_diag_write_access(hif_hdl,
 				(ROME_USB_SOC_RESET_CONTROL_COLD_RST_LSB |
@@ -84,7 +82,7 @@ hif_usb_procfs_init(struct hif_softc *scn)
 	HIF_ENTER();
 
 	if (athdiag_procfs_init(scn) != 0) {
-		HIF_ERROR("athdiag_procfs_init failed");
+		hif_err("athdiag_procfs_init failed");
 		ret = A_ERROR;
 	}
 
@@ -144,7 +142,7 @@ static int hif_usb_disable_lpm(struct usb_device *udev)
 	HIF_ENTER();
 
 	if (!udev || !udev->bus) {
-		HIF_ERROR("Invalid input parameters");
+		hif_err("Invalid input parameters");
 		goto exit;
 	}
 
@@ -155,17 +153,15 @@ static int hif_usb_disable_lpm(struct usb_device *udev)
 			if (!ret) {
 				udev->usb2_hw_lpm_enabled = false;
 				udev->usb2_hw_lpm_capable = false;
-				HIF_TRACE("%s: LPM is disabled", __func__);
+				hif_info("LPM is disabled");
 			} else {
-				HIF_TRACE("%s: Fail to disable LPM",
-						__func__);
+				hif_info("Fail to disable LPM");
 			}
 		} else {
-			HIF_TRACE("%s: hcd doesn't support LPM",
-						__func__);
+			hif_info("hcd doesn't support LPM");
 		}
 	} else {
-		HIF_TRACE("%s: LPM isn't enabled", __func__);
+		hif_info("LPM isn't enabled");
 	}
 exit:
 	HIF_EXIT();
@@ -190,22 +186,23 @@ QDF_STATUS hif_usb_enable_bus(struct hif_softc *scn,
 {
 	struct usb_interface *interface = (struct usb_interface *)bdev;
 	struct usb_device_id *id = (struct usb_device_id *)bid;
-	int ret = 0;
+	QDF_STATUS ret = QDF_STATUS_SUCCESS;
 	struct hif_usb_softc *sc;
 	struct usb_device *usbdev = interface_to_usbdev(interface);
 	int vendor_id, product_id;
-
-	usb_get_dev(usbdev);
+	struct hif_target_info *tgt_info;
+	struct hif_opaque_softc *hif_hdl = GET_HIF_OPAQUE_HDL(scn);
+	u32 hif_type;
+	u32 target_type;
 
 	if (!scn) {
-		HIF_ERROR("%s: hif_ctx is NULL", __func__);
+		hif_err("hif_ctx is NULL");
 		goto err_usb;
 	}
 
 	sc = HIF_GET_USB_SOFTC(scn);
 
-	HIF_INFO("%s hif_softc %pK usbdev %pK interface %pK\n",
-		__func__,
+	hif_debug("hif_softc %pK usbdev %pK interface %pK",
 		scn,
 		usbdev,
 		interface);
@@ -213,21 +210,35 @@ QDF_STATUS hif_usb_enable_bus(struct hif_softc *scn,
 	vendor_id = qdf_le16_to_cpu(usbdev->descriptor.idVendor);
 	product_id = qdf_le16_to_cpu(usbdev->descriptor.idProduct);
 
-	HIF_ERROR("%s: con_mode = 0x%x, vendor_id = 0x%x product_id = 0x%x",
-		__func__, hif_get_conparam(scn), vendor_id, product_id);
+	hif_err("con_mode = 0x%x, vendor_id = 0x%x product_id = 0x%x",
+		hif_get_conparam(scn), vendor_id, product_id);
 
 	sc->pdev = (void *)usbdev;
 	sc->dev = &usbdev->dev;
 	sc->devid = id->idProduct;
 
-	if ((usb_control_msg(usbdev, usb_sndctrlpipe(usbdev, 0),
-			USB_REQ_SET_CONFIGURATION, 0, 1, 0, NULL, 0,
-			HZ)) < 0) {
-		HIF_ERROR("%s[%d]", __func__, __LINE__);
-		goto err_usb;
+	hif_get_device_type(product_id, 0, &hif_type, &target_type);
+	tgt_info = hif_get_target_info_handle(hif_hdl);
+	if (target_type == TARGET_TYPE_QCN7605)
+		tgt_info->target_type = TARGET_TYPE_QCN7605;
+
+	/*
+	 * For Genoa, skip set_configuration, since it is handled
+	 * by CNSS driver.
+	 */
+	if (target_type != TARGET_TYPE_QCN7605) {
+		usb_get_dev(usbdev);
+		if ((usb_control_msg(usbdev, usb_sndctrlpipe(usbdev, 0),
+				     USB_REQ_SET_CONFIGURATION, 0, 1, 0,
+				     NULL, 0, HZ)) < 0) {
+			hif_err("usb_control_msg failed");
+			goto err_usb;
+		}
+		usb_set_interface(usbdev, 0, 0);
+		sc->reboot_notifier.notifier_call = hif_usb_reboot;
+		register_reboot_notifier(&sc->reboot_notifier);
 	}
 
-	usb_set_interface(usbdev, 0, 0);
 	/* disable lpm to avoid usb2.0 probe timeout */
 	hif_usb_disable_lpm(usbdev);
 
@@ -238,11 +249,8 @@ QDF_STATUS hif_usb_enable_bus(struct hif_softc *scn,
 	 */
 
 	sc->interface = interface;
-	sc->reboot_notifier.notifier_call = hif_usb_reboot;
-	register_reboot_notifier(&sc->reboot_notifier);
-
 	if (hif_usb_device_init(sc) != QDF_STATUS_SUCCESS) {
-		HIF_ERROR("ath: %s: hif_usb_device_init failed", __func__);
+		hif_err("hif_usb_device_init failed");
 		goto err_reset;
 	}
 
@@ -252,16 +260,18 @@ QDF_STATUS hif_usb_enable_bus(struct hif_softc *scn,
 	hif_usb_unload_dev_num = usbdev->devnum;
 	g_usb_sc = sc;
 	HIF_EXIT();
-	return 0;
+	return QDF_STATUS_SUCCESS;
 
 err_reset:
 	hif_usb_diag_write_cold_reset(scn);
 	g_usb_sc = NULL;
 	hif_usb_unload_dev_num = -1;
-	unregister_reboot_notifier(&sc->reboot_notifier);
+	if (target_type != TARGET_TYPE_QCN7605)
+		unregister_reboot_notifier(&sc->reboot_notifier);
 err_usb:
 	ret = QDF_STATUS_E_FAILURE;
-	usb_put_dev(usbdev);
+	if (target_type != TARGET_TYPE_QCN7605)
+		usb_put_dev(usbdev);
 	return ret;
 }
 
@@ -288,13 +298,15 @@ void hif_usb_disable_bus(struct hif_softc *hif_ctx)
 	struct hif_usb_softc *sc = HIF_GET_USB_SOFTC(hif_ctx);
 	struct usb_interface *interface = sc->interface;
 	struct usb_device *udev = interface_to_usbdev(interface);
+	struct hif_target_info *tgt_info = &hif_ctx->target_info;
 
-	HIF_TRACE("%s: trying to remove hif_usb!", __func__);
+	hif_info("trying to remove hif_usb!");
 
 	/* disable lpm to avoid following cold reset will
 	 * cause xHCI U1/U2 timeout
 	 */
-	usb_disable_lpm(udev);
+	if (tgt_info->target_type != TARGET_TYPE_QCN7605)
+		usb_disable_lpm(udev);
 
 	/* wait for disable lpm */
 	set_current_state(TASK_INTERRUPTIBLE);
@@ -307,12 +319,14 @@ void hif_usb_disable_bus(struct hif_softc *hif_ctx)
 	if (g_usb_sc->suspend_state)
 		hif_bus_resume(GET_HIF_OPAQUE_HDL(hif_ctx));
 
-	unregister_reboot_notifier(&sc->reboot_notifier);
-	usb_put_dev(interface_to_usbdev(interface));
+	if (tgt_info->target_type != TARGET_TYPE_QCN7605) {
+		unregister_reboot_notifier(&sc->reboot_notifier);
+		usb_put_dev(udev);
+	}
 
 	hif_usb_device_deinit(sc);
 
-	HIF_TRACE("%s hif_usb removed !!!!!!", __func__);
+	hif_info("hif_usb removed !!!!!!");
 }
 
 /**
@@ -327,7 +341,7 @@ void hif_usb_disable_bus(struct hif_softc *hif_ctx)
 int hif_usb_bus_suspend(struct hif_softc *hif_ctx)
 {
 	struct hif_usb_softc *sc = HIF_GET_USB_SOFTC(hif_ctx);
-	HIF_DEVICE_USB *device = HIF_GET_USB_DEVICE(hif_ctx);
+	struct HIF_DEVICE_USB *device = HIF_GET_USB_DEVICE(hif_ctx);
 
 	HIF_ENTER();
 	sc->suspend_state = 1;
@@ -348,7 +362,7 @@ int hif_usb_bus_suspend(struct hif_softc *hif_ctx)
 int hif_usb_bus_resume(struct hif_softc *hif_ctx)
 {
 	struct hif_usb_softc *sc = HIF_GET_USB_SOFTC(hif_ctx);
-	HIF_DEVICE_USB *device = HIF_GET_USB_DEVICE(hif_ctx);
+	struct HIF_DEVICE_USB *device = HIF_GET_USB_DEVICE(hif_ctx);
 
 	HIF_ENTER();
 	sc->suspend_state = 0;
@@ -422,7 +436,7 @@ void hif_usb_reg_tbl_attach(struct hif_softc *scn)
 	struct hif_target_info *tgt_info = &scn->target_info;
 	struct hif_opaque_softc *hif_hdl = GET_HIF_OPAQUE_HDL(scn);
 
-	if (scn->hostdef == NULL && scn->targetdef == NULL) {
+	if (!scn->hostdef && !scn->targetdef) {
 		switch (tgt_info->target_type) {
 		case TARGET_TYPE_AR6320:
 			switch (tgt_info->target_version) {
@@ -463,8 +477,7 @@ void hif_usb_reg_tbl_attach(struct hif_softc *scn)
 					RTC_SOC_BASE_ADDRESS),
 					&chip_id);
 		if (rv != QDF_STATUS_SUCCESS) {
-			HIF_ERROR("%s: get chip id val (%d)", __func__,
-				rv);
+			hif_err("get chip id val: %d", rv);
 		}
 		tgt_info->target_revision =
 				CHIP_ID_REVISION_GET(chip_id);
@@ -496,7 +509,31 @@ void hif_usb_get_hw_info(struct hif_softc *hif_ctx)
 	hif_usb_reg_tbl_attach(hif_ctx);
 }
 
+#if defined(CONFIG_PLD_USB_CNSS) && !defined(CONFIG_BYPASS_QMI)
+/**
+ * hif_bus_configure() - configure the bus
+ * @scn: pointer to the hif context.
+ *
+ * return: 0 for success. nonzero for failure.
+ */
+int hif_usb_bus_configure(struct hif_softc *scn)
+{
+	struct pld_wlan_enable_cfg cfg;
+	enum pld_driver_mode mode;
+	uint32_t con_mode = hif_get_conparam(scn);
 
+	if (QDF_GLOBAL_FTM_MODE == con_mode)
+		mode = PLD_FTM;
+	else if (QDF_GLOBAL_COLDBOOT_CALIB_MODE == con_mode)
+		mode = PLD_COLDBOOT_CALIBRATION;
+	else if (QDF_IS_EPPING_ENABLED(con_mode))
+		mode = PLD_EPPING;
+	else
+		mode = PLD_MISSION;
+
+	return pld_wlan_enable(scn->qdf_dev->dev, &cfg, mode);
+}
+#else
 /**
  * hif_bus_configure() - configure the bus
  * @scn: pointer to the hif context.
@@ -507,6 +544,7 @@ int hif_usb_bus_configure(struct hif_softc *scn)
 {
 	return 0;
 }
+#endif
 
 /**
  * hif_usb_irq_enable() - hif_usb_irq_enable
@@ -583,26 +621,24 @@ void hif_fw_assert_ramdump_pattern(struct hif_usb_softc *sc)
 
 	data = sc->fw_data;
 	len = sc->fw_data_len;
-	pattern = *((A_UINT32 *) data);
+	pattern = *((uint32_t *) data);
 
 	qdf_assert(sc->ramdump_index < FW_RAM_SEG_CNT);
 	i = sc->ramdump_index;
 	reg = (uint32_t *) (data + 4);
 	if (sc->fw_ram_dumping == 0) {
 		sc->fw_ram_dumping = 1;
-		HIF_ERROR("Firmware %s dump:\n", fw_ram_seg_name[i]);
+		hif_info("Firmware %s dump:", fw_ram_seg_name[i]);
 		sc->ramdump[i] =
 			qdf_mem_malloc(sizeof(struct fw_ramdump) +
 					fw_ram_reg_size[i]);
-		if (!sc->ramdump[i]) {
-			pr_err("Fail to allocate memory for ram dump");
+		if (!sc->ramdump[i])
 			QDF_BUG(0);
-		}
+
 		(sc->ramdump[i])->mem = (uint8_t *) (sc->ramdump[i] + 1);
 		fw_ram_seg_addr[i] = (sc->ramdump[i])->mem;
-		HIF_ERROR("FW %s start addr = %#08x\n",
-			fw_ram_seg_name[i], *reg);
-		HIF_ERROR("Memory addr for %s = %pK\n",
+		hif_info("FW %s start addr = %#08x Memory addr for %s = %pK",
+			fw_ram_seg_name[i], *reg,
 			fw_ram_seg_name[i],
 			(sc->ramdump[i])->mem);
 		(sc->ramdump[i])->start_addr = *reg;
@@ -612,15 +648,15 @@ void hif_fw_assert_ramdump_pattern(struct hif_usb_softc *sc)
 	ram_ptr = (sc->ramdump[i])->mem + (sc->ramdump[i])->length;
 	(sc->ramdump[i])->length += (len - 8);
 	if (sc->ramdump[i]->length <= fw_ram_reg_size[i]) {
-		qdf_mem_copy(ram_ptr, (A_UINT8 *) reg, len - 8);
+		qdf_mem_copy(ram_ptr, (uint8_t *) reg, len - 8);
 	} else {
-		HIF_ERROR("memory copy overlap\n");
+		hif_err("memory copy overlap");
 		QDF_BUG(0);
 	}
 
 	if (pattern == FW_RAMDUMP_END_PATTERN) {
-		HIF_ERROR("%s memory size = %d\n", fw_ram_seg_name[i],
-				(sc->ramdump[i])->length);
+		hif_err("%s memory size = %d", fw_ram_seg_name[i],
+			(sc->ramdump[i])->length);
 		if (i == (FW_RAM_SEG_CNT - 1))
 			QDF_BUG(0);
 
@@ -663,19 +699,18 @@ void hif_usb_ramdump_handler(struct hif_opaque_softc *scn)
 
 	data = sc->fw_data;
 	len = sc->fw_data_len;
-	pattern = *((A_UINT32 *) data);
+	pattern = *((uint32_t *) data);
 
 	if (pattern == FW_ASSERT_PATTERN) {
-		HIF_ERROR("Firmware crash detected...\n");
-		HIF_ERROR("Host SW version: %s\n", QWLAN_VERSIONSTR);
-		HIF_ERROR("target_type: %d.target_version %d. target_revision%d.",
+		hif_err("Firmware crash detected...");
+		hif_err("target_type: %d target_version: %d target_revision: %d",
 			tgt_info->target_type,
 			tgt_info->target_version,
 			tgt_info->target_revision);
 
 		reg = (uint32_t *) (data + 4);
 		print_hex_dump(KERN_DEBUG, " ", DUMP_PREFIX_OFFSET, 16, 4, reg,
-				min_t(A_UINT32, len - 4, FW_REG_DUMP_CNT * 4),
+				min_t(uint32_t, len - 4, FW_REG_DUMP_CNT * 4),
 				false);
 		sc->fw_ram_dumping = 0;
 
@@ -683,7 +718,7 @@ void hif_usb_ramdump_handler(struct hif_opaque_softc *scn)
 		reg = (uint32_t *) (data + 4);
 		start_addr = *reg++;
 		if (sc->fw_ram_dumping == 0) {
-			pr_err("Firmware stack dump:");
+			qdf_nofl_err("Firmware stack dump:");
 			sc->fw_ram_dumping = 1;
 			fw_stack_addr = start_addr;
 		}
@@ -692,13 +727,13 @@ void hif_usb_ramdump_handler(struct hif_opaque_softc *scn)
 		for (i = 0; i < (len - 8); i += 16) {
 			if ((*reg == FW_REG_END_PATTERN) && (i == len - 12)) {
 				sc->fw_ram_dumping = 0;
-				pr_err("Stack start address = %#08x\n",
-					fw_stack_addr);
+				qdf_nofl_err("Stack start address = %#08x",
+					     fw_stack_addr);
 				break;
 			}
 			hex_dump_to_buffer(reg, remaining, 16, 4, str_buf,
 						sizeof(str_buf), false);
-			pr_err("%#08x: %s\n", start_addr + i, str_buf);
+			qdf_nofl_err("%#08x: %s", start_addr + i, str_buf);
 			remaining -= 16;
 			reg += 4;
 		}
@@ -723,3 +758,19 @@ int hif_check_fw_reg(struct hif_opaque_softc *scn)
 }
 #endif
 
+/**
+ * hif_usb_needs_bmi() - return true if the soc needs bmi through the driver
+ * @scn: hif context
+ *
+ * Return: true if soc needs driver bmi otherwise false
+ */
+bool hif_usb_needs_bmi(struct hif_softc *scn)
+{
+	struct hif_target_info *tgt_info = &scn->target_info;
+
+	/* BMI is not supported in Genoa */
+	if (tgt_info->target_type == TARGET_TYPE_QCN7605)
+		return false;
+
+	return true;
+}

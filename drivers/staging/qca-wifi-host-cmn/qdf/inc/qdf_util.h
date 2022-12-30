@@ -1,8 +1,5 @@
 /*
- * Copyright (c) 2014-2017 The Linux Foundation. All rights reserved.
- *
- * Previously licensed under the ISC license by Qualcomm Atheros, Inc.
- *
+ * Copyright (c) 2014-2021 The Linux Foundation. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -17,12 +14,6 @@
  * PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR OTHER
  * TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
  * PERFORMANCE OF THIS SOFTWARE.
- */
-
-/*
- * This file was originally distributed by Qualcomm Atheros, Inc.
- * under proprietary terms before Copyright ownership was assigned
- * to the Linux Foundation.
  */
 
 /**
@@ -54,6 +45,16 @@ typedef __qdf_wait_queue_head_t qdf_wait_queue_head_t;
  * @_expr: expression to be checked
  */
 #define qdf_likely(_expr)       __qdf_likely(_expr)
+
+/**
+ * qdf_wmb - write memory barrier.
+ */
+#define qdf_wmb()                 __qdf_wmb()
+
+/**
+ * qdf_rmb - read memory barrier.
+ */
+#define qdf_rmb()                 __qdf_rmb()
 
 /**
  * qdf_mb - read + write memory barrier.
@@ -91,30 +92,85 @@ typedef __qdf_wait_queue_head_t qdf_wait_queue_head_t;
  */
 #define qdf_target_assert_always(expr)  __qdf_target_assert(expr)
 
+#define QDF_SET_PARAM(__param, __val)    ((__param) |= (1 << (__val)))
+#define QDF_HAS_PARAM(__param, __val)    ((__param) &  (1 << (__val)))
+#define QDF_CLEAR_PARAM(__param, __val)  ((__param) &= (~(1 << (__val))))
+
 /**
  * QDF_MAX - get maximum of two values
- * @_x: 1st arguement
- * @_y: 2nd arguement
+ * @_x: 1st argument
+ * @_y: 2nd argument
  */
 #define QDF_MAX(_x, _y) (((_x) > (_y)) ? (_x) : (_y))
 
 /**
  * QDF_MIN - get minimum of two values
- * @_x: 1st arguement
- * @_y: 2nd arguement
+ * @_x: 1st argument
+ * @_y: 2nd argument
  */
 #define QDF_MIN(_x, _y) (((_x) < (_y)) ? (_x) : (_y))
 
 /**
- * qdf_status_to_os_return - returns the status to OS.
- * @status: enum QDF_STATUS
- *
- * returns: int status success/failure
+ * QDF_IS_ADDR_BROADCAST - is mac address broadcast mac address
+ * @_a: pointer to mac address
  */
-static inline int qdf_status_to_os_return(QDF_STATUS status)
-{
-	return __qdf_status_to_os_return(status);
-}
+#define QDF_IS_ADDR_BROADCAST(_a)  \
+	((_a)[0] == 0xff &&        \
+	 (_a)[1] == 0xff &&        \
+	 (_a)[2] == 0xff &&        \
+	 (_a)[3] == 0xff &&        \
+	 (_a)[4] == 0xff &&        \
+	 (_a)[5] == 0xff)
+
+/* Get number of bits from the index bit */
+#define QDF_GET_BITS(_val, _index, _num_bits) \
+		(((_val) >> (_index)) & ((1 << (_num_bits)) - 1))
+
+/* Set val to number of bits from the index bit */
+#define QDF_SET_BITS(_var, _index, _num_bits, _val) do { \
+		(_var) &= ~(((1 << (_num_bits)) - 1) << (_index)); \
+		(_var) |= (((_val) & ((1 << (_num_bits)) - 1)) << (_index)); \
+		} while (0)
+
+/* Get number of bits from the index bit supporting 64 bits */
+#define QDF_GET_BITS64(_val, _index, _num_bits) \
+		(((_val) >> (_index)) & ((1LLU << (_num_bits)) - 1))
+
+#define QDF_DECLARE_EWMA(name, factor, weight) \
+	__QDF_DECLARE_EWMA(name, factor, weight)
+
+#define qdf_ewma_tx_lag __qdf_ewma_tx_lag
+
+#define qdf_ewma_tx_lag_init(tx_lag) \
+	__qdf_ewma_tx_lag_init(tx_lag)
+
+#define qdf_ewma_tx_lag_add(tx_lag, value) \
+	__qdf_ewma_tx_lag_add(tx_lag, value)
+
+#define qdf_ewma_tx_lag_read(tx_lag) \
+	 __qdf_ewma_tx_lag_read(tx_lag)
+
+#define qdf_ewma_rx_rssi __qdf_ewma_rx_rssi
+
+#define qdf_ewma_rx_rssi_init(rx_rssi) \
+	__qdf_ewma_rx_rssi_init(rx_rssi)
+
+#define qdf_ewma_rx_rssi_add(rx_rssi, value) \
+	__qdf_ewma_rx_rssi_add(rx_rssi, value)
+
+#define qdf_ewma_rx_rssi_read(rx_rssi) \
+	__qdf_ewma_rx_rssi_read(rx_rssi)
+
+#define QDF_CHAR_BIT 8
+
+/**
+ * qdf_bitmap - Define a bitmap
+ * @name: name of the bitmap
+ * @bits: num of bits in the bitmap
+ *
+ * Return: none
+ */
+#define qdf_bitmap(name, bits) __qdf_bitmap(name, bits)
 
 /**
  * qdf_set_bit() - set bit in address
@@ -161,12 +217,55 @@ static inline int qdf_status_to_os_return(QDF_STATUS status)
  */
 #define qdf_find_first_bit(addr, nbits)    __qdf_find_first_bit(addr, nbits)
 
+/**
+ * qdf_bitmap_empty() - Check if bitmap is empty
+ * @addr: Address buffer pointer
+ * @nbits: Number of bits
+ *
+ * Return: True if no bit set, else false
+ */
+#define qdf_bitmap_empty(addr, nbits)    __qdf_bitmap_empty(addr, nbits)
+
+/**
+ * qdf_bitmap_and() - AND operation on the bitmap
+ * @dst: Destination buffer pointer
+ * @src1: First source buffer pointer
+ * @src2: Second source buffer pointer
+ * @nbits: Number of bits
+ *
+ * Return: Bitwise and of src1 and src2 in dst
+ */
+#define qdf_bitmap_and(dst, src1, src2, nbits) \
+		__qdf_bitmap_and(dst, src1, src2, nbits)
+
 #define qdf_wait_queue_interruptible(wait_queue, condition) \
 		__qdf_wait_queue_interruptible(wait_queue, condition)
+
+/**
+ * qdf_wait_queue_timeout() - wait for specified time on given condition
+ * @wait_queue: wait queue to wait on
+ * @condition: condition to wait on
+ * @timeout: timeout value in jiffies
+ *
+ * Return: 0 if condition becomes false after timeout
+ *         1 or remaining jiffies, if condition becomes true during timeout
+ */
+#define qdf_wait_queue_timeout(wait_queue, condition, timeout) \
+			__qdf_wait_queue_timeout(wait_queue, \
+						condition, timeout)
+
 
 #define qdf_init_waitqueue_head(_q) __qdf_init_waitqueue_head(_q)
 
 #define qdf_wake_up_interruptible(_q) __qdf_wake_up_interruptible(_q)
+
+/**
+ * qdf_wake_up() - wakes up sleeping waitqueue
+ * @wait_queue: wait queue, which needs wake up
+ *
+ * Return: none
+ */
+#define qdf_wake_up(_q) __qdf_wake_up(_q)
 
 #define qdf_wake_up_completion(_q) __qdf_wake_up_completion(_q)
 
@@ -194,6 +293,20 @@ static inline int qdf_status_to_os_return(QDF_STATUS status)
  * Return: rounded value
  */
 #define qdf_roundup(x, y) __qdf_roundup(x, y)
+
+/**
+ * qdf_ceil() - roundup of x/y
+ * @x: dividend
+ * @y: divisor
+ *
+ * Return: rounded value
+ */
+#define qdf_ceil(x, y) __qdf_ceil(x, y)
+
+/**
+ * qdf_in_interrupt - returns true if in interrupt context
+ */
+#define qdf_in_interrupt  __qdf_in_interrupt
 
 /**
  * qdf_is_macaddr_equal() - compare two QDF MacAddress
@@ -225,7 +338,7 @@ static inline bool qdf_is_macaddr_equal(struct qdf_mac_addr *mac_addr1,
  */
 static inline bool qdf_is_macaddr_zero(struct qdf_mac_addr *mac_addr)
 {
-	struct qdf_mac_addr zero_mac_addr = QDF_MAC_ADDR_ZERO_INITIALIZER;
+	struct qdf_mac_addr zero_mac_addr = QDF_MAC_ADDR_ZERO_INIT;
 
 	return qdf_is_macaddr_equal(mac_addr, &zero_mac_addr);
 }
@@ -274,8 +387,7 @@ static inline bool qdf_is_macaddr_group(struct qdf_mac_addr *mac_addr)
  */
 static inline bool qdf_is_macaddr_broadcast(struct qdf_mac_addr *mac_addr)
 {
-	struct qdf_mac_addr broadcast_mac_addr =
-		QDF_MAC_ADDR_BROADCAST_INITIALIZER;
+	struct qdf_mac_addr broadcast_mac_addr = QDF_MAC_ADDR_BCAST_INIT;
 	return qdf_is_macaddr_equal(mac_addr, &broadcast_mac_addr);
 }
 
@@ -507,6 +619,21 @@ static inline uint8_t *qdf_get_u32(uint8_t *ptr, uint32_t *value)
 #define qdf_min(a, b)   __qdf_min(a, b)
 
 /**
+ * qdf_ffz() - find first (least significant) zero bit
+ * @mask: the bitmask to check
+ *
+ * Return: The zero-based index of the first zero bit, or -1 if none are found
+ */
+#define qdf_ffz(mask) __qdf_ffz(mask)
+
+/**
+ * qdf_prefetch - prefetches the cacheline for read
+ *
+ * @x: address to be prefetched
+ */
+#define qdf_prefetch(x)                   __qdf_prefetch(x)
+
+/**
  * qdf_get_pwr2() - get next power of 2 integer from input value
  * @value: input value to find next power of 2 integer
  *
@@ -533,6 +660,59 @@ static inline
 int qdf_get_cpu(void)
 {
 	return __qdf_get_cpu();
+}
+
+/**
+ * qdf_get_hweight8() - count num of 1's in 8-bit bitmap
+ * @value: input bitmap
+ *
+ * Count num of 1's set in the 8-bit bitmap
+ *
+ * Return: num of 1's
+ */
+static inline
+unsigned int qdf_get_hweight8(unsigned int w)
+{
+	unsigned int res = w - ((w >> 1) & 0x55);
+	res = (res & 0x33) + ((res >> 2) & 0x33);
+	return (res + (res >> 4)) & 0x0F;
+}
+
+/**
+ * qdf_get_hweight16() - count num of 1's in 16-bit bitmap
+ * @value: input bitmap
+ *
+ * Count num of 1's set in the 16-bit bitmap
+ *
+ * Return: num of 1's
+ */
+static inline
+unsigned int qdf_get_hweight16(unsigned int w)
+{
+	unsigned int res = (w & 0x5555) + ((w >> 1) & 0x5555);
+
+	res = (res & 0x3333) + ((res >> 2) & 0x3333);
+	res = (res & 0x0F0F) + ((res >> 4) & 0x0F0F);
+	return (res & 0x00FF) + ((res >> 8) & 0x00FF);
+}
+
+/**
+ * qdf_get_hweight32() - count num of 1's in 32-bit bitmap
+ * @value: input bitmap
+ *
+ * Count num of 1's set in the 32-bit bitmap
+ *
+ * Return: num of 1's
+ */
+static inline
+unsigned int qdf_get_hweight32(unsigned int w)
+{
+	unsigned int res = (w & 0x55555555) + ((w >> 1) & 0x55555555);
+
+	res = (res & 0x33333333) + ((res >> 2) & 0x33333333);
+	res = (res & 0x0F0F0F0F) + ((res >> 4) & 0x0F0F0F0F);
+	res = (res & 0x00FF00FF) + ((res >> 8) & 0x00FF00FF);
+	return (res & 0x0000FFFF) + ((res >> 16) & 0x0000FFFF);
 }
 
 /**
@@ -624,6 +804,20 @@ uint64_t qdf_do_div(uint64_t dividend, uint32_t divisor)
 }
 
 /**
+ * qdf_do_div_rem() - wrapper function for kernel macro(do_div)
+ *                    to get remainder.
+ * @dividend: Dividend value
+ * @divisor : Divisor value
+ *
+ * Return: remainder
+ */
+static inline
+uint64_t qdf_do_div_rem(uint64_t dividend, uint32_t divisor)
+{
+	return __qdf_do_div_rem(dividend, divisor);
+}
+
+/**
  * qdf_get_random_bytes() - returns nbytes bytes of random
  * data
  *
@@ -634,4 +828,62 @@ void qdf_get_random_bytes(void *buf, int nbytes)
 {
 	return __qdf_get_random_bytes(buf, nbytes);
 }
+
+/**
+ * qdf_hex_to_bin() - QDF API to Convert hexa decimal ASCII character to
+ * unsigned integer value.
+ * @ch: hexa decimal ASCII character
+ *
+ * Return: For hexa decimal ASCII char return actual decimal value
+ *	   else -1 for bad input.
+ */
+static inline
+int qdf_hex_to_bin(char ch)
+{
+	return __qdf_hex_to_bin(ch);
+}
+
+/**
+ * qdf_hex_str_to_binary() - QDF API to Convert string of hexa decimal
+ * ASCII characters to array of unsigned integers.
+ * @dst: output array to hold converted values
+ * @src: input string of hexa decimal ASCII characters
+ * @count: size of dst string
+ *
+ * This function is used to convert string of hexa decimal characters to
+ * array of unsigned integers and caller should ensure:
+ *	a) @dst, @src are not NULL,
+ *	b) size of @dst should be (size of src / 2)
+ *
+ * Example 1:
+ * src = 11aa, means, src[0] = '1', src[1] = '2', src[2] = 'a', src[3] = 'a'
+ * count = (size of src / 2) = 2
+ * after conversion, dst[0] = 0x11, dst[1] = oxAA and return (0).
+ *
+ * Example 2:
+ * src = 11az, means, src[0] = '1', src[1] = '2', src[2] = 'a', src[3] = 'z'
+ * src[3] is not ASCII hexa decimal character, return negative value (-1).
+ *
+ * Return: For a string of hexa decimal ASCII characters return 0
+ *	   else -1 for bad input.
+ */
+static inline
+int qdf_hex_str_to_binary(u8 *dst, const char *src, size_t count)
+{
+	return __qdf_hex_str_to_binary(dst, src, count);
+}
+
+/**
+ * qdf_fls() - find last set bit in a given 32 bit input
+ * @x: 32 bit mask
+ *
+ * Return: zero if the input is zero, otherwise returns the bit
+ * position of the last set bit, where the LSB is 1 and MSB is 32.
+ */
+static inline
+int qdf_fls(uint32_t x)
+{
+	return __qdf_fls(x);
+}
+
 #endif /*_QDF_UTIL_H*/

@@ -1,8 +1,5 @@
 /*
- * Copyright (c) 2014-2017 The Linux Foundation. All rights reserved.
- *
- * Previously licensed under the ISC license by Qualcomm Atheros, Inc.
- *
+ * Copyright (c) 2014-2019 The Linux Foundation. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -17,12 +14,6 @@
  * PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR OTHER
  * TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
  * PERFORMANCE OF THIS SOFTWARE.
- */
-
-/*
- * This file was originally distributed by Qualcomm Atheros, Inc.
- * under proprietary terms before Copyright ownership was assigned
- * to the Linux Foundation.
  */
 
 #ifndef EPPING_MAIN_H
@@ -42,8 +33,25 @@
 #include <qdf_types.h>
 
 /* epping_main signatures */
+#ifdef WLAN_FEATURE_EPPING
 int epping_open(void);
 void epping_close(void);
 void epping_disable(void);
-int epping_enable(struct device *parent_dev);
+int epping_enable(struct device *parent_dev, bool rtnl_held);
+void epping_enable_adapter(void);
+#else
+static inline int epping_open(void)
+{
+	return QDF_STATUS_E_INVAL;
+}
+
+static inline int epping_enable(struct device *parent_dev, bool rtnl_held)
+{
+	return QDF_STATUS_E_INVAL;
+}
+
+static inline void epping_close(void) {}
+static inline void epping_disable(void) {}
+static inline void epping_enable_adapter(void) {}
+#endif
 #endif /* end #ifndef EPPING_MAIN_H */

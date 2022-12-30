@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2016-2017 The Linux Foundation. All rights reserved.
+ * Copyright (c) 2016-2019 The Linux Foundation. All rights reserved.
  * Copyright (c) 2008 Atheros Communications, Inc.
  *
  * Permission to use, copy, modify, and/or distribute this software for
@@ -36,6 +36,7 @@
  * @DFS_MKK4_DOMAIN: MKK domain
  * @DFS_CN_DOMAIN: China domain
  * @DFS_KR_DOMAIN: Korea domain
+ * @DFS_MKKN_DOMAIN: MKKN domain
  * @DFS_UNDEF_DOMAIN: Undefined domain
  */
 enum DFS_DOMAIN {
@@ -45,21 +46,19 @@ enum DFS_DOMAIN {
 	DFS_MKK4_DOMAIN   = 3,
 	DFS_CN_DOMAIN     = 4,
 	DFS_KR_DOMAIN     = 5,
+	DFS_MKKN_DOMAIN   = 6,
 	DFS_UNDEF_DOMAIN
 };
 
 /* CAPABILITY: the device support STA DFS */
-#define IEEE80211_CEXT_STADFS 0x00000040
-
-#define IEEE80211_SELECT_NONDFS_AND_DFS 0
-#define IEEE80211_SELECT_NONDFS_ONLY    1
-#define IEEE80211_SELECT_NXT_CH_POST_RADAR_DETECT   0
-#define IEEE80211_SELECT_APRIORI_NXT_CH             1
+#define WLAN_CEXT_STADFS 0x00000040
 
 /**
- * dfs_ieee80211_chan2freq() - Convert channel to frequency value.
- * @chan: Pointer to dfs_ieee80211_channel structure.
+ * dfs_chan2freq() - Convert channel to frequency value.
+ * @chan: Pointer to dfs_channel structure.
+ *
+ * Return: Channel frequency.
  */
-u_int dfs_ieee80211_chan2freq(struct dfs_ieee80211_channel *chan);
+uint16_t dfs_chan2freq(struct dfs_channel *chan);
 
 #endif /*  _DFS_INTERNAL_H_ */

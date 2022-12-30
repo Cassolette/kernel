@@ -1,8 +1,5 @@
 /*
- * Copyright (c) 2014-2017 The Linux Foundation. All rights reserved.
- *
- * Previously licensed under the ISC license by Qualcomm Atheros, Inc.
- *
+ * Copyright (c) 2014-2020 The Linux Foundation. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -17,12 +14,6 @@
  * PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR OTHER
  * TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
  * PERFORMANCE OF THIS SOFTWARE.
- */
-
-/*
- * This file was originally distributed by Qualcomm Atheros, Inc.
- * under proprietary terms before Copyright ownership was assigned
- * to the Linux Foundation.
  */
 
 #ifndef LOG_CODES_H
@@ -110,7 +101,7 @@
 
 /* LOG_BASE_C is what was used before expanding the use of the equipment ID.
  * TODO: Once all targets are using the "core" diag system, this should be
- * ommitted. */
+ * omitted. */
 #define LOG_BASE_C LOG_1X_BASE_C
 
 /* -------------------------------------------------------------------------
@@ -2009,6 +2000,16 @@
 
 /* The last defined DMSS log code */
 #define LOG_1X_LAST_C                                   ((0x8E0) + LOG_1X_BASE_C)
+
+#define LOG_WLAN_COLD_BOOT_CAL_DATA_C                  ((0xA18) + LOG_1X_BASE_C)
+
+#define LOG_WLAN_AUTH_ASSOC_TX_RX_INFO_C              ((0xA19) + LOG_1X_BASE_C)
+#define LOG_WLAN_ROAM_TRIGGER_INFO_C                  ((0xA1A) + LOG_1X_BASE_C)
+#define LOG_WLAN_ROAM_SCAN_INFO_C                     ((0xA1B) + LOG_1X_BASE_C)
+#define LOG_WLAN_ROAM_RESULT_INFO_C                   ((0xA1C) + LOG_1X_BASE_C)
+#define LOG_WLAN_RRM_TX_RX_INFO_C                     ((0xA1D) + LOG_1X_BASE_C)
+
+#define LOG_WLAN_DP_PROTO_PKT_INFO_C                   ((0xA1E) + LOG_1X_BASE_C)
 
 /* This is only here for old (pre equipment ID update) logging code */
 #define LOG_LAST_C                                      (LOG_1X_LAST_C & 0xFFF)

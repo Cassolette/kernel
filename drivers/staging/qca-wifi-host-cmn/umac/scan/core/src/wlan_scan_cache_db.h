@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017 The Linux Foundation. All rights reserved.
+ * Copyright (c) 2017-2020 The Linux Foundation. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -33,37 +33,7 @@
 #define SCAN_GET_HASH(addr) \
 	(((const uint8_t *)(addr))[QDF_MAC_ADDR_SIZE - 1] % SCAN_HASH_SIZE)
 
-#define RSSI_THRESHOLD_5GHZ -70
-#define BEST_CANDIDATE_RSSI_WEIGHT 50
-#define MIN_RSSI (-100)
-#define MAX_RSSI 0
-#define ROAM_MAX_CHANNEL_WEIGHT 100
-#define MAX_CHANNEL_UTILIZATION 100
-#define NSS_1X1_WEIGHTAGE 3
-#define MAX_ESTIMATED_AIR_TIME_FRACTION 255
-#define MAX_AP_LOAD 255
-
-#define LOW_CHANNEL_CONGESTION_WEIGHT 500
-#define MODERATE_CHANNEL_CONGESTION_WEIGHT 370
-#define CONSIDERABLE_CHANNEL_CONGESTION_WEIGHT 250
-#define HIGH_CHANNEL_CONGESTION_WEIGHT 120
-
-#define LOW_CHANNEL_CONGESTION 0
-#define MODERATE_CHANNEL_CONGESTION 25
-#define CONSIDERABLE_CHANNEL_CONGESTION 50
-#define HIGH_CHANNEL_CONGESTION 75
-#define EXTREME_CHANNEL_CONGESTION 100
-
-#define EXCELLENT_RSSI -55
-#define BAD_RSSI  -80
-#define EXCELLENT_RSSI_WEIGHT 100
-#define RSSI_BUCKET 5
-#define RSSI_WEIGHT_BUCKET 250
-
-#define BEST_CANDIDATE_80MHZ 100
-#define BEST_CANDIDATE_40MHZ 70
-#define BEST_CANDIDATE_20MHZ 30
-#define BEST_CANDIDATE_MAX_BSS_SCORE 10000
+#define ADJACENT_CHANNEL_RSSI_THRESHOLD -80
 
 /**
  * struct scan_dbs - scan cache data base definition
@@ -92,13 +62,25 @@ struct scan_bcn_probe_event {
 
 /**
  * scm_handle_bcn_probe() - Process beacon and probe rsp
- * @bcn: beacon info;
+ * @msg: schedular msg with bcn info;
  *
- * API to handle the beacon/probe resp
+ * API to handle the beacon/probe resp. msg->bodyptr will be consumed and freed
+ * by this func
  *
  * Return: QDF status.
  */
 QDF_STATUS scm_handle_bcn_probe(struct scheduler_msg *msg);
+
+/**
+ * __scm_handle_bcn_probe() - Process beacon and probe rsp
+ * @bcn: beacon info;
+ *
+ * API to handle the beacon/probe resp. bcn will be consumed and freed by this
+ * func
+ *
+ * Return: QDF status.
+ */
+QDF_STATUS __scm_handle_bcn_probe(struct scan_bcn_probe_event *bcn);
 
 /**
  * scm_age_out_entries() - Age out entries older than aging time
@@ -160,7 +142,7 @@ QDF_STATUS scm_flush_results(struct wlan_objmgr_pdev *pdev,
  * scm_filter_valid_channel() - The Public API to filter scan result
  * based on valid channel list
  * @pdev: pdev object
- * @chan_list: valid channel list
+ * @chan_freq_list: valid channel frequency (in MHz) list
  * @num_chan: number of valid channels
  *
  * The Public API to to filter scan result
@@ -169,7 +151,7 @@ QDF_STATUS scm_flush_results(struct wlan_objmgr_pdev *pdev,
  * Return: void.
  */
 void scm_filter_valid_channel(struct wlan_objmgr_pdev *pdev,
-	uint8_t *chan_list, uint32_t num_chan);
+	uint32_t *chan_freq_list, uint32_t num_chan);
 
 /**
  * scm_iterate_scan_db() - function to iterate scan table
@@ -213,4 +195,81 @@ QDF_STATUS scm_db_init(struct wlan_objmgr_psoc *psoc);
  * Return: QDF_STATUS
  */
 QDF_STATUS scm_db_deinit(struct wlan_objmgr_psoc *psoc);
+
+#ifdef FEATURE_6G_SCAN_CHAN_SORT_ALGO
+
+/**
+ * scm_get_rnr_channel_db() - API to get rnr db
+ * @psoc: psoc
+ *
+ * Return: rnr db
+ */
+struct channel_list_db *scm_get_rnr_channel_db(struct wlan_objmgr_psoc *psoc);
+
+/**
+ * scm_get_chan_meta() - API to return channel meta
+ * @psoc: psoc
+ * @freq: channel frequency
+ *
+ * Return: channel meta information
+ */
+struct meta_rnr_channel *scm_get_chan_meta(struct wlan_objmgr_psoc *psoc,
+					   uint32_t chan_freq);
+
+/**
+ * scm_channel_list_db_init() - API to init scan list priority list db
+ * @psoc: psoc
+ *
+ * Return: QDF_STATUS
+ */
+QDF_STATUS scm_channel_list_db_init(struct wlan_objmgr_psoc *psoc);
+
+/**
+ * scm_channel_list_db_deinit() - API to deinit scan list priority list db
+ * @psoc: psoc
+ *
+ * Return: QDF_STATUS
+ */
+QDF_STATUS scm_channel_list_db_deinit(struct wlan_objmgr_psoc *psoc);
+
+/**
+ * scm_rnr_db_flush() - API to flush rnr entries
+ * @psoc: psoc
+ *
+ * Return: QDF_STATUS
+ */
+QDF_STATUS scm_rnr_db_flush(struct wlan_objmgr_psoc *psoc);
+
+/**
+ * scm_update_rnr_from_scan_cache() - API to update rnr info from scan cache
+ * @pdev: pdev
+ *
+ * Return: void
+ */
+void scm_update_rnr_from_scan_cache(struct wlan_objmgr_pdev *pdev);
+
+#else
+static inline QDF_STATUS scm_channel_list_db_init(struct wlan_objmgr_psoc *psoc)
+{
+	return QDF_STATUS_SUCCESS;
+}
+
+static inline
+QDF_STATUS scm_channel_list_db_deinit(struct wlan_objmgr_psoc *psoc)
+{
+	return QDF_STATUS_SUCCESS;
+}
+#endif
+
+/**
+ * scm_scan_update_mlme_by_bssinfo() - updates scan entry with mlme data
+ * @pdev: pdev object
+ * @bss_info: BSS information
+ *
+ * This function updates scan db with scan_entry->mlme_info
+ *
+ * Return: QDF_STATUS
+ */
+QDF_STATUS scm_scan_update_mlme_by_bssinfo(struct wlan_objmgr_pdev *pdev,
+		struct bss_info *bss_info, struct mlme_info *mlme);
 #endif

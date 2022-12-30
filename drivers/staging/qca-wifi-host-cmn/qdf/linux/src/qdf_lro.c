@@ -1,7 +1,5 @@
 /*
- * Copyright (c) 2015-2017 The Linux Foundation. All rights reserved.
- *
- * Previously licensed under the ISC license by Qualcomm Atheros, Inc.
+ * Copyright (c) 2015-2017, 2019 The Linux Foundation. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -16,12 +14,6 @@
  * PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR OTHER
  * TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
  * PERFORMANCE OF THIS SOFTWARE.
- */
-
-/*
- * This file was originally distributed by Qualcomm Atheros, Inc.
- * under proprietary terms before Copyright ownership was assigned
- * to the Linux Foundation.
  */
 
 /**
@@ -141,11 +133,8 @@ qdf_lro_ctx_t qdf_lro_init(void)
 	lro_mem_ptr = qdf_mem_malloc(lro_info_sz + lro_mgr_sz + desc_arr_sz +
 					desc_pool_sz + hash_table_sz);
 
-	if (unlikely(!lro_mem_ptr)) {
-		QDF_TRACE(QDF_MODULE_ID_QDF, QDF_TRACE_LEVEL_ERROR,
-			 "Unable to allocate memory for LRO");
+	if (unlikely(!lro_mem_ptr))
 		return NULL;
-	}
 
 	lro_ctx = (struct qdf_lro_s *)lro_mem_ptr;
 	lro_mem_ptr += lro_info_sz;
@@ -341,7 +330,7 @@ bool qdf_lro_get_info(qdf_lro_ctx_t lro_ctx, qdf_nbuf_t nbuf,
 	iph = (struct iphdr *)info->iph;
 	tcph = (struct tcphdr *)info->tcph;
 	if (0 != qdf_lro_desc_find(lro_ctx, nbuf, iph, tcph,
-		 QDF_NBUF_CB_RX_FLOW_ID_TOEPLITZ(nbuf),
+		 QDF_NBUF_CB_RX_FLOW_ID(nbuf),
 		 (struct net_lro_desc **)plro_desc)) {
 		QDF_TRACE(QDF_MODULE_ID_QDF, QDF_TRACE_LEVEL_ERROR,
 			 "finding the LRO desc failed");

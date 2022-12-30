@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013, 2016-2017 The Linux Foundation. All rights reserved.
+ * Copyright (c) 2013, 2016-2020 The Linux Foundation. All rights reserved.
  * Copyright (c) 2002-2010, Atheros Communications Inc.
  *
  * Permission to use, copy, modify, and/or distribute this software for any
@@ -52,9 +52,8 @@ int dfs_bin5_check_pulse(struct wlan_dfs *dfs, struct dfs_event *re,
 		return 0;
 	}
 
-#define CHANNEL_TURBO 0x00010
 	/* Adjust the filter threshold for rssi in non TURBO mode. */
-	if (!(dfs->dfs_curchan->dfs_ch_flags & CHANNEL_TURBO))
+	if (!WLAN_IS_CHAN_TURBO(dfs->dfs_curchan))
 		b5_rssithresh += br->br_pulse.b5_rssimargin;
 
 	/* Check if the pulse is within duration and rssi thresholds. */
@@ -99,6 +98,11 @@ int dfs_bin5_addpulse(struct wlan_dfs *dfs,
 		}
 	}
 
+	if (dfs->dfs_min_sidx > re->re_sidx)
+		dfs->dfs_min_sidx = re->re_sidx;
+
+	if (dfs->dfs_max_sidx < re->re_sidx)
+		dfs->dfs_max_sidx = re->re_sidx;
 	/* Circular buffer of size 2^n. */
 	index = (br->br_lastelem + 1) & DFS_MAX_B5_MASK;
 	br->br_lastelem = index;
@@ -287,7 +291,7 @@ int dfs_bin5_check(struct wlan_dfs *dfs)
 		}
 
 		dfs_debug(dfs, WLAN_DEBUG_DFS_BIN5,
-			"bursts=%u numevents=%u", bursts, numevents);
+			  "bursts=%u numevents=%u", bursts, numevents);
 		if (bursts >= br->br_pulse.b5_threshold) {
 			if ((br->br_elems[br->br_lastelem].be_ts -
 					br->br_elems[br->br_firstelem].be_ts) <
@@ -295,13 +299,13 @@ int dfs_bin5_check(struct wlan_dfs *dfs)
 				return 0;
 
 			dfs_debug(dfs, WLAN_DEBUG_DFS_BIN5,
-					"bursts=%u numevents=%u total_width=%d average_width=%d total_diff=%d average_diff=%d",
-					bursts, numevents, total_width,
-					average_width, total_diff,
-					average_diff);
-			dfs_info(dfs, WLAN_DEBUG_DFS_ALWAYS,
-					"bin 5 radar detected, bursts=%d",
-					bursts);
+				  "bursts=%u numevents=%u total_width=%d average_width=%d total_diff=%d average_diff=%d",
+				   bursts, numevents, total_width,
+				   average_width, total_diff,
+				   average_diff);
+			dfs_debug(dfs, WLAN_DEBUG_DFS_ALWAYS,
+				  "bin 5 radar detected, bursts=%d",
+				   bursts);
 			return 1;
 		}
 	}
@@ -541,7 +545,7 @@ static int dfs_check_chirping_merlin(struct wlan_dfs *dfs,
 	int same_sign;
 	int temp;
 
-	if (IEEE80211_IS_CHAN_11N_HT40(dfs->dfs_curchan)) {
+	if (WLAN_IS_CHAN_11N_HT40(dfs->dfs_curchan)) {
 		num_fft_bytes = NUM_FFT_BYTES_HT40;
 		num_bin_bytes = NUM_BIN_BYTES_HT40;
 		num_subchan_bins = NUM_SUBCHAN_BINS_HT40;
@@ -553,7 +557,7 @@ static int dfs_check_chirping_merlin(struct wlan_dfs *dfs,
 		upper_mag_byte = UPPER_MAG_BYTE_HT40;
 
 		/* If we are in HT40MINUS then swap primary and extension. */
-		if (IEEE80211_IS_CHAN_11N_HT40MINUS(dfs->dfs_curchan)) {
+		if (WLAN_IS_CHAN_11N_HT40MINUS(dfs->dfs_curchan)) {
 			temp = is_ctl;
 			is_ctl = is_ext;
 			is_ext = temp;
@@ -600,7 +604,7 @@ static int dfs_check_chirping_merlin(struct wlan_dfs *dfs,
 		max_index_upper[i] = (ptr[fft_start + upper_index_byte] >> 2) +
 			num_subchan_bins;
 
-		if (!IEEE80211_IS_CHAN_11N_HT40(dfs->dfs_curchan)) {
+		if (!WLAN_IS_CHAN_11N_HT40(dfs->dfs_curchan)) {
 			/* For HT20 mode indices are 6 bit signed number. */
 			max_index_lower[i] ^= 0x20;
 			max_index_upper[i] = 0;

@@ -1,8 +1,6 @@
 /*
- * Copyright (c) 2012-2014, 2016-2017 The Linux Foundation. All rights reserved.
- *
- * Previously licensed under the ISC license by Qualcomm Atheros, Inc.
- *
+ * Copyright (c) 2012-2014, 2016-2018, 2020 The Linux Foundation.
+ * All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -20,12 +18,6 @@
  */
 
 /*
- * This file was originally distributed by Qualcomm Atheros, Inc.
- * under proprietary terms before Copyright ownership was assigned
- * to the Linux Foundation.
- */
-
-/*
  *  The file is used to define structures that are shared between
  *  kernel space and user space pktlog application.
  */
@@ -39,7 +31,6 @@
  * @brief opaque handle for pktlog device object
  */
 struct ol_pktlog_dev_t;
-typedef struct ol_pktlog_dev_t *ol_pktlog_dev_handle;
 
 /**
  * @typedef hif_opaque_softc_handle
@@ -48,6 +39,11 @@ typedef struct ol_pktlog_dev_t *ol_pktlog_dev_handle;
 struct hif_opaque_softc;
 typedef struct hif_opaque_softc *hif_opaque_softc_handle;
 
+enum pktlog_callback_regtype {
+	PKTLOG_DEFAULT_CALLBACK_REGISTRATION,
+	PKTLOG_LITE_CALLBACK_REGISTRATION
+};
+
 /**
  * @typedef net_device_handle
  * @brief opaque handle linux phy device object
@@ -55,8 +51,16 @@ typedef struct hif_opaque_softc *hif_opaque_softc_handle;
 struct net_device;
 typedef struct net_device *net_device_handle;
 
-void ol_pl_sethandle(ol_pktlog_dev_handle *pl_handle,
+struct pktlog_dev_t;
+
+void pktlog_sethandle(struct pktlog_dev_t **pl_handle,
 		     hif_opaque_softc_handle scn);
+void pktlog_set_pdev_id(struct pktlog_dev_t *pl_dev, uint8_t pdev_id);
+
+void *get_txrx_context(void);
+
+struct pktlog_dev_t *get_pktlog_handle(void);
+void pktlog_set_callback_regtype(enum pktlog_callback_regtype callback_type);
 
 /* Packet log state information */
 #ifndef _PKTLOG_INFO
@@ -97,7 +101,7 @@ struct ath_pktlog_info {
 
 	/* Size of buffer in bytes */
 	int32_t buf_size;
-	spinlock_t log_lock;
+	qdf_spinlock_t log_lock;
 	struct mutex pktlog_mutex;
 
 	/* Threshold of TCP SACK packets for triggered stop */
@@ -126,8 +130,14 @@ struct ath_pktlog_info {
 };
 #endif /* _PKTLOG_INFO */
 #else                           /* REMOVE_PKT_LOG */
-typedef void *ol_pktlog_dev_handle;
-#define ol_pl_sethandle(pl_handle, scn)	\
+typedef void *pktlog_dev_handle;
+#define pktlog_set_pdev_id(pl_dev, pdev_id)	\
+	do {					\
+		(void)pl_dev;			\
+		(void)pdev_id;			\
+	} while (0)
+
+#define pktlog_sethandle(pl_handle, scn)	\
 	do {				\
 		(void)pl_handle;	\
 		(void)scn;		\

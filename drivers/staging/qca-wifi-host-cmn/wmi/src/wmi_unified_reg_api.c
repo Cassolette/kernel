@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017 The Linux Foundation. All rights reserved.
+ * Copyright (c) 2017-2021 The Linux Foundation. All rights reserved.
  *
  *
  * Permission to use, copy, modify, and/or distribute this software for
@@ -22,25 +22,60 @@
  */
 
 #include <qdf_status.h>
+#include <qdf_module.h>
 #include <wmi_unified_api.h>
 #include <wmi_unified_priv.h>
 #include <wmi_unified_reg_api.h>
 
-QDF_STATUS wmi_extract_reg_chan_list_update_event(void *wmi_hdl,
-						  uint8_t *evt_buf,
-						  struct cur_regulatory_info
-						  *reg_info,
-						  uint32_t len)
+QDF_STATUS wmi_extract_reg_chan_list_update_event(
+		wmi_unified_t wmi_handle,
+		uint8_t *evt_buf,
+		struct cur_regulatory_info *reg_info,
+		uint32_t len)
 {
-	struct wmi_unified *wmi_handle = (struct wmi_unified *)wmi_hdl;
-
-	if (wmi_handle->ops->extract_reg_chan_list_update_event)
+	if (wmi_handle && wmi_handle->ops->extract_reg_chan_list_update_event)
 		return wmi_handle->ops->extract_reg_chan_list_update_event
 			(wmi_handle,
 			 evt_buf, reg_info, len);
 
 	return QDF_STATUS_E_FAILURE;
 }
+qdf_export_symbol(wmi_extract_reg_chan_list_update_event);
+
+#ifdef CONFIG_BAND_6GHZ
+QDF_STATUS wmi_extract_reg_chan_list_ext_update_event(
+		wmi_unified_t wmi_handle,
+		uint8_t *evt_buf,
+		struct cur_regulatory_info *reg_info,
+		uint32_t len)
+{
+	if (wmi_handle &&
+	    wmi_handle->ops->extract_reg_chan_list_ext_update_event)
+		return wmi_handle->ops->extract_reg_chan_list_ext_update_event
+					(wmi_handle, evt_buf, reg_info, len);
+
+	return QDF_STATUS_E_FAILURE;
+}
+
+qdf_export_symbol(wmi_extract_reg_chan_list_ext_update_event);
+
+#ifdef CONFIG_AFC_SUPPORT
+QDF_STATUS wmi_extract_afc_event(wmi_unified_t wmi_handle,
+				 uint8_t *evt_buf,
+				 struct afc_regulatory_info *afc_info,
+				 uint32_t len)
+{
+	if (wmi_handle &&
+	    wmi_handle->ops->extract_afc_event)
+		return wmi_handle->ops->extract_afc_event(wmi_handle, evt_buf,
+							  afc_info, len);
+
+	return QDF_STATUS_E_FAILURE;
+}
+
+qdf_export_symbol(wmi_extract_afc_event);
+#endif
+#endif
 
 /*
  * wmi_unified_send_start_11d_scan_cmd() - start 11d scan
@@ -58,6 +93,7 @@ QDF_STATUS wmi_unified_send_start_11d_scan_cmd(wmi_unified_t wmi_handle,
 
 	return QDF_STATUS_E_FAILURE;
 }
+qdf_export_symbol(wmi_unified_send_start_11d_scan_cmd);
 
 /*
  * wmi_unified_send_stop_11d_scan_cmd() - stop 11d scan
@@ -75,43 +111,44 @@ QDF_STATUS wmi_unified_send_stop_11d_scan_cmd(wmi_unified_t wmi_handle,
 
 	return QDF_STATUS_E_FAILURE;
 }
+qdf_export_symbol(wmi_unified_send_stop_11d_scan_cmd);
 
-QDF_STATUS wmi_extract_reg_11d_new_cc_event(void *wmi_hdl,
+QDF_STATUS wmi_extract_reg_11d_new_cc_event(
+		wmi_unified_t wmi_handle,
 		uint8_t *evt_buf,
 		struct reg_11d_new_country *reg_11d_new_cc,
 		uint32_t len)
 {
-	struct wmi_unified *wmi_handle = (struct wmi_unified *)wmi_hdl;
-
-	if (wmi_handle->ops->extract_reg_11d_new_country_event)
+	if (wmi_handle && wmi_handle->ops->extract_reg_11d_new_country_event)
 		return wmi_handle->ops->extract_reg_11d_new_country_event(
 				wmi_handle, evt_buf, reg_11d_new_cc, len);
 
 	return QDF_STATUS_E_FAILURE;
 }
+qdf_export_symbol(wmi_extract_reg_11d_new_cc_event);
 
-QDF_STATUS wmi_unified_set_user_country_code_cmd_send(void *wmi_hdl,
+QDF_STATUS wmi_unified_set_user_country_code_cmd_send(
+		wmi_unified_t wmi_handle,
 		uint8_t pdev_id, struct cc_regdmn_s *rd)
 {
-	struct wmi_unified *wmi_handle = (struct wmi_unified *) wmi_hdl;
-
 	if (wmi_handle->ops->send_user_country_code_cmd)
 		return wmi_handle->ops->send_user_country_code_cmd(
 				wmi_handle, pdev_id, rd);
 
 	return QDF_STATUS_E_FAILURE;
 }
+qdf_export_symbol(wmi_unified_set_user_country_code_cmd_send);
 
-QDF_STATUS wmi_extract_reg_ch_avoid_event(void *wmi_hdl,
+QDF_STATUS wmi_extract_reg_ch_avoid_event(
+		wmi_unified_t wmi_handle,
 		uint8_t *evt_buf,
 		struct ch_avoid_ind_type *ch_avoid_ind,
 		uint32_t len)
 {
-	struct wmi_unified *wmi_handle = (struct wmi_unified *)wmi_hdl;
-
-	if (wmi_handle->ops->extract_reg_ch_avoid_event)
+	if (wmi_handle && wmi_handle->ops->extract_reg_ch_avoid_event)
 		return wmi_handle->ops->extract_reg_ch_avoid_event(
 				wmi_handle, evt_buf, ch_avoid_ind, len);
 
 	return QDF_STATUS_E_FAILURE;
 }
+qdf_export_symbol(wmi_extract_reg_ch_avoid_event);

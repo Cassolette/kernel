@@ -1,8 +1,5 @@
 /*
- * Copyright (c) 2012-2017 The Linux Foundation. All rights reserved.
- *
- * Previously licensed under the ISC license by Qualcomm Atheros, Inc.
- *
+ * Copyright (c) 2012-2020 The Linux Foundation. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -19,33 +16,28 @@
  * PERFORMANCE OF THIS SOFTWARE.
  */
 
-/*
- * This file was originally distributed by Qualcomm Atheros, Inc.
- * under proprietary terms before Copyright ownership was assigned
- * to the Linux Foundation.
- */
-
 #ifndef _PKTLOG_AC_H_
 #define _PKTLOG_AC_H_
-#ifndef REMOVE_PKT_LOG
 
+#include "hif.h"
+#ifndef REMOVE_PKT_LOG
 #include "ol_if_athvar.h"
-#include <pktlog_ac_api.h>
-#include <pktlog_ac_fmt.h>
 #include "osdep.h"
 #include <wmi_unified.h>
 #include <wmi_unified_api.h>
 #include <wdi_event_api.h>
-#include "hif.h"
 #include <ol_defines.h>
+#include <pktlog_ac_api.h>
+#include <pktlog_ac_fmt.h>
 
 #define NO_REG_FUNCS    4
 
 /* Locking interface for pktlog */
-#define PKTLOG_LOCK_INIT(_pl_info)      spin_lock_init(&(_pl_info)->log_lock)
-#define PKTLOG_LOCK_DESTROY(_pl_info)
-#define PKTLOG_LOCK(_pl_info)           spin_lock(&(_pl_info)->log_lock)
-#define PKTLOG_UNLOCK(_pl_info)         spin_unlock(&(_pl_info)->log_lock)
+#define PKTLOG_LOCK_INIT(_pl_info)    qdf_spinlock_create(&(_pl_info)->log_lock)
+#define PKTLOG_LOCK_DESTROY(_pl_info) \
+				qdf_spinlock_destroy(&(_pl_info)->log_lock)
+#define PKTLOG_LOCK(_pl_info)         qdf_spin_lock_bh(&(_pl_info)->log_lock)
+#define PKTLOG_UNLOCK(_pl_info)       qdf_spin_unlock_bh(&(_pl_info)->log_lock)
 
 #define PKTLOG_MODE_SYSTEM      1
 #define PKTLOG_MODE_ADAPTER     2
@@ -57,18 +49,27 @@
  */
 #define PKTLOG_READ_OFFSET    8
 
+/* forward declaration for cdp_pdev */
+struct cdp_pdev;
+
 /* Opaque softc */
 struct ol_ath_generic_softc_t;
 typedef struct ol_ath_generic_softc_t *ol_ath_generic_softc_handle;
 extern void pktlog_disable_adapter_logging(struct hif_opaque_softc *scn);
 extern int pktlog_alloc_buf(struct hif_opaque_softc *scn);
-extern void pktlog_release_buf(ol_txrx_pdev_handle pdev_txrx_handle);
+extern void pktlog_release_buf(struct hif_opaque_softc *scn);
 
 ssize_t pktlog_read_proc_entry(char *buf, size_t nbytes, loff_t *ppos,
 		struct ath_pktlog_info *pl_info, bool *read_complete);
-int pktlog_send_per_pkt_stats_to_user(void);
-A_STATUS
-wdi_pktlog_unsubscribe(struct ol_txrx_pdev_t *txrx_pdev, uint32_t log_state);
+
+/**
+ * wdi_pktlog_unsubscribe() - Unsubscribe pktlog callbacks
+ * @pdev_id: pdev id
+ * @log_state: Pktlog registration
+ *
+ * Return: zero on success, non-zero on failure
+ */
+A_STATUS wdi_pktlog_unsubscribe(uint8_t pdev_id, uint32_t log_state);
 
 struct ol_pl_arch_dep_funcs {
 	void (*pktlog_init)(struct hif_opaque_softc *scn);
@@ -81,7 +82,7 @@ struct ol_pl_arch_dep_funcs {
 
 struct ol_pl_os_dep_funcs {
 	int (*pktlog_attach)(struct hif_opaque_softc *scn);
-	void (*pktlog_detach)(struct ol_txrx_pdev_t *handle);
+	void (*pktlog_detach)(struct hif_opaque_softc *scn);
 
 };
 
@@ -96,10 +97,11 @@ extern struct ol_pl_arch_dep_funcs ol_pl_funcs;
 extern struct ol_pl_os_dep_funcs *g_ol_pl_os_dep_funcs;
 
 /* Pktlog handler to save the state of the pktlogs */
-struct ol_pktlog_dev_t {
+struct pktlog_dev_t {
 	struct ol_pl_arch_dep_funcs *pl_funcs;
 	struct ath_pktlog_info *pl_info;
 	ol_ath_generic_softc_handle scn;
+	uint8_t pdev_id;
 	char *name;
 	bool tgt_pktlog_alloced;
 	bool is_pktlog_cb_subscribed;
@@ -108,6 +110,8 @@ struct ol_pktlog_dev_t {
 	uint8_t htc_endpoint;
 	void *htc_pdev;
 	bool vendor_cmd_send;
+	uint8_t callback_type;
+	uint32_t invalid_packets;
 };
 
 #define PKTLOG_SYSCTL_SIZE      14
@@ -131,18 +135,34 @@ extern struct ol_pktlog_dev_t ol_pl_dev;
  * WDI related data and functions
  * Callback function to the WDI events
  */
-void pktlog_callback(void *pdev, enum WDI_EVENT event, void *log_data);
+void pktlog_callback(void *pdev, enum WDI_EVENT event, void *log_data,
+			u_int16_t peer_id, uint32_t status);
 
 void pktlog_init(struct hif_opaque_softc *scn);
 int pktlog_enable(struct hif_opaque_softc *scn, int32_t log_state,
 		 bool, uint8_t, uint32_t);
+int __pktlog_enable(struct hif_opaque_softc *scn, int32_t log_state,
+		    bool ini_triggered, uint8_t user_triggered,
+		    uint32_t is_iwpriv_command);
 int pktlog_setsize(struct hif_opaque_softc *scn, int32_t log_state);
 int pktlog_clearbuff(struct hif_opaque_softc *scn, bool clear_buff);
 int pktlog_disable(struct hif_opaque_softc *scn);
 int pktlogmod_init(void *context);
-void pktlogmod_exit(struct ol_txrx_pdev_t *handle);
+void pktlogmod_exit(void *context);
 int pktlog_htc_attach(void);
-void pktlog_process_fw_msg(uint32_t *msg_word);
+
+/**
+ * pktlog_process_fw_msg() - process packetlog message
+ * @pdev_id: physical device instance id
+ * @msg_word: message buffer
+ * @msg_len: message length
+ *
+ * Return: None
+ */
+void pktlog_process_fw_msg(uint8_t pdev_id, uint32_t *msg_word,
+			   uint32_t msg_len);
+void lit_pktlog_callback(void *context, enum WDI_EVENT event, void *log_data,
+	u_int16_t peer_id, uint32_t status);
 
 #define ol_pktlog_attach(_scn)			\
 	do {					\
@@ -165,28 +185,46 @@ static inline void pktlog_init(struct hif_opaque_softc *scn)
 {
 	return;
 }
-static int pktlog_enable(struct hif_opaque_softc *scn, int32_t log_state,
-			 bool ini, uint8_t user, uint32_t is_iwpriv_command)
+
+static inline int pktlog_enable(struct hif_opaque_softc *scn, int32_t log_state,
+				bool ini, uint8_t user,
+				uint32_t is_iwpriv_command)
 {
 	return 0;
 }
-static int pktlog_setsize(struct hif_opaque_softc *scn, int32_t log_state)
+
+static inline
+int __pktlog_enable(struct hif_opaque_softc *scn, int32_t log_state,
+		    bool ini_triggered, uint8_t user_triggered,
+		    uint32_t is_iwpriv_command)
 {
 	return 0;
 }
-static int pktlog_clearbuff(struct hif_opaque_softc *scn, bool clear_buff)
+
+static inline int pktlog_setsize(struct hif_opaque_softc *scn,
+				 int32_t log_state)
 {
 	return 0;
 }
-static int pktlog_disable(struct hif_opaque_softc *scn)
+
+static inline int pktlog_clearbuff(struct hif_opaque_softc *scn,
+				   bool clear_buff)
 {
 	return 0;
 }
+
+static inline int pktlog_disable(struct hif_opaque_softc *scn)
+{
+	return 0;
+}
+
 static inline int pktlog_htc_attach(void)
 {
 	return 0;
 }
-static inline void pktlog_process_fw_msg(uint32_t *msg_word)
+
+static inline void pktlog_process_fw_msg(uint8_t pdev_id, uint32_t *msg_word,
+					 uint32_t msg_len)
 { }
 #endif /* REMOVE_PKT_LOG */
 #endif /* _PKTLOG_AC_H_ */

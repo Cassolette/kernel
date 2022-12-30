@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2016-2017 The Linux Foundation. All rights reserved.
+ * Copyright (c) 2016-2021 The Linux Foundation. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -29,31 +29,35 @@
 
 #include "wlan_objmgr_cmn.h"
 #include "qdf_nbuf.h"
+#include "wlan_mgmt_txrx_rx_reo_public_structs.h"
 
-/**
- * Current HTC credit is 2 so pool size of 50 is sufficient as non
- * converged code will still be using similar implementation from WMA path
- */
-#define MGMT_DESC_POOL_MAX 50
+#define mgmt_txrx_alert(params...) \
+	QDF_TRACE_FATAL(QDF_MODULE_ID_MGMT_TXRX, params)
+#define mgmt_txrx_err(params...) \
+	QDF_TRACE_ERROR(QDF_MODULE_ID_MGMT_TXRX, params)
+#define mgmt_txrx_warn(params...) \
+	QDF_TRACE_WARN(QDF_MODULE_ID_MGMT_TXRX, params)
+#define mgmt_txrx_notice(params...) \
+	QDF_TRACE_INFO(QDF_MODULE_ID_MGMT_TXRX, params)
+#define mgmt_txrx_info(params...) \
+	QDF_TRACE_INFO(QDF_MODULE_ID_MGMT_TXRX, params)
+#define mgmt_txrx_debug(params...) \
+	QDF_TRACE_DEBUG(QDF_MODULE_ID_MGMT_TXRX, params)
+#define mgmt_txrx_err_rl(params...) \
+	QDF_TRACE_ERROR_RL(QDF_MODULE_ID_MGMT_TXRX, params)
+#define mgmt_txrx_debug_rl(params...) \
+	QDF_TRACE_DEBUG_RL(QDF_MODULE_ID_MGMT_TXRX, params)
 
-#define mgmt_txrx_log(level, args...) \
-			QDF_TRACE(QDF_MODULE_ID_MGMT_TXRX, level, ## args)
-#define mgmt_txrx_logfl(level, format, args...) \
-			mgmt_txrx_log(level, FL(format), ## args)
-
-#define mgmt_txrx_alert(format, args...) \
-		mgmt_txrx_logfl(QDF_TRACE_LEVEL_FATAL, format, ## args)
-#define mgmt_txrx_err(format, args...) \
-		mgmt_txrx_logfl(QDF_TRACE_LEVEL_ERROR, format, ## args)
-#define mgmt_txrx_warn(format, args...) \
-		mgmt_txrx_logfl(QDF_TRACE_LEVEL_WARN, format, ## args)
-#define mgmt_txrx_notice(format, args...) \
-		mgmt_txrx_logfl(QDF_TRACE_LEVEL_INFO, format, ## args)
-#define mgmt_txrx_info(format, args...) \
-		mgmt_txrx_logfl(QDF_TRACE_LEVEL_INFO_HIGH, format, ## args)
-#define mgmt_txrx_debug(format, args...) \
-		mgmt_txrx_logfl(QDF_TRACE_LEVEL_DEBUG, format, ## args)
-
+#define mgmttxrx_nofl_alert(params...) \
+	QDF_TRACE_FATAL_NO_FL(QDF_MODULE_ID_MGMT_TXRX, params)
+#define mgmttxrx_nofl_err(params...) \
+	QDF_TRACE_ERROR_NO_FL(QDF_MODULE_ID_MGMT_TXRX, params)
+#define mgmttxrx_nofl_warn(params...) \
+	QDF_TRACE_WARN_NO_FL(QDF_MODULE_ID_MGMT_TXRX, params)
+#define mgmttxrx_nofl_info(params...) \
+	QDF_TRACE_INFO_NO_FL(QDF_MODULE_ID_MGMT_TXRX, params)
+#define mgmttxrx_nofl_debug(params...) \
+	QDF_TRACE_DEBUG_NO_FL(QDF_MODULE_ID_MGMT_TXRX, params)
 
 /**
  * enum mgmt_subtype - enum of mgmt. subtypes
@@ -109,8 +113,17 @@ enum mgmt_subtype {
  * @ACTION_CATEGORY_DMG: unprotected dmg action category
  * @ACTION_CATEGORY_WMM: wmm action category
  * @ACTION_CATEGORY_FST: fst action category
+ * @ACTION_CATEGORY_RVS: robust av streaming action category
  * @ACTION_CATEGORY_UNPROT_DMG: dmg action category
  * @ACTION_CATEGORY_VHT: vht action category
+ * @ACTION_CATEGORY_USIG: Unprotected S1G Action frame
+ * @ACTION_CATEGORY_SIG: S1G Action frame
+ * @ACTION_CATEGORY_FLOW_CONTROL: Flow Control Action frame
+ * @ACTION_CATEGORY_CONTROL_RSP_MCS_NEGO: Control Response MCS Negotiation frame
+ * @ACTION_CATEGORY_FIL: FILS Action frame
+ * @ACTION_CATEGORY_CDMG: CDMG Action frame
+ * @ACTION_CATEGORY_CMMG: CMMG Action frame
+ * @ACTION_CATEGORY_GLK: GLK Action frame
  * @ACTION_CATEGORY_VENDOR_SPECIFIC_PROTECTED: vendor specific protected
  *                                             action category
  * @ACTION_CATEGORY_VENDOR_SPECIFIC: vendor specific action category
@@ -135,8 +148,17 @@ enum mgmt_action_category {
 	ACTION_CATEGORY_DMG = 16,
 	ACTION_CATEGORY_WMM = 17,
 	ACTION_CATEGORY_FST = 18,
+	ACTION_CATEGORY_RVS = 19,
 	ACTION_CATEGORY_UNPROT_DMG = 20,
 	ACTION_CATEGORY_VHT = 21,
+	ACTION_CATEGORY_USIG = 22,
+	ACTION_CATEGORY_SIG = 23,
+	ACTION_CATEGORY_FLOW_CONTROL = 24,
+	ACTION_CATEGORY_CONTROL_RSP_MCS_NEGO = 25,
+	ACTION_CATEGORY_FILS = 26,
+	ACTION_CATEGORY_CDMG = 27,
+	ACTION_CATEGORY_CMMG = 28,
+	ACTION_CATEGORY_GLK = 29,
 	ACTION_CATEGORY_VENDOR_SPECIFIC_PROTECTED = 126,
 	ACTION_CATEGORY_VENDOR_SPECIFIC = 127,
 };
@@ -202,12 +224,20 @@ enum block_ack_actioncode {
  * @PUB_ACTION_2040_BSS_COEXISTENCE:  public 20-40 bss coex action frame
  * @PUB_ACTION_EXT_CHANNEL_SWITCH_ID: public ext channel switch id action frame
  * @PUB_ACTION_VENDOR_SPECIFIC: vendor specific public action frame
+ * @PUB_ACTION_GAS_INITIAL_REQUEST: GAS initial request action frame
+ * @PUB_ACTION_GAS_INITIAL_RESPONSE: GAS initial response action frame
+ * @PUB_ACTION_GAS_COMEBACK_REQUEST: GAS comeback request action frame
+ * @PUB_ACTION_GAS_COMEBACK_RESPONSE: GAS comeback respose action frame
  * @PUB_ACTION_TDLS_DISCRESP: tdls discovery response public action frame
  */
 enum pub_actioncode {
 	PUB_ACTION_2040_BSS_COEXISTENCE = 0,
 	PUB_ACTION_EXT_CHANNEL_SWITCH_ID = 4,
 	PUB_ACTION_VENDOR_SPECIFIC = 9,
+	PUB_ACTION_GAS_INITIAL_REQUEST = 10,
+	PUB_ACTION_GAS_INITIAL_RESPONSE = 11,
+	PUB_ACTION_GAS_COMEBACK_REQUEST = 12,
+	PUB_ACTION_GAS_COMEBACK_RESPONSE = 13,
 	PUB_ACTION_TDLS_DISCRESP = 14,
 };
 
@@ -227,6 +257,20 @@ enum rrm_actioncode {
 	RRM_LINK_MEASUREMENT_RPT,
 	RRM_NEIGHBOR_REQ,
 	RRM_NEIGHBOR_RPT,
+};
+
+/**
+ * enum ft_actioncode - ft action frames
+ * @FT_FAST_BSS_TRNST_REQ: ft request frame
+ * @FT_FAST_BSS_TRNST_RES: ft response frame
+ * @FT_FAST_BSS_TRNST_CONFIRM: ft confirm frame
+ * @FT_FAST_BSS_TRNST_ACK: ft ACK frame
+ */
+enum ft_actioncode {
+	FT_FAST_BSS_TRNST_REQ = 1,
+	FT_FAST_BSS_TRNST_RES,
+	FT_FAST_BSS_TRNST_CONFIRM,
+	FT_FAST_BSS_TRNST_ACK,
 };
 
 /**
@@ -280,6 +324,15 @@ enum protected_dual_actioncode {
  * @WNM_BSS_TM_QUERY: wnm bss tm query frame
  * @WNM_BSS_TM_REQUEST: wnm bss tm request frame
  * @WNM_BSS_TM_RESPONSE: wnm bss tm response frame
+ * @WNM_FMS_REQ: wnm fms request frame
+ * @WNM_FMS_RESP: wnm fms response frame
+ * @WNM_TFS_REQ: wnm tfs request frame
+ * @WNM_TFS_RESP: wnm tfs response frame
+ * @WNM_TFS_NOTIFY: wnm tfs notify frame
+ * @WNM_SLEEP_REQ: wnm sleep request frame
+ * @WNM_SLEEP_RESP: wnm sleep response frame
+ * @WNM_TIM_REQ: wnm Tim broadcast request frame
+ * @WNM_TIM_RESP: wnm Tim broadcast response frame
  * @WNM_NOTIF_REQUEST: wnm notify request frame
  * @WNM_NOTIF_RESPONSE: wnm notify response frame
  */
@@ -287,6 +340,15 @@ enum wnm_actioncode {
 	WNM_BSS_TM_QUERY = 6,
 	WNM_BSS_TM_REQUEST = 7,
 	WNM_BSS_TM_RESPONSE = 8,
+	WNM_FMS_REQ = 9,
+	WNM_FMS_RESP = 10,
+	WNM_TFS_REQ = 13,
+	WNM_TFS_RESP = 14,
+	WNM_TFS_NOTIFY = 15,
+	WNM_SLEEP_REQ = 16,
+	WNM_SLEEP_RESP = 17,
+	WNM_TIM_REQ = 18,
+	WNM_TIM_RESP = 19,
 	WNM_NOTIF_REQUEST = 26,
 	WNM_NOTIF_RESPONSE = 27,
 };
@@ -379,6 +441,42 @@ enum wmm_actioncode {
 };
 
 /**
+ * enum fst_actioncode - fst action frames
+ * @FST_SETUP_REQ: fst setup request frame
+ * @FST_SETUP_RSP: fst setup response frame
+ * @FST_TEAR_DOWN: fst qos teardown frame
+ * @FST_ACK_REQ:  fst ack frame for request
+ * @FST_ACK_RSP:  fst ack frame for response
+ * @FST_ON_CHANNEL_TUNNEL:  fst on channel tunnel frame
+ */
+enum fst_actioncode {
+	FST_SETUP_REQ,
+	FST_SETUP_RSP,
+	FST_TEAR_DOWN,
+	FST_ACK_REQ,
+	FST_ACK_RSP,
+	FST_ON_CHANNEL_TUNNEL,
+};
+
+/**
+ * enum rvs_actioncode - Robust av streaming action frames
+ * @SCS_REQ: scs request frame
+ * @SCS_RSP: scs response frame
+ * @GROUP_MEMBERSHIP_REQ:  Group Membership Request frame
+ * @GROUP_MEMBERSHIP_RSP: Group Membership Response frame
+ * @MCSC_REQ: mcsc request frame
+ * @MCSC_RSP: mcsc response frame
+ */
+enum rvs_actioncode {
+	SCS_REQ,
+	SCS_RSP,
+	GROUP_MEMBERSHIP_REQ,
+	GROUP_MEMBERSHIP_RSP,
+	MCSC_REQ,
+	MCSC_RSP,
+};
+
+/**
  * enum vht_actioncode - vht action frames
  * @VHT_ACTION_COMPRESSED_BF: vht compressed bf action frame
  * @VHT_ACTION_GID_NOTIF: vht gid notification action frame
@@ -431,7 +529,9 @@ struct action_frm_hdr {
  * @MGMT_ACTION_BA_ADDBA_RESPONSE:  ADDBA response action frame
  * @MGMT_ACTION_BA_DELBA:           DELBA action frame
  * @MGMT_ACTION_2040_BSS_COEXISTENCE: 20-40 bss coex action frame
- * @MGMT_ACTION_CATEGORY_VENDOR_SPECIFIC: category vendor spcific action frame
+ * @MGMT_ACTION_CATEGORY_VENDOR_SPECIFIC: category vendor specific action frame
+ * @MGMT_ACTION_CATEGORY_VENDOR_SPECIFIC_PROTECTED: category vendor specific
+ * protected action frame
  * @MGMT_ACTION_EXT_CHANNEL_SWITCH_ID: ext channel switch id action frame
  * @MGMT_ACTION_VENDOR_SPECIFIC:    vendor specific action frame
  * @MGMT_ACTION_TDLS_DISCRESP:      TDLS discovery response frame
@@ -460,6 +560,15 @@ struct action_frm_hdr {
  * @MGMT_ACTION_WNM_BSS_TM_RESPONSE: wnm bss tm response action frame
  * @MGMT_ACTION_WNM_NOTIF_REQUEST:  wnm notification request action frame
  * @MGMT_ACTION_WNM_NOTIF_RESPONSE: wnm notification response action frame
+ * @MGMT_ACTION_WNM_FMS_REQ:    wnm fms request frame
+ * @MGMT_ACTION_WNM_FMS_RESP:   wnm fms response frame
+ * @MGMT_ACTION_WNM_TFS_REQ:    wnm tfs request frame
+ * @MGMT_ACTION_WNM_TFS_RESP:   wnm tfs response frame
+ * @MGMT_ACTION_WNM_TFS_NOTIFY: wnm tfs notify frame
+ * @MGMT_ACTION_WNM_SLEEP_REQ:  wnm sleep request frame
+ * @MGMT_ACTION_WNM_SLEEP_RESP: wnm sleep response frame
+ * @MGMT_ACTION_WNM_TIM_REQ:    wnm Tim broadcast request frame
+ * @MGMT_ACTION_WNM_TIM_RESP:   wnm Tim broadcast response frame
  * @MGMT_ACTION_TDLS_SETUP_REQ:     tdls setup request action frame
  * @MGMT_ACTION_TDLS_SETUP_RSP:     tdls setup response frame
  * @MGMT_ACTION_TDLS_SETUP_CNF:     tdls setup confirm frame
@@ -493,7 +602,24 @@ struct action_frm_hdr {
  * @MGMT_ACTION_VHT_COMPRESSED_BF: vht compressed bf action frame
  * @MGMT_ACTION_VHT_GID_NOTIF:   vht gid notification action frame
  * @MGMT_ACTION_VHT_OPMODE_NOTIF: vht opmode notification action frame
+ * @MGMT_ACTION_GAS_INITIAL_REQUEST: GAS Initial request action frame
+ * @MGMT_ACTION_GAS_INITIAL_RESPONSE: GAS Initial response action frame
+ * @MGMT_ACTION_GAS_COMEBACK_REQUEST: GAS Comeback request action frame
+ * @MGMT_ACTION_GAS_COMEBACK_RESPONSE: GAS Comeback response action frame
+ * @MGMT_ACTION_FST_SETUP_REQ: FST setup request frame
+ * @MGMT_ACTION_FST_SETUP_RSPA: FST setup response frame
+ * @MGMT_ACTION_FST_TEAR_DOWN: FST qos teardown frame
+ * @MGMT_ACTION_FST_ACK_REQ: FST ack frame for request
+ * @MGMT_ACTION_FST_ACK_RSP: FST ack frame for response
+ * @MGMT_ACTION_FST_ON_CHANNEL_TUNNEL: FST on channel tunnel frame
+ * @MGMT_ACTION_SCS_REQ: SCS request frame
+ * @MGMT_ACTION_SCS_RSP: SCS response frame
+ * @MGMT_ACTION_GROUP_MEMBERSHIP_REQ: group membership request frame
+ * @MGMT_ACTION_GROUP_MEMBERSHIP_RSP: group membership response frame
+ * @MGMT_ACTION_MCSC_REQ: MCSC request frame
+ * @MGMT_ACTION_MCSC_RSP: MCSC response frame
  * @MGMT_FRAME_TYPE_ALL:         mgmt frame type for all type of frames
+ * @MGMT_CTRL_FRAME: Control Frames
  * @MGMT_MAX_FRAME_TYPE:         max. mgmt frame types
  */
 enum mgmt_frame_type {
@@ -527,6 +653,7 @@ enum mgmt_frame_type {
 	MGMT_ACTION_BA_DELBA,
 	MGMT_ACTION_2040_BSS_COEXISTENCE,
 	MGMT_ACTION_CATEGORY_VENDOR_SPECIFIC,
+	MGMT_ACTION_CATEGORY_VENDOR_SPECIFIC_PROTECTED,
 	MGMT_ACTION_EXT_CHANNEL_SWITCH_ID,
 	MGMT_ACTION_VENDOR_SPECIFIC,
 	MGMT_ACTION_TDLS_DISCRESP,
@@ -536,6 +663,10 @@ enum mgmt_frame_type {
 	MGMT_ACTION_RRM_LINK_MEASUREMENT_RPT,
 	MGMT_ACTION_RRM_NEIGHBOR_REQ,
 	MGMT_ACTION_RRM_NEIGHBOR_RPT,
+	MGMT_ACTION_FT_REQUEST,
+	MGMT_ACTION_FT_RESPONSE,
+	MGMT_ACTION_FT_CONFIRM,
+	MGMT_ACTION_FT_ACK,
 	MGMT_ACTION_HT_NOTIFY_CHANWIDTH,
 	MGMT_ACTION_HT_SMPS,
 	MGMT_ACTION_HT_PSMP,
@@ -555,6 +686,15 @@ enum mgmt_frame_type {
 	MGMT_ACTION_WNM_BSS_TM_RESPONSE,
 	MGMT_ACTION_WNM_NOTIF_REQUEST,
 	MGMT_ACTION_WNM_NOTIF_RESPONSE,
+	MGMT_ACTION_WNM_FMS_REQ,
+	MGMT_ACTION_WNM_FMS_RESP,
+	MGMT_ACTION_WNM_TFS_REQ,
+	MGMT_ACTION_WNM_TFS_RESP,
+	MGMT_ACTION_WNM_TFS_NOTIFY,
+	MGMT_ACTION_WNM_SLEEP_REQ,
+	MGMT_ACTION_WNM_SLEEP_RESP,
+	MGMT_ACTION_WNM_TIM_REQ,
+	MGMT_ACTION_WNM_TIM_RESP,
 	MGMT_ACTION_TDLS_SETUP_REQ,
 	MGMT_ACTION_TDLS_SETUP_RSP,
 	MGMT_ACTION_TDLS_SETUP_CNF,
@@ -588,21 +728,45 @@ enum mgmt_frame_type {
 	MGMT_ACTION_VHT_COMPRESSED_BF,
 	MGMT_ACTION_VHT_GID_NOTIF,
 	MGMT_ACTION_VHT_OPMODE_NOTIF,
+	MGMT_ACTION_GAS_INITIAL_REQUEST,
+	MGMT_ACTION_GAS_INITIAL_RESPONSE,
+	MGMT_ACTION_GAS_COMEBACK_REQUEST,
+	MGMT_ACTION_GAS_COMEBACK_RESPONSE,
+	MGMT_ACTION_FST_SETUP_REQ,
+	MGMT_ACTION_FST_SETUP_RSP,
+	MGMT_ACTION_FST_TEAR_DOWN,
+	MGMT_ACTION_FST_ACK_REQ,
+	MGMT_ACTION_FST_ACK_RSP,
+	MGMT_ACTION_FST_ON_CHANNEL_TUNNEL,
+	MGMT_ACTION_SCS_REQ,
+	MGMT_ACTION_SCS_RSP,
+	MGMT_ACTION_GROUP_MEMBERSHIP_REQ,
+	MGMT_ACTION_GROUP_MEMBERSHIP_RSP,
+	MGMT_ACTION_MCSC_REQ,
+	MGMT_ACTION_MCSC_RSP,
 	MGMT_FRAME_TYPE_ALL,
+	MGMT_CTRL_FRAME,
 	MGMT_MAX_FRAME_TYPE,
 };
 
-#define WLAN_MGMT_TXRX_HOST_MAX_ANTENNA 4
-
+#define WLAN_MGMT_TXRX_HOST_MAX_ANTENNA          4
+#define WLAN_INVALID_PER_CHAIN_RSSI             0xFF
+#define WLAN_INVALID_PER_CHAIN_SNR              0x80
+#define WLAN_NOISE_FLOOR_DBM_DEFAULT            -96
 /**
  * struct mgmt_rx_event_params - host mgmt header params
+ * @chan_freq: channel frequency on which this frame is received
  * @channel: channel on which this frame is received
  * @snr: snr information used to call rssi
  * @rssi_ctl[WLAN_MGMT_TXRX_HOST_MAX_ANTENNA]: RSSI of PRI 20MHz for each chain
  * @rate: Rate kbps
  * @phy_mode: rx phy mode
  * @buf_len: length of the frame
- * @status: rx status
+ * @status: rx status. It is a bitfield being used based on below defines
+ *          WMI_HOST_RXERR_CRC = 0x01
+ *          WMI_HOST_RXERR_DECRYPT = 0x08
+ *          WMI_HOST_RXERR_MIC = 0x10
+ *          WMI_HOST_RXERR_KEY_CACHE_MISS = 0x20
  * @flags: information about the management frame e.g. can give a
  *         scan source for a scan result mgmt frame
  * @rssi: combined RSSI, i.e. the sum of the snr + noise floor (dBm units)
@@ -610,21 +774,72 @@ enum mgmt_frame_type {
  * @pdev_id: pdev id
  * @rx_params: pointer to other rx params
  *             (win specific, will be removed in phase 4)
+ * @reo_params: Pointer to MGMT Rx REO params
  */
 struct mgmt_rx_event_params {
+	uint32_t    chan_freq;
 	uint32_t    channel;
 	uint32_t    snr;
 	uint8_t     rssi_ctl[WLAN_MGMT_TXRX_HOST_MAX_ANTENNA];
 	uint32_t    rate;
 	enum wlan_phymode    phy_mode;
 	uint32_t    buf_len;
-	QDF_STATUS  status;
+	uint8_t     status;
 	uint32_t    flags;
 	int32_t     rssi;
 	uint32_t    tsf_delta;
+	uint32_t    tsf_l32;
 	uint8_t     pdev_id;
 	void        *rx_params;
+#ifdef WLAN_MGMT_RX_REO_SUPPORT
+	struct mgmt_rx_reo_params *reo_params;
+#endif
 };
+
+#ifdef WLAN_MGMT_RX_REO_SUPPORT
+static inline
+struct mgmt_rx_event_params *alloc_mgmt_rx_event_params(void)
+{
+	struct mgmt_rx_event_params *rx_params;
+
+	rx_params = qdf_mem_malloc(sizeof(struct mgmt_rx_event_params));
+	if (!rx_params)
+		return NULL;
+
+	rx_params->reo_params =
+		qdf_mem_malloc(sizeof(struct mgmt_rx_reo_params));
+
+	if (!rx_params->reo_params) {
+		qdf_mem_free(rx_params);
+		return NULL;
+	}
+
+	return rx_params;
+}
+
+static inline void
+free_mgmt_rx_event_params(struct mgmt_rx_event_params *rx_params)
+{
+	if (rx_params)
+		qdf_mem_free(rx_params->reo_params);
+
+	qdf_mem_free(rx_params);
+}
+#else
+static inline
+struct mgmt_rx_event_params *alloc_mgmt_rx_event_params(void)
+{
+	struct mgmt_rx_event_params *rx_params;
+
+	rx_params = qdf_mem_malloc(sizeof(struct mgmt_rx_event_params));
+	if (!rx_params)
+		return NULL;
+
+	return rx_params;
+}
+
+#define free_mgmt_rx_event_params(rx_params) qdf_mem_free((rx_params))
+#endif
 
 /**
  * mgmt_tx_download_comp_cb - function pointer for tx download completions.
@@ -673,6 +888,19 @@ typedef QDF_STATUS (*mgmt_frame_rx_callback)(
 			struct mgmt_rx_event_params *mgmt_rx_params,
 			enum mgmt_frame_type frm_type);
 
+/**
+ * mgmt_frame_fill_peer_cb - Function pointer to fill peer in the buf
+ * @peer: peer
+ * @buf: buffer
+ *
+ * This is the function pointer to be called during drain to fill the
+ * peer into the buf's cb structure.
+ *
+ * Return: QDF_STATUS_SUCCESS - in case of success
+ */
+typedef QDF_STATUS (*mgmt_frame_fill_peer_cb)(
+			struct wlan_objmgr_peer *peer,
+			qdf_nbuf_t buf);
 
 /**
  * struct mgmt_txrx_mgmt_frame_cb_info - frm and corresponding rx cb info
@@ -726,6 +954,13 @@ QDF_STATUS wlan_mgmt_txrx_mgmt_frame_tx(struct wlan_objmgr_peer *peer,
 					mgmt_ota_comp_cb tx_ota_comp_cb,
 					enum wlan_umac_comp_id comp_id,
 					void *mgmt_tx_params);
+/**
+ * wlan_mgmt_is_rmf_mgmt_action_frame() - API to check action category is rmf
+ * @action_category: action category to check
+ *
+ * Return: true if action category is rmf else false
+ */
+bool wlan_mgmt_is_rmf_mgmt_action_frame(uint8_t action_category);
 
 /**
  * wlan_mgmt_txrx_beacon_frame_tx() - transmits mgmt. beacon
@@ -740,6 +975,23 @@ QDF_STATUS wlan_mgmt_txrx_mgmt_frame_tx(struct wlan_objmgr_peer *peer,
 QDF_STATUS wlan_mgmt_txrx_beacon_frame_tx(struct wlan_objmgr_peer *peer,
 					  qdf_nbuf_t buf,
 					  enum wlan_umac_comp_id comp_id);
+
+#ifdef WLAN_SUPPORT_FILS
+/**
+ * wlan_mgmt_txrx_fd_action_frame_tx() - transmits mgmt. FD Action frame
+ * @vdev: vdev object
+ * @buf: buffer to be transmitted
+ * @comp_id: umac component id
+ *
+ * This function transmits the FILS Dicovery Action frame to
+ * southbound interface.
+ *
+ * Return: QDF_STATUS_SUCCESS - in case of success
+ */
+QDF_STATUS wlan_mgmt_txrx_fd_action_frame_tx(struct wlan_objmgr_vdev *vdev,
+					     qdf_nbuf_t buf,
+					     enum wlan_umac_comp_id comp_id);
+#endif /* WLAN_SUPPORT_FILS */
 
 /**
  * wlan_mgmt_txrx_register_rx_cb() - registers the rx cb for mgmt. frames
@@ -758,6 +1010,23 @@ QDF_STATUS wlan_mgmt_txrx_register_rx_cb(
 			enum wlan_umac_comp_id comp_id,
 			struct mgmt_txrx_mgmt_frame_cb_info *frm_cb_info,
 			uint8_t num_entries);
+
+/**
+ * wlan_mgmt_txrx_vdev_drain() - Function to drain all mgmt packets
+ * specific to a vdev
+ * @vdev: vdev context
+ * @mgmt_fill_peer_cb: callback func to UMAC to fill peer into buf
+ * @status: opaque pointer about the status of the pkts passed to UMAC
+ *
+ * This function drains all mgmt packets of a vdev. This can be used in the
+ * event of target going down without sending completions.
+ *
+ * Return: QDF_STATUS_SUCCESS - in case of success
+ */
+QDF_STATUS wlan_mgmt_txrx_vdev_drain(
+			struct wlan_objmgr_vdev *vdev,
+			mgmt_frame_fill_peer_cb mgmt_fill_peer_cb,
+			void *status);
 
 /**
  * wlan_mgmt_txrx_deregister_rx_cb() - deregisters the rx cb for mgmt. frames
@@ -792,4 +1061,39 @@ QDF_STATUS wlan_mgmt_txrx_psoc_open(struct wlan_objmgr_psoc *psoc);
  * Return: QDF_STATUS_SUCCESS - in case of success
  */
 QDF_STATUS wlan_mgmt_txrx_psoc_close(struct wlan_objmgr_psoc *psoc);
+
+/**
+ * wlan_mgmt_txrx_pdev_open() - mgmt txrx module pdev open API
+ * @pdev: pdev context
+ *
+ * Return: QDF_STATUS_SUCCESS - in case of success
+ */
+QDF_STATUS wlan_mgmt_txrx_pdev_open(struct wlan_objmgr_pdev *pdev);
+
+
+/**
+ * wlan_mgmt_txrx_pdev_close() - mgmt txrx module pdev close API
+ * @pdev: pdev context
+ *
+ * Return: QDF_STATUS_SUCCESS - in case of success
+ */
+QDF_STATUS wlan_mgmt_txrx_pdev_close(struct wlan_objmgr_pdev *pdev);
+
+/**
+ * wlan_mgmt_txrx_psoc_enable() - mgmt txrx module psoc enable API
+ * @psoc: psoc context
+ *
+ * Return: QDF_STATUS_SUCCESS - in case of success
+ */
+QDF_STATUS wlan_mgmt_txrx_psoc_enable(struct wlan_objmgr_psoc *psoc);
+
+/**
+ * wlan_mgmt_txrx_psoc_disable() - mgmt txrx module psoc disable API
+ * @psoc: psoc context
+ *
+ * Return: QDF_STATUS_SUCCESS - in case of success
+ */
+QDF_STATUS wlan_mgmt_txrx_psoc_disable(struct wlan_objmgr_psoc *psoc);
 #endif
+
+

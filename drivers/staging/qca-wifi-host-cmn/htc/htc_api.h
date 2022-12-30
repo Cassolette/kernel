@@ -1,8 +1,5 @@
 /*
- * Copyright (c) 2013-2014, 2016-2017 The Linux Foundation. All rights reserved.
- *
- * Previously licensed under the ISC license by Qualcomm Atheros, Inc.
- *
+ * Copyright (c) 2013-2014, 2016-2021 The Linux Foundation. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -17,12 +14,6 @@
  * PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR OTHER
  * TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
  * PERFORMANCE OF THIS SOFTWARE.
- */
-
-/*
- * This file was originally distributed by Qualcomm Atheros, Inc.
- * under proprietary terms before Copyright ownership was assigned
- * to the Linux Foundation.
  */
 
 #ifndef _HTC_API_H_
@@ -47,7 +38,13 @@ extern "C" {
 
 #define HTC_HTT_TRANSFER_HDRSIZE 24
 
-typedef void *HTC_HANDLE;
+/*
+ * NOTE WELL: struct opaque_htc_handle is not defined anywhere. This
+ * reference is used to help ensure that a HTC_HANDLE is never used
+ * where a different handle type is expected
+ */
+struct opaque_htc_handle;
+typedef struct opaque_htc_handle *HTC_HANDLE;
 
 typedef uint16_t HTC_SERVICE_ID;
 
@@ -59,6 +56,9 @@ struct htc_init_info {
 	void (*TargetSendSuspendComplete)(void *ctx, bool is_nack);
 	void (*target_initial_wakeup_cb)(void *cb_ctx);
 	void *target_psoc;
+	uint32_t cfg_wmi_credit_cnt;
+	/* HTC Pipe Ready Timeout in msecs */
+	uint32_t htc_ready_timeout_ms;
 };
 
 /* Struct for HTC layer packet stats*/
@@ -70,6 +70,8 @@ struct ol_ath_htc_stats {
 
 /* To resume HTT Tx queue during runtime resume */
 typedef void (*HTC_EP_RESUME_TX_QUEUE)(void *);
+
+typedef int (*HTC_EP_PADDING_CREDIT_UPDATE) (void *, int);
 
 /* per service connection send completion */
 typedef void (*HTC_EP_SEND_PKT_COMPLETE)(void *, HTC_PACKET *);
@@ -126,6 +128,10 @@ typedef HTC_PACKET *(*HTC_EP_RECV_ALLOC)(void *,
 					 HTC_ENDPOINT_ID Endpoint,
 					 int Length);
 
+/* Optional per service connection callback to log packet information.
+ */
+typedef void (*HTC_EP_LOG_PKT)(void *, HTC_PACKET *);
+
 enum htc_send_full_action {
 	/* packet that overflowed should be kept in the queue */
 	HTC_SEND_FULL_KEEP = 0,
@@ -171,11 +177,10 @@ struct htc_ep_callbacks {
 	 * indications (EpTxComplete must be NULL)
 	 */
 	HTC_EP_SEND_PKT_COMP_MULTIPLE EpTxCompleteMultiple;
-	/* OPTIONAL completion handler for multiple
-	 * recv packet indications (EpRecv must be NULL)
-	 */
-	HTC_EP_RECV_PKT_MULTIPLE EpRecvPktMultiple;
+
 	HTC_EP_RESUME_TX_QUEUE ep_resume_tx_queue;
+
+	HTC_EP_PADDING_CREDIT_UPDATE ep_padding_credit_update;
 	/* if EpRecvAllocThresh is non-NULL, HTC will compare the
 	 * threshold value to the current recv packet length and invoke
 	 * the EpRecvAllocThresh callback to acquire a packet buffer
@@ -188,7 +193,8 @@ struct htc_ep_callbacks {
 	 * are empty
 	 */
 	int RecvRefillWaterMark;
-
+	/* OPTIONAL callback to log packet information */
+	HTC_EP_LOG_PKT ep_log_pkt;
 };
 
 /* service connection information */
@@ -382,6 +388,26 @@ struct htc_endpoint_stats {
 	uint32_t RxAllocThreshBytes;
 };
 
+/**
+ * htc_link_vote_user_id - user ids for each link vote type
+ * @HTC_LINK_VOTE_INVALID_MIN_USER_ID: min user id
+ * @HTC_LINK_VOTE_SAP_USER_ID: sap user id
+ * @HTC_LINK_VOTE_GO_USER_ID: go user id
+ * @HTC_LINK_VOTE_NDP_USER_ID: ndp user id
+ * @HTC_LINK_VOTE_SAP_DFS_USER_ID: sap dfs user id
+ * @HTC_LINK_VOTE_STA_USER_ID: sta user id
+ * @HTC_LINK_VOTE_INVALID_MAX_USER_ID: max user id
+ */
+enum htc_link_vote_user_id {
+	HTC_LINK_VOTE_INVALID_MIN_USER_ID = 0,
+	HTC_LINK_VOTE_SAP_USER_ID = 1,
+	HTC_LINK_VOTE_GO_USER_ID = 2,
+	HTC_LINK_VOTE_NDP_USER_ID = 3,
+	HTC_LINK_VOTE_SAP_DFS_USER_ID = 4,
+	HTC_LINK_VOTE_STA_USER_ID = 5,
+	HTC_LINK_VOTE_INVALID_MAX_USER_ID
+};
+
 /* ------ Function Prototypes ------ */
 /**
  * htc_create - Create an instance of HTC over the underlying HIF device
@@ -453,18 +479,6 @@ QDF_STATUS htc_wait_target(HTC_HANDLE HTCHandle);
 QDF_STATUS htc_start(HTC_HANDLE HTCHandle);
 
 /**
- * htc_add_receive_pkt - Add receive packet to HTC
- * @HTCHandle - HTC handle
- * @pPacket - HTC receive packet to add
- *
- * User must supply HTC packets for capturing incoming HTC frames.
- * The caller must initialize each HTC packet using the
- * SET_HTC_PACKET_INFO_RX_REFILL() macro.
- * Return: A_OK on success
- */
-A_STATUS htc_add_receive_pkt(HTC_HANDLE HTCHandle, HTC_PACKET *pPacket);
-
-/**
  * htc_connect_service - Connect to an HTC service
  * @HTCHandle - HTC handle
  * @pReq - connection details
@@ -488,6 +502,15 @@ QDF_STATUS htc_connect_service(HTC_HANDLE HTCHandle,
  * Return: None
  */
 void htc_dump(HTC_HANDLE HTCHandle, uint8_t CmdId, bool start);
+
+/**
+ * htc_ce_taklet_debug_dump - Dump ce tasklet rings debug data
+ * @HTCHandle - HTC handle
+ *
+ * Debug logs will be printed.
+ * Return: None
+ */
+void htc_ce_tasklet_debug_dump(HTC_HANDLE htc_handle);
 
 /**
  * htc_send_pkt - Send an HTC packet
@@ -626,25 +649,6 @@ bool htc_get_endpoint_statistics(HTC_HANDLE HTCHandle,
 void htc_unblock_recv(HTC_HANDLE HTCHandle);
 
 /**
- * htc_send_pkts_multiple - Send a series of HTC packets
- * @HTCHandle - HTC handle
- * @pPktQueue - local queue holding packets to send
- *
- * Caller must initialize each packet using SET_HTC_PACKET_INFO_TX()
- * macro. The queue must only contain packets directed at the same
- * endpoint. Caller supplies a pointer to an HTC_PACKET_QUEUE structure
- * holding the TX packets in FIFO order. This API will remove the
- * packets from the pkt queue and place them into the HTC Tx Queue
- * and bundle messages where possible.
- * The caller may allocate the pkt queue on the stack to hold the pkts.
- * This interface is fully asynchronous.  On error, htc_send_pkts will
- * call the registered Endpoint callback to cleanup the packet.
- * Return: QDF_STATUS_SUCCESS
- */
-QDF_STATUS htc_send_pkts_multiple(HTC_HANDLE HTCHandle,
-				HTC_PACKET_QUEUE *pPktQueue);
-
-/**
  * htc_add_receive_pkt_multiple - Add multiple receive packets to HTC
  * @HTCHandle - HTC handle
  * @pPktQueue - HTC receive packet queue holding packets to add
@@ -673,15 +677,35 @@ bool htc_is_endpoint_active(HTC_HANDLE HTCHandle,
 			      HTC_ENDPOINT_ID Endpoint);
 
 /**
+ * htc_set_pkt_dbg - Set up debug flag for HTC packets
+ * @HTCHandle - HTC handle
+ * @dbg_flag - enable or disable flag
+ *
+ * Return: none
+ */
+void htc_set_pkt_dbg(HTC_HANDLE handle, A_BOOL dbg_flag);
+
+/**
  * htc_set_nodrop_pkt - Set up nodrop pkt flag for mboxping nodrop pkt
  * @HTCHandle - HTC handle
  * @isNodropPkt - indicates whether it is nodrop pkt
  *
  * Return: None
- * Return:
  *
  */
 void htc_set_nodrop_pkt(HTC_HANDLE HTCHandle, A_BOOL isNodropPkt);
+
+/**
+ * htc_enable_hdr_length_check - Set up htc_hdr_length_check flag
+ * @HTCHandle - HTC handle
+ * @htc_hdr_length_check - flag to indicate whether htc header length check is
+ *                         required
+ *
+ * Return: None
+ *
+ */
+void
+htc_enable_hdr_length_check(HTC_HANDLE htc_handle, bool htc_hdr_length_check);
 
 /**
  * htc_get_num_recv_buffers - Get the number of recv buffers currently queued
@@ -723,19 +747,7 @@ struct ol_ath_htc_stats *ieee80211_ioctl_get_htc_stats(HTC_HANDLE
  *
  * Return: htc_handle tx queue depth
  */
-int htc_get_tx_queue_depth(HTC_HANDLE *htc_handle, HTC_ENDPOINT_ID endpoint_id);
-
-#ifdef HIF_USB
-#define HTCReturnReceivePkt(target, p, osbuf) \
-	do { \
-		A_NETBUF_FREE(osbuf);  \
-		if (p->Status == A_CLONE) {  \
-			qdf_mem_free(p);  \
-		} \
-	} while (0)
-#else
-#define HTCReturnReceivePkt(target, p, osbuf)   htc_add_receive_pkt(target, p)
-#endif
+int htc_get_tx_queue_depth(HTC_HANDLE htc_handle, HTC_ENDPOINT_ID endpoint_id);
 
 #ifdef WLAN_FEATURE_FASTPATH
 void htc_ctrl_msg_cmpl(HTC_HANDLE htc_pdev, HTC_ENDPOINT_ID htc_ep_id);
@@ -766,18 +778,15 @@ void htc_global_credit_flow_enable(void);
 
 /* Disable ASPM : Disable PCIe low power */
 bool htc_can_suspend_link(HTC_HANDLE HTCHandle);
-void htc_vote_link_down(HTC_HANDLE HTCHandle);
-void htc_vote_link_up(HTC_HANDLE HTCHandle);
+
 #ifdef IPA_OFFLOAD
 void htc_ipa_get_ce_resource(HTC_HANDLE htc_handle,
-			     qdf_dma_addr_t *ce_sr_base_paddr,
+			     qdf_shared_mem_t **ce_sr,
 			     uint32_t *ce_sr_ring_size,
 			     qdf_dma_addr_t *ce_reg_paddr);
 #else
 #define htc_ipa_get_ce_resource(htc_handle,                \
-			ce_sr_base_paddr,                  \
-			ce_sr_ring_size,                   \
-			ce_reg_paddr)                      /* NO-OP */
+			ce_sr, ce_sr_ring_size, ce_reg_paddr)     /* NO-OP */
 #endif /* IPA_OFFLOAD */
 
 #if defined(DEBUG_HL_LOGGING) && defined(CONFIG_HL_SUPPORT)
@@ -802,9 +811,72 @@ void htc_clear_bundle_stats(HTC_HANDLE HTCHandle);
 #ifdef FEATURE_RUNTIME_PM
 int htc_pm_runtime_get(HTC_HANDLE htc_handle);
 int htc_pm_runtime_put(HTC_HANDLE htc_handle);
+
+/**
+ * htc_dec_return_runtime_cnt: Decrement htc runtime count
+ * @htc: HTC handle
+ *
+ * Return: value of runtime count after decrement
+ */
+int32_t htc_dec_return_runtime_cnt(HTC_HANDLE htc);
 #else
 static inline int htc_pm_runtime_get(HTC_HANDLE htc_handle) { return 0; }
 static inline int htc_pm_runtime_put(HTC_HANDLE htc_handle) { return 0; }
+
+static inline
+int32_t htc_dec_return_runtime_cnt(HTC_HANDLE htc)
+{
+	return -1;
+}
+#endif
+
+#ifdef WLAN_DEBUG_LINK_VOTE
+/**
+ * htc_log_link_user_votes - API to log link user votes
+ *
+ * API to log the link user votes
+ *
+ * Return: void
+ */
+void htc_log_link_user_votes(void);
+
+/**
+ * htc_vote_link_down - API to vote for link down
+ * @htc_handle: HTC handle
+ * @id: PCIe link vote user id
+ *
+ * API for upper layers to call HIF to vote for link down
+ *
+ * Return: void
+ */
+void htc_vote_link_down(HTC_HANDLE htc_handle, enum htc_link_vote_user_id id);
+
+/**
+ * htc_vote_link_up - API to vote for link up
+ * @htc_handle: HTC Handle
+ * @id: PCIe link vote user id
+ *
+ * API for upper layers to call HIF to vote for link up
+ *
+ * Return: void
+ */
+void htc_vote_link_up(HTC_HANDLE htc_handle, enum htc_link_vote_user_id id);
+
+#else
+static inline
+void htc_log_link_user_votes(void)
+{
+}
+
+static inline
+void htc_vote_link_down(HTC_HANDLE htc_handle, enum htc_link_vote_user_id id)
+{
+}
+
+static inline
+void htc_vote_link_up(HTC_HANDLE htc_handle, enum htc_link_vote_user_id id)
+{
+}
 #endif
 
 /**
@@ -838,9 +910,39 @@ void htc_set_wmi_endpoint_count(HTC_HANDLE htc_handle, uint8_t wmi_ep_count);
  */
 uint8_t  htc_get_wmi_endpoint_count(HTC_HANDLE htc_handle);
 
-#ifdef WMI_INTERFACE_EVENT_LOGGING
+/**
+ * htc_print_credit_history: print HTC credit history in buffer
+ * @htc:        HTC handle
+ * @count:      Number of lines to be copied
+ * @print:      Print callback to print in the buffer
+ * @print_priv: any data required by the print method, e.g. a file handle
+ *
+ * return: None
+ */
+#ifdef FEATURE_HTC_CREDIT_HISTORY
 void htc_print_credit_history(HTC_HANDLE htc, uint32_t count,
 			      qdf_abstract_print * print, void *print_priv);
+#else
+static inline
+void htc_print_credit_history(HTC_HANDLE htc, uint32_t count,
+			      qdf_abstract_print *print, void *print_priv)
+{
+	print(print_priv, "HTC Credit History Feature is disabled");
+}
 #endif
 
+#ifdef SYSTEM_PM_CHECK
+/**
+ * htc_system_resume() - Send out any pending WMI/HTT
+ *  messages pending in htc queues on system resume.
+ * @htc: HTC handle
+ *
+ * Return: None
+ */
+void htc_system_resume(HTC_HANDLE htc);
+#else
+static inline void htc_system_resume(HTC_HANDLE htc)
+{
+}
+#endif
 #endif /* _HTC_API_H_ */
