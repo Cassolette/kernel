@@ -1,8 +1,5 @@
 /*
- * Copyright (c) 2014-2017 The Linux Foundation. All rights reserved.
- *
- * Previously licensed under the ISC license by Qualcomm Atheros, Inc.
- *
+ * Copyright (c) 2014-2019 The Linux Foundation. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -17,12 +14,6 @@
  * PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR OTHER
  * TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
  * PERFORMANCE OF THIS SOFTWARE.
- */
-
-/*
- * This file was originally distributed by Qualcomm Atheros, Inc.
- * under proprietary terms before Copyright ownership was assigned
- * to the Linux Foundation.
  */
 
 #include "i_bmi.h"
@@ -242,6 +233,8 @@ QDF_STATUS bmi_download_firmware(struct ol_context *ol_ctx)
 
 	if (!hif_needs_bmi(scn))
 		return QDF_STATUS_SUCCESS;
+	else
+		hif_register_bmi_callbacks(scn);
 
 	return bmi_firmware_download(ol_ctx);
 }
@@ -260,8 +253,8 @@ QDF_STATUS bmi_read_soc_register(uint32_t address, uint32_t *param,
 	qdf_dma_addr_t rsp = info->bmi_rsp_da;
 
 	bmi_assert(BMI_COMMAND_FITS(sizeof(cid) + sizeof(address)));
-	qdf_mem_set(bmi_cmd_buff, 0, sizeof(cid) + sizeof(address));
-	qdf_mem_set(bmi_rsp_buff, 0, sizeof(cid) + sizeof(address));
+	qdf_mem_zero(bmi_cmd_buff, sizeof(cid) + sizeof(address));
+	qdf_mem_zero(bmi_rsp_buff, sizeof(cid) + sizeof(address));
 
 	if (info->bmi_done) {
 		BMI_DBG("Command disallowed");
@@ -305,7 +298,7 @@ QDF_STATUS bmi_write_soc_register(uint32_t address, uint32_t param,
 	qdf_dma_addr_t rsp = info->bmi_rsp_da;
 
 	bmi_assert(BMI_COMMAND_FITS(size));
-	qdf_mem_set(bmi_cmd_buff, 0, size);
+	qdf_mem_zero(bmi_cmd_buff, size);
 
 	if (info->bmi_done) {
 		BMI_DBG("Command disallowed");
@@ -350,7 +343,7 @@ bmilz_data(uint8_t *buffer, uint32_t length, struct ol_context *ol_ctx)
 	qdf_dma_addr_t rsp = info->bmi_rsp_da;
 
 	bmi_assert(BMI_COMMAND_FITS(BMI_DATASZ_MAX + header));
-	qdf_mem_set(bmi_cmd_buff, 0, BMI_DATASZ_MAX + header);
+	qdf_mem_zero(bmi_cmd_buff, BMI_DATASZ_MAX + header);
 
 	if (info->bmi_done) {
 		BMI_ERR("Command disallowed");
@@ -407,7 +400,7 @@ QDF_STATUS bmi_sign_stream_start(uint32_t address, uint8_t *buffer,
 	qdf_dma_addr_t rsp = info->bmi_rsp_da;
 
 	bmi_assert(BMI_COMMAND_FITS(BMI_DATASZ_MAX + header));
-	qdf_mem_set(bmi_cmd_buff, 0, BMI_DATASZ_MAX + header);
+	qdf_mem_zero(bmi_cmd_buff, BMI_DATASZ_MAX + header);
 
 	if (info->bmi_done) {
 		BMI_ERR("Command disallowed");
@@ -423,8 +416,8 @@ QDF_STATUS bmi_sign_stream_start(uint32_t address, uint8_t *buffer,
 		src = &buffer[length - remaining];
 		if (remaining < (BMI_DATASZ_MAX - header)) {
 			if (remaining & 0x3) {
-				remaining = remaining + (4 - (remaining & 0x3));
 				memcpy(aligned_buf, src, remaining);
+				remaining = remaining + (4 - (remaining & 0x3));
 				src = aligned_buf;
 			}
 			txlen = remaining;
@@ -470,7 +463,7 @@ bmilz_stream_start(uint32_t address, struct ol_context *ol_ctx)
 	qdf_dma_addr_t rsp = info->bmi_rsp_da;
 
 	bmi_assert(BMI_COMMAND_FITS(sizeof(cid) + sizeof(address)));
-	qdf_mem_set(bmi_cmd_buff, 0, sizeof(cid) + sizeof(address));
+	qdf_mem_zero(bmi_cmd_buff, sizeof(cid) + sizeof(address));
 
 	if (info->bmi_done) {
 		BMI_DBG("Command disallowed");

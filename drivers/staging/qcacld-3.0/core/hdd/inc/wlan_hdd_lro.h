@@ -1,7 +1,5 @@
 /*
- * Copyright (c) 2015-2017 The Linux Foundation. All rights reserved.
- *
- * Previously licensed under the ISC license by Qualcomm Atheros, Inc.
+ * Copyright (c) 2015-2018 The Linux Foundation. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -18,12 +16,6 @@
  * PERFORMANCE OF THIS SOFTWARE.
  */
 
-/*
- * This file was originally distributed by Qualcomm Atheros, Inc.
- * under proprietary terms before Copyright ownership was assigned
- * to the Linux Foundation.
- */
-
 #ifndef __WLAN_HDD_LRO_H__
 #define __WLAN_HDD_LRO_H__
 /**
@@ -34,56 +26,61 @@
 
 struct hdd_context;
 
-/**
- * enum hdd_lro_rx_status - LRO receive frame status
- * @HDD_LRO_RX: frame sent over the LRO interface
- * @HDD_LRO_NO_RX: frame not sent over the LRO interface
- */
-enum hdd_lro_rx_status {
-	HDD_LRO_RX = 0,
-	HDD_LRO_NO_RX = 1,
-};
-
 #if defined(FEATURE_LRO)
-int hdd_lro_init(struct hdd_context *hdd_ctx);
-
-enum hdd_lro_rx_status hdd_lro_rx(struct hdd_context *hdd_ctx,
-	 struct hdd_adapter *adapter, struct sk_buff *skb);
-void hdd_lro_display_stats(struct hdd_context *hdd_ctx);
-void hdd_disable_lro_in_concurrency(bool);
 /**
- * hdd_disable_lro_for_low_tput() - enable/disable LRO based on tput
- * hdd_ctx: hdd context
- * disable: boolean to enable/disable LRO
+ * hdd_lro_rx() - Handle Rx procesing via LRO
+ * @adapter: pointer to adapter context
+ * @skb: pointer to sk_buff
  *
- * This API enables/disables LRO based on tput.
- *
- * Return: void
+ * Return: QDF_STATUS_SUCCESS if processed via LRO or non zero return code
  */
-void hdd_disable_lro_for_low_tput(struct hdd_context *hdd_ctx, bool disable);
-#else
-static inline int hdd_lro_init(struct hdd_context *hdd_ctx)
-{
-	return 0;
-}
+QDF_STATUS hdd_lro_rx(struct hdd_adapter *adapter, struct sk_buff *skb);
 
-static inline enum hdd_lro_rx_status hdd_lro_rx(struct hdd_context *hdd_ctx,
-	 struct hdd_adapter *adapter, struct sk_buff *skb)
+void hdd_lro_display_stats(struct hdd_context *hdd_ctx);
+
+/**
+ * hdd_lro_set_reset() - vendor command for Disable/Enable LRO
+ * @hdd_ctx: hdd context
+ * @hdd_adapter_t: adapter
+ * @enable_flag: enable or disable LRO.
+ *
+ * Return: none
+ */
+QDF_STATUS hdd_lro_set_reset(struct hdd_context *hdd_ctx,
+			     struct hdd_adapter *adapter,
+			     uint8_t enable_flag);
+
+/**
+ * hdd_is_lro_enabled() - Is LRO enabled
+ * @hdd_ctx: HDD context
+ *
+ * This function checks if LRO is enabled in HDD context.
+ *
+ * Return: 0 - success, < 0 - failure
+ */
+int hdd_is_lro_enabled(struct hdd_context *hdd_ctx);
+
+#else
+static inline QDF_STATUS hdd_lro_rx(struct hdd_adapter *adapter,
+				    struct sk_buff *skb)
 {
-	return HDD_LRO_NO_RX;
+	return QDF_STATUS_E_NOSUPPORT;
 }
 
 static inline void hdd_lro_display_stats(struct hdd_context *hdd_ctx)
 {
 }
 
-static inline void hdd_disable_lro_in_concurrency(bool disable)
+static inline QDF_STATUS hdd_lro_set_reset(struct hdd_context *hdd_ctx,
+					   struct hdd_adapter *adapter,
+					   uint8_t enable_flag)
 {
+	return 0;
 }
 
-static inline void
-hdd_disable_lro_for_low_tput(struct hdd_context *hdd_ctx, bool disable)
+static inline int hdd_is_lro_enabled(struct hdd_context *hdd_ctx)
 {
+	return -EOPNOTSUPP;
 }
 #endif /* FEATURE_LRO */
 #endif /* __WLAN_HDD_LRO_H__ */

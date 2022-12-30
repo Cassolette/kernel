@@ -1,8 +1,5 @@
 /*
- * Copyright (c) 2011-2017 The Linux Foundation. All rights reserved.
- *
- * Previously licensed under the ISC license by Qualcomm Atheros, Inc.
- *
+ * Copyright (c) 2011-2021 The Linux Foundation. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -17,12 +14,6 @@
  * PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR OTHER
  * TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
  * PERFORMANCE OF THIS SOFTWARE.
- */
-
-/*
- * This file was originally distributed by Qualcomm Atheros, Inc.
- * under proprietary terms before Copyright ownership was assigned
- * to the Linux Foundation.
  */
 
 /**
@@ -50,6 +41,9 @@
 #include <wdi_ipa.h>            /* HTT host->target WDI IPA msg defs */
 #include <ol_txrx_htt_api.h>    /* ol_tx_completion_handler, htt_tx_status */
 #include <ol_htt_tx_api.h>
+#include <ol_txrx_types.h>
+#include <ol_tx_send.h>
+#include <ol_htt_rx_api.h>
 
 #include <htt_internal.h>
 #include <wlan_policy_mgr_api.h>
@@ -65,8 +59,13 @@
 #ifdef ATH_11AC_TXCOMPACT
 #define HTT_SEND_HTC_PKT(pdev, pkt)                              \
 do {                                                             \
-	if (htc_send_pkt(pdev->htc_pdev, &pkt->htc_pkt) == QDF_STATUS_SUCCESS) \
+	if (htc_send_pkt(pdev->htc_pdev, &pkt->htc_pkt) ==       \
+	    QDF_STATUS_SUCCESS) {                                \
 		htt_htc_misc_pkt_list_add(pdev, pkt);            \
+	} else {                                                 \
+		qdf_nbuf_free((qdf_nbuf_t)(pkt->htc_pkt.pNetBufContext));   \
+		htt_htc_pkt_free(pdev, pkt);                     \
+	}                                                        \
 } while (0)
 #else
 #define HTT_SEND_HTC_PKT(pdev, ppkt) \
@@ -80,6 +79,30 @@ htt_h2t_send_complete_free_netbuf(void *pdev, QDF_STATUS status,
 {
 	qdf_nbuf_free(netbuf);
 }
+
+#ifndef QCN7605_SUPPORT
+static void htt_t2h_adjust_bus_target_delta(struct htt_pdev_t *pdev)
+{
+	int32_t credit_delta;
+
+	if (pdev->cfg.is_high_latency && !pdev->cfg.default_tx_comp_req) {
+		HTT_TX_MUTEX_ACQUIRE(&pdev->credit_mutex);
+		qdf_atomic_add(1, &pdev->htt_tx_credit.bus_delta);
+		credit_delta = htt_tx_credit_update(pdev);
+		HTT_TX_MUTEX_RELEASE(&pdev->credit_mutex);
+
+		if (credit_delta)
+			ol_tx_credit_completion_handler(pdev->txrx_pdev,
+							credit_delta);
+	}
+}
+#else
+static void htt_t2h_adjust_bus_target_delta(struct htt_pdev_t *pdev)
+{
+	/* UNPAUSE OS Q */
+	ol_tx_flow_ct_unpause_os_q(pdev->txrx_pdev);
+}
+#endif
 
 void htt_h2t_send_complete(void *context, HTC_PACKET *htc_pkt)
 {
@@ -95,24 +118,12 @@ void htt_h2t_send_complete(void *context, HTC_PACKET *htc_pkt)
 
 	/* process (free or keep) the netbuf that held the message */
 	netbuf = (qdf_nbuf_t) htc_pkt->pNetBufContext;
-	if (send_complete_part2 != NULL) {
+	if (send_complete_part2) {
 		send_complete_part2(htt_pkt->pdev_ctxt, htc_pkt->Status, netbuf,
 				    htt_pkt->msdu_id);
 	}
 
-	if (pdev->cfg.is_high_latency && !pdev->cfg.default_tx_comp_req) {
-		int32_t credit_delta;
-
-		HTT_TX_MUTEX_ACQUIRE(&pdev->credit_mutex);
-		qdf_atomic_add(1, &pdev->htt_tx_credit.bus_delta);
-		credit_delta = htt_tx_credit_update(pdev);
-		HTT_TX_MUTEX_RELEASE(&pdev->credit_mutex);
-
-		if (credit_delta)
-			ol_tx_credit_completion_handler(pdev->txrx_pdev,
-							credit_delta);
-	}
-
+	htt_t2h_adjust_bus_target_delta(pdev);
 	/* free the htt_htc_pkt / HTC_PACKET object */
 	htt_htc_pkt_free(pdev, htt_pkt);
 }
@@ -208,8 +219,12 @@ QDF_STATUS htt_h2t_frag_desc_bank_cfg_msg(struct htt_pdev_t *pdev)
 
 	rc = htc_send_pkt(pdev->htc_pdev, &pkt->htc_pkt);
 #ifdef ATH_11AC_TXCOMPACT
-	if (rc == QDF_STATUS_SUCCESS)
+	if (rc == QDF_STATUS_SUCCESS) {
 		htt_htc_misc_pkt_list_add(pdev, pkt);
+	} else {
+		qdf_nbuf_free(msg);
+		htt_htc_pkt_free(pdev, pkt);
+	}
 #endif
 
 	return rc;
@@ -290,9 +305,7 @@ QDF_STATUS htt_h2t_ver_req_msg(struct htt_pdev_t *pdev)
 	SET_HTC_PACKET_NET_BUF_CONTEXT(&pkt->htc_pkt, msg);
 	HTT_SEND_HTC_PKT(pdev, pkt);
 
-	if ((pdev->cfg.is_high_latency) &&
-	    (!pdev->cfg.default_tx_comp_req))
-		ol_tx_target_credit_update(pdev->txrx_pdev, -1);
+	ol_tx_deduct_one_credit(pdev->txrx_pdev);
 
 	return QDF_STATUS_SUCCESS;
 }
@@ -313,7 +326,7 @@ QDF_STATUS htt_h2t_rx_ring_rfs_cfg_msg_ll(struct htt_pdev_t *pdev)
 	uint32_t  msg_local;
 	struct cds_config_info *cds_cfg;
 
-	QDF_TRACE(QDF_MODULE_ID_HTT, QDF_TRACE_LEVEL_INFO,
+	QDF_TRACE(QDF_MODULE_ID_HTT, QDF_TRACE_LEVEL_INFO_LOW,
 		  "Receive flow steering configuration, disable gEnableFlowSteering(=0) in ini if FW doesnot support it\n");
 	pkt = htt_htc_pkt_alloc(pdev);
 	if (!pkt)
@@ -349,22 +362,22 @@ QDF_STATUS htt_h2t_rx_ring_rfs_cfg_msg_ll(struct htt_pdev_t *pdev)
 	HTT_H2T_MSG_TYPE_SET(msg_local, HTT_H2T_MSG_TYPE_RFS_CONFIG);
 	if (ol_cfg_is_flow_steering_enabled(pdev->ctrl_pdev)) {
 		HTT_RX_RFS_CONFIG_SET(msg_local, 1);
-		QDF_TRACE(QDF_MODULE_ID_HTT, QDF_TRACE_LEVEL_INFO,
+		QDF_TRACE(QDF_MODULE_ID_HTT, QDF_TRACE_LEVEL_INFO_LOW,
 			  "Enable Rx flow steering");
 	} else {
-	    QDF_TRACE(QDF_MODULE_ID_HTT, QDF_TRACE_LEVEL_INFO,
+	    QDF_TRACE(QDF_MODULE_ID_HTT, QDF_TRACE_LEVEL_INFO_LOW,
 		      "Disable Rx flow steering");
 	}
 	cds_cfg = cds_get_ini_config();
-	if (cds_cfg != NULL) {
+	if (cds_cfg) {
 		msg_local |= ((cds_cfg->max_msdus_per_rxinorderind & 0xff)
 			      << 16);
-		QDF_TRACE(QDF_MODULE_ID_HTT, QDF_TRACE_LEVEL_INFO,
+		QDF_TRACE(QDF_MODULE_ID_HTT, QDF_TRACE_LEVEL_INFO_LOW,
 			  "Updated maxMSDUsPerRxInd");
 	}
 
 	*msg_word = msg_local;
-	QDF_TRACE(QDF_MODULE_ID_HTT, QDF_TRACE_LEVEL_INFO,
+	QDF_TRACE(QDF_MODULE_ID_HTT, QDF_TRACE_LEVEL_INFO_LOW,
 		  "%s: Sending msg_word: 0x%08x",
 		  __func__, *msg_word);
 
@@ -499,7 +512,7 @@ QDF_STATUS htt_h2t_rx_ring_cfg_msg_ll(struct htt_pdev_t *pdev)
 		enable_hdr = 1;
 		enable_ppdu_start = 1;
 		enable_ppdu_end = 1;
-		QDF_TRACE(QDF_MODULE_ID_HTT, QDF_TRACE_LEVEL_INFO,
+		QDF_TRACE(QDF_MODULE_ID_HTT, QDF_TRACE_LEVEL_INFO_LOW,
 			  "%s : %d Pkt log is enabled\n",  __func__, __LINE__);
 	} else {
 		QDF_TRACE(QDF_MODULE_ID_HTT, QDF_TRACE_LEVEL_INFO,
@@ -535,6 +548,7 @@ QDF_STATUS htt_h2t_rx_ring_cfg_msg_ll(struct htt_pdev_t *pdev)
 			  __func__, __LINE__);
 	}
 
+	htt_rx_enable_ppdu_end(&enable_ppdu_end);
 	HTT_RX_RING_CFG_ENABLED_802_11_HDR_SET(*msg_word, enable_hdr);
 	HTT_RX_RING_CFG_ENABLED_MSDU_PAYLD_SET(*msg_word, 1);
 	HTT_RX_RING_CFG_ENABLED_PPDU_START_SET(*msg_word, enable_ppdu_start);
@@ -736,15 +750,17 @@ htt_h2t_rx_ring_cfg_msg_hl(struct htt_pdev_t *pdev)
 	SET_HTC_PACKET_NET_BUF_CONTEXT(&pkt->htc_pkt, msg);
 
 #ifdef ATH_11AC_TXCOMPACT
-	if (htc_send_pkt(pdev->htc_pdev, &pkt->htc_pkt) == QDF_STATUS_SUCCESS)
+	if (htc_send_pkt(pdev->htc_pdev, &pkt->htc_pkt) == QDF_STATUS_SUCCESS) {
 		htt_htc_misc_pkt_list_add(pdev, pkt);
+	} else {
+		qdf_nbuf_free(msg);
+		htt_htc_pkt_free(pdev, pkt);
+	}
 #else
 	htc_send_pkt(pdev->htc_pdev, &pkt->htc_pkt);
 #endif
 
-	if ((pdev->cfg.is_high_latency) &&
-	    (!pdev->cfg.default_tx_comp_req))
-		ol_tx_target_credit_update(pdev->txrx_pdev, -1);
+	ol_tx_deduct_one_credit(pdev->txrx_pdev);
 
 	return QDF_STATUS_SUCCESS;
 }
@@ -767,7 +783,7 @@ int
 htt_h2t_dbg_stats_get(struct htt_pdev_t *pdev,
 		      uint32_t stats_type_upload_mask,
 		      uint32_t stats_type_reset_mask,
-		      uint8_t cfg_stat_type, uint32_t cfg_val, uint64_t cookie)
+		      uint8_t cfg_stat_type, uint32_t cfg_val, uint8_t cookie)
 {
 	struct htt_htc_pkt *pkt;
 	qdf_nbuf_t msg;
@@ -831,11 +847,11 @@ htt_h2t_dbg_stats_get(struct htt_pdev_t *pdev,
 
 	/* cookie LSBs */
 	msg_word++;
-	*msg_word = cookie & 0xffffffff;
+	*msg_word = cookie;
 
 	/* cookie MSBs */
 	msg_word++;
-	*msg_word = cookie >> 32;
+	*msg_word = 0;
 
 	SET_HTC_PACKET_INFO_TX(&pkt->htc_pkt,
 			       htt_h2t_send_complete_free_netbuf,
@@ -847,15 +863,17 @@ htt_h2t_dbg_stats_get(struct htt_pdev_t *pdev,
 	SET_HTC_PACKET_NET_BUF_CONTEXT(&pkt->htc_pkt, msg);
 
 #ifdef ATH_11AC_TXCOMPACT
-	if (htc_send_pkt(pdev->htc_pdev, &pkt->htc_pkt) == QDF_STATUS_SUCCESS)
+	if (htc_send_pkt(pdev->htc_pdev, &pkt->htc_pkt) == QDF_STATUS_SUCCESS) {
 		htt_htc_misc_pkt_list_add(pdev, pkt);
+	} else {
+		qdf_nbuf_free(msg);
+		htt_htc_pkt_free(pdev, pkt);
+	}
 #else
 	htc_send_pkt(pdev->htc_pdev, &pkt->htc_pkt);
 #endif
 
-	if ((pdev->cfg.is_high_latency) &&
-	    (!pdev->cfg.default_tx_comp_req))
-		ol_tx_target_credit_update(pdev->txrx_pdev, -1);
+	ol_tx_deduct_one_credit(pdev->txrx_pdev);
 
 	return 0;
 }
@@ -907,9 +925,7 @@ A_STATUS htt_h2t_sync_msg(struct htt_pdev_t *pdev, uint8_t sync_cnt)
 	SET_HTC_PACKET_NET_BUF_CONTEXT(&pkt->htc_pkt, msg);
 	HTT_SEND_HTC_PKT(pdev, pkt);
 
-	if ((pdev->cfg.is_high_latency) &&
-	    (!pdev->cfg.default_tx_comp_req))
-		ol_tx_target_credit_update(pdev->txrx_pdev, -1);
+	ol_tx_deduct_one_credit(pdev->txrx_pdev);
 
 	return A_OK;
 }
@@ -972,15 +988,17 @@ htt_h2t_aggr_cfg_msg(struct htt_pdev_t *pdev,
 	SET_HTC_PACKET_NET_BUF_CONTEXT(&pkt->htc_pkt, msg);
 
 #ifdef ATH_11AC_TXCOMPACT
-	if (htc_send_pkt(pdev->htc_pdev, &pkt->htc_pkt) == QDF_STATUS_SUCCESS)
+	if (htc_send_pkt(pdev->htc_pdev, &pkt->htc_pkt) == QDF_STATUS_SUCCESS) {
 		htt_htc_misc_pkt_list_add(pdev, pkt);
+	} else {
+		qdf_nbuf_free(msg);
+		htt_htc_pkt_free(pdev, pkt);
+	}
 #else
 	htc_send_pkt(pdev->htc_pdev, &pkt->htc_pkt);
 #endif
 
-	if ((pdev->cfg.is_high_latency) &&
-	    (!pdev->cfg.default_tx_comp_req))
-		ol_tx_target_credit_update(pdev->txrx_pdev, -1);
+	ol_tx_deduct_one_credit(pdev->txrx_pdev);
 
 	return 0;
 }
@@ -999,6 +1017,7 @@ int htt_h2t_ipa_uc_rsc_cfg_msg(struct htt_pdev_t *pdev)
 	struct htt_htc_pkt *pkt;
 	qdf_nbuf_t msg;
 	uint32_t *msg_word;
+	unsigned int tx_count = 0;
 
 	pkt = htt_htc_pkt_alloc(pdev);
 	if (!pkt)
@@ -1036,15 +1055,16 @@ int htt_h2t_ipa_uc_rsc_cfg_msg(struct htt_pdev_t *pdev)
 	*msg_word = 0;
 	/* TX COMP RING BASE LO */
 	HTT_WDI_IPA_CFG_TX_COMP_RING_BASE_ADDR_LO_SET(*msg_word,
-		(unsigned int)pdev->ipa_uc_tx_rsc.tx_comp_base.paddr);
+		(unsigned int)qdf_mem_get_dma_addr(pdev->osdev,
+			&pdev->ipa_uc_tx_rsc.tx_comp_ring->mem_info));
 	msg_word++;
 	*msg_word = 0;
 	/* TX COMP RING BASE HI, NONE */
 
 	msg_word++;
 	*msg_word = 0;
-	HTT_WDI_IPA_CFG_TX_COMP_RING_SIZE_SET(*msg_word,
-		(unsigned int)ol_cfg_ipa_uc_tx_max_buf_cnt(pdev->ctrl_pdev));
+	tx_count = qdf_get_pwr2(ol_cfg_ipa_uc_tx_max_buf_cnt(pdev->ctrl_pdev));
+	HTT_WDI_IPA_CFG_TX_COMP_RING_SIZE_SET(*msg_word, tx_count);
 
 	msg_word++;
 	*msg_word = 0;
@@ -1056,14 +1076,16 @@ int htt_h2t_ipa_uc_rsc_cfg_msg(struct htt_pdev_t *pdev)
 	msg_word++;
 	*msg_word = 0;
 	HTT_WDI_IPA_CFG_TX_CE_WR_IDX_ADDR_LO_SET(*msg_word,
-		(unsigned int)pdev->ipa_uc_tx_rsc.tx_ce_idx.paddr);
+		(unsigned int)qdf_mem_get_dma_addr(pdev->osdev,
+			&pdev->ipa_uc_tx_rsc.tx_ce_idx->mem_info));
 	msg_word++;
 	*msg_word = 0;
 
 	msg_word++;
 	*msg_word = 0;
 	HTT_WDI_IPA_CFG_RX_IND_RING_BASE_ADDR_LO_SET(*msg_word,
-		(unsigned int)pdev->ipa_uc_rx_rsc.rx_ind_ring_base.paddr);
+		(unsigned int)qdf_mem_get_dma_addr(pdev->osdev,
+			&pdev->ipa_uc_rx_rsc.rx_ind_ring->mem_info));
 	msg_word++;
 	*msg_word = 0;
 	HTT_WDI_IPA_CFG_RX_IND_RING_BASE_ADDR_HI_SET(*msg_word,
@@ -1077,7 +1099,8 @@ int htt_h2t_ipa_uc_rsc_cfg_msg(struct htt_pdev_t *pdev)
 	msg_word++;
 	*msg_word = 0;
 	HTT_WDI_IPA_CFG_RX_IND_RD_IDX_ADDR_LO_SET(*msg_word,
-		(unsigned int)pdev->ipa_uc_rx_rsc.rx_ipa_prc_done_idx.paddr);
+		(unsigned int)qdf_mem_get_dma_addr(pdev->osdev,
+			&pdev->ipa_uc_rx_rsc.rx_ipa_prc_done_idx->mem_info));
 	msg_word++;
 	*msg_word = 0;
 	HTT_WDI_IPA_CFG_RX_IND_RD_IDX_ADDR_HI_SET(*msg_word,
@@ -1095,7 +1118,8 @@ int htt_h2t_ipa_uc_rsc_cfg_msg(struct htt_pdev_t *pdev)
 	msg_word++;
 	*msg_word = 0;
 	HTT_WDI_IPA_CFG_RX_RING2_BASE_ADDR_LO_SET(*msg_word,
-		(unsigned int)pdev->ipa_uc_rx_rsc.rx2_ind_ring_base.paddr);
+		(unsigned int)qdf_mem_get_dma_addr(pdev->osdev,
+			&pdev->ipa_uc_rx_rsc.rx2_ind_ring->mem_info));
 	msg_word++;
 	*msg_word = 0;
 	HTT_WDI_IPA_CFG_RX_RING2_BASE_ADDR_HI_SET(*msg_word,
@@ -1109,7 +1133,8 @@ int htt_h2t_ipa_uc_rsc_cfg_msg(struct htt_pdev_t *pdev)
 	msg_word++;
 	*msg_word = 0;
 	HTT_WDI_IPA_CFG_RX_RING2_RD_IDX_ADDR_LO_SET(*msg_word,
-		(unsigned int)pdev->ipa_uc_rx_rsc.rx2_ipa_prc_done_idx.paddr);
+		(unsigned int)qdf_mem_get_dma_addr(pdev->osdev,
+			&pdev->ipa_uc_rx_rsc.rx2_ipa_prc_done_idx->mem_info));
 	msg_word++;
 	*msg_word = 0;
 	HTT_WDI_IPA_CFG_RX_RING2_RD_IDX_ADDR_HI_SET(*msg_word,
@@ -1118,7 +1143,8 @@ int htt_h2t_ipa_uc_rsc_cfg_msg(struct htt_pdev_t *pdev)
 	msg_word++;
 	*msg_word = 0;
 	HTT_WDI_IPA_CFG_RX_RING2_WR_IDX_ADDR_LO_SET(*msg_word,
-		(unsigned int)pdev->ipa_uc_rx_rsc.rx2_ipa_prc_done_idx.paddr);
+		(unsigned int)qdf_mem_get_dma_addr(pdev->osdev,
+			&pdev->ipa_uc_rx_rsc.rx2_ipa_prc_done_idx->mem_info));
 	msg_word++;
 	*msg_word = 0;
 	HTT_WDI_IPA_CFG_RX_RING2_WR_IDX_ADDR_HI_SET(*msg_word,
@@ -1178,7 +1204,8 @@ int htt_h2t_ipa_uc_rsc_cfg_msg(struct htt_pdev_t *pdev)
 	msg_word++;
 	*msg_word = 0;
 	HTT_WDI_IPA_CFG_TX_COMP_RING_BASE_ADDR_SET(*msg_word,
-		(unsigned int)pdev->ipa_uc_tx_rsc.tx_comp_base.paddr);
+		(unsigned int)qdf_mem_get_dma_addr(pdev->osdev,
+			&pdev->ipa_uc_tx_rsc.tx_comp_ring->mem_info));
 
 	msg_word++;
 	*msg_word = 0;
@@ -1194,12 +1221,14 @@ int htt_h2t_ipa_uc_rsc_cfg_msg(struct htt_pdev_t *pdev)
 	msg_word++;
 	*msg_word = 0;
 	HTT_WDI_IPA_CFG_TX_CE_WR_IDX_ADDR_SET(*msg_word,
-		(unsigned int)pdev->ipa_uc_tx_rsc.tx_ce_idx.paddr);
+		(unsigned int)qdf_mem_get_dma_addr(pdev->osdev,
+			&pdev->ipa_uc_tx_rsc.tx_ce_idx->mem_info));
 
 	msg_word++;
 	*msg_word = 0;
 	HTT_WDI_IPA_CFG_RX_IND_RING_BASE_ADDR_SET(*msg_word,
-		(unsigned int)pdev->ipa_uc_rx_rsc.rx_ind_ring_base.paddr);
+		(unsigned int)qdf_mem_get_dma_addr(pdev->osdev,
+			&pdev->ipa_uc_rx_rsc.rx_ind_ring->mem_info));
 
 	msg_word++;
 	*msg_word = 0;
@@ -1209,7 +1238,8 @@ int htt_h2t_ipa_uc_rsc_cfg_msg(struct htt_pdev_t *pdev)
 	msg_word++;
 	*msg_word = 0;
 	HTT_WDI_IPA_CFG_RX_IND_RD_IDX_ADDR_SET(*msg_word,
-		(unsigned int)pdev->ipa_uc_rx_rsc.rx_ipa_prc_done_idx.paddr);
+		(unsigned int)qdf_mem_get_dma_addr(pdev->osdev,
+			&pdev->ipa_uc_rx_rsc.rx_ipa_prc_done_idx->mem_info));
 
 	msg_word++;
 	*msg_word = 0;

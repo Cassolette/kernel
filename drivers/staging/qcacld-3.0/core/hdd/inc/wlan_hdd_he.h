@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017 The Linux Foundation. All rights reserved.
+ * Copyright (c) 2017-2020 The Linux Foundation. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -29,7 +29,7 @@
 struct hdd_context;
 struct wma_tgt_cfg;
 struct hdd_beacon_data;
-struct sap_Config;
+struct sap_config;
 
 #ifdef WLAN_FEATURE_11AX
 /**
@@ -91,15 +91,7 @@ void hdd_update_tgt_he_cap(struct hdd_context *hdd_ctx,
  * Return: None
  */
 void wlan_hdd_check_11ax_support(struct hdd_beacon_data *beacon,
-				 struct sap_Config *config);
-
-/**
- * hdd_he_print_ini_config()- Print 11AX(HE) specific INI configuration
- * @hdd_ctx: handle to hdd context
- *
- * Return: None
- */
-void hdd_he_print_ini_config(struct hdd_context *hdd_ctx);
+				 struct sap_config *config);
 
 /**
  * hdd_update_he_cap_in_cfg() - update HE cap in global CFG
@@ -113,16 +105,6 @@ void hdd_he_print_ini_config(struct hdd_context *hdd_ctx);
 int hdd_update_he_cap_in_cfg(struct hdd_context *hdd_ctx);
 
 /**
- * hdd_he_set_sme_config() - set HE related SME config param
- * @sme_config: pointer to SME config
- * @config: pointer to INI config
- *
- * Return: None
- */
-void hdd_he_set_sme_config(tSmeConfigParams *sme_config,
-			   struct hdd_config *config);
-
-/**
  * wlan_hdd_cfg80211_get_he_cap() - get HE Capabilities
  * @wiphy: Pointer to wiphy
  * @wdev: Pointer to wdev
@@ -134,13 +116,14 @@ void hdd_he_set_sme_config(tSmeConfigParams *sme_config,
 int wlan_hdd_cfg80211_get_he_cap(struct wiphy *wiphy,
 				 struct wireless_dev *wdev, const void *data,
 				 int data_len);
-#define FEATURE_11AX_VENDOR_COMMANDS					\
-{									\
-	.info.vendor_id = QCA_NL80211_VENDOR_ID,			\
-	.info.subcmd = QCA_NL80211_VENDOR_SUBCMD_GET_HE_CAPABILITIES,	\
-	.flags = WIPHY_VENDOR_CMD_NEED_WDEV |				\
-		 WIPHY_VENDOR_CMD_NEED_NETDEV,				\
-	.doit = wlan_hdd_cfg80211_get_he_cap				\
+#define FEATURE_11AX_VENDOR_COMMANDS                                    \
+{                                                                       \
+	.info.vendor_id = QCA_NL80211_VENDOR_ID,                        \
+	.info.subcmd = QCA_NL80211_VENDOR_SUBCMD_GET_HE_CAPABILITIES,   \
+	.flags = WIPHY_VENDOR_CMD_NEED_WDEV |                           \
+		 WIPHY_VENDOR_CMD_NEED_NETDEV,                          \
+	.doit = wlan_hdd_cfg80211_get_he_cap,                           \
+	vendor_command_policy(VENDOR_CMD_RAW_DATA, 0)                   \
 },
 
 #else
@@ -150,22 +133,13 @@ static inline void hdd_update_tgt_he_cap(struct hdd_context *hdd_ctx,
 }
 
 static inline void wlan_hdd_check_11ax_support(struct hdd_beacon_data *beacon,
-					       struct sap_Config *config)
-{
-}
-
-static inline void hdd_he_print_ini_config(struct hdd_context *hdd_ctx)
+					       struct sap_config *config)
 {
 }
 
 static inline int hdd_update_he_cap_in_cfg(struct hdd_context *hdd_ctx)
 {
 	return 0;
-}
-
-static inline void hdd_he_set_sme_config(tSmeConfigParams *sme_config,
-					 struct hdd_config *config)
-{
 }
 
 /* dummy definition */

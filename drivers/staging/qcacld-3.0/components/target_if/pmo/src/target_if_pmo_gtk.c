@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017 The Linux Foundation. All rights reserved.
+ * Copyright (c) 2017-2018, 2020 The Linux Foundation. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -33,6 +33,7 @@ QDF_STATUS target_if_pmo_send_gtk_offload_req(struct wlan_objmgr_vdev *vdev,
 	QDF_STATUS status;
 	uint32_t gtk_offload_opcode;
 	struct wlan_objmgr_psoc *psoc;
+	wmi_unified_t wmi_handle;
 
 	if (!vdev) {
 		target_if_err("vdev ptr passed is NULL");
@@ -51,12 +52,17 @@ QDF_STATUS target_if_pmo_send_gtk_offload_req(struct wlan_objmgr_vdev *vdev,
 	else
 		gtk_offload_opcode = GTK_OFFLOAD_DISABLE_OPCODE;
 
-	status = wmi_unified_send_gtk_offload_cmd(
-			GET_WMI_HDL_FROM_PSOC(psoc),
-			vdev_id,
-			gtk_req,
-			gtk_req->flags,
-			gtk_offload_opcode);
+	wmi_handle = get_wmi_unified_hdl_from_psoc(psoc);
+	if (!wmi_handle) {
+		target_if_err("Invalid wmi handle");
+		return QDF_STATUS_E_INVAL;
+	}
+
+	status = wmi_unified_send_gtk_offload_cmd(wmi_handle,
+						  vdev_id,
+						  gtk_req,
+						  gtk_req->flags,
+						  gtk_offload_opcode);
 	if (status)
 		target_if_err("Failed to send gtk offload cmd to fw");
 
@@ -69,6 +75,7 @@ QDF_STATUS target_if_pmo_send_gtk_response_req(struct wlan_objmgr_vdev *vdev)
 	struct wlan_objmgr_psoc *psoc;
 	QDF_STATUS status = QDF_STATUS_SUCCESS;
 	uint32_t offload_req_opcode;
+	wmi_unified_t wmi_handle;
 
 	if (!vdev) {
 		target_if_err("vdev ptr passed is NULL");
@@ -85,9 +92,14 @@ QDF_STATUS target_if_pmo_send_gtk_response_req(struct wlan_objmgr_vdev *vdev)
 	/* Request for GTK offload status */
 	offload_req_opcode = GTK_OFFLOAD_REQUEST_STATUS_OPCODE;
 
+	wmi_handle = get_wmi_unified_hdl_from_psoc(psoc);
+	if (!wmi_handle) {
+		target_if_err("Invalid wmi handle");
+		return QDF_STATUS_E_INVAL;
+	}
+
 	/* send the wmi command */
-	status = wmi_unified_process_gtk_offload_getinfo_cmd(
-			GET_WMI_HDL_FROM_PSOC(psoc),
+	status = wmi_unified_process_gtk_offload_getinfo_cmd(wmi_handle,
 			vdev_id, offload_req_opcode);
 
 	return status;
@@ -99,6 +111,7 @@ int target_if_pmo_gtk_offload_status_event(void *scn_handle,
 	struct pmo_gtk_rsp_params *gtk_rsp_param;
 	struct wlan_objmgr_psoc *psoc;
 	QDF_STATUS ret;
+	wmi_unified_t wmi_handle;
 
 	TARGET_IF_ENTER();
 	psoc = target_if_get_psoc_from_scn_hdl(scn_handle);
@@ -110,13 +123,20 @@ int target_if_pmo_gtk_offload_status_event(void *scn_handle,
 
 	gtk_rsp_param = qdf_mem_malloc(sizeof(*gtk_rsp_param));
 	if (!gtk_rsp_param) {
-		target_if_err("memory allocation failed");
 		ret = -ENOMEM;
 		goto out;
 	}
 
-	if (wmi_extract_gtk_rsp_event(GET_WMI_HDL_FROM_PSOC(psoc),
-			event, gtk_rsp_param, len) != QDF_STATUS_SUCCESS) {
+	wmi_handle = get_wmi_unified_hdl_from_psoc(psoc);
+	if (!wmi_handle) {
+		target_if_err("Invalid wmi handle");
+		qdf_mem_free(gtk_rsp_param);
+		ret = -EINVAL;
+		goto out;
+	}
+
+	if (wmi_extract_gtk_rsp_event(wmi_handle, event, gtk_rsp_param, len) !=
+				      QDF_STATUS_SUCCESS) {
 		target_if_err("Extraction of gtk rsp event failed");
 		qdf_mem_free(gtk_rsp_param);
 		ret = -EINVAL;

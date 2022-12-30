@@ -1,8 +1,5 @@
 /*
- * Copyright (c) 2016-2017 The Linux Foundation. All rights reserved.
- *
- * Previously licensed under the ISC license by Qualcomm Atheros, Inc.
- *
+ * Copyright (c) 2016-2021 The Linux Foundation. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -19,17 +16,10 @@
  * PERFORMANCE OF THIS SOFTWARE.
  */
 
-/*
- * This file was originally distributed by Qualcomm Atheros, Inc.
- * under proprietary terms before Copyright ownership was assigned
- * to the Linux Foundation.
- */
-
 #if !defined WLAN_HDD_TSF_H
 #define WLAN_HDD_TSF_H
 #include "wlan_hdd_cfg.h"
-
-struct hdd_context;
+#include "wlan_hdd_main.h"
 
 /**
  * enum hdd_tsf_get_state - status of get tsf action
@@ -134,6 +124,19 @@ int wlan_hdd_cfg80211_handle_tsf_cmd(struct wiphy *wiphy,
 					int data_len);
 
 int hdd_get_tsf_cb(void *pcb_cxt, struct stsf *ptsf);
+
+extern const struct nla_policy tsf_policy[QCA_WLAN_VENDOR_ATTR_TSF_MAX + 1];
+
+#define FEATURE_HANDLE_TSF_VENDOR_COMMANDS \
+{ \
+	.info.vendor_id = QCA_NL80211_VENDOR_ID, \
+	.info.subcmd = QCA_NL80211_VENDOR_SUBCMD_TSF, \
+	.flags = WIPHY_VENDOR_CMD_NEED_WDEV | \
+		WIPHY_VENDOR_CMD_NEED_NETDEV | \
+		WIPHY_VENDOR_CMD_NEED_RUNNING, \
+	.doit = wlan_hdd_cfg80211_handle_tsf_cmd, \
+	vendor_command_policy(tsf_policy, QCA_WLAN_VENDOR_ATTR_TSF_MAX)\
+},
 #else
 static inline void wlan_hdd_tsf_init(struct hdd_context *hdd_ctx)
 {
@@ -167,42 +170,47 @@ static inline int hdd_get_tsf_cb(void *pcb_cxt, struct stsf *ptsf)
 	return -ENOTSUPP;
 }
 
+#define FEATURE_HANDLE_TSF_VENDOR_COMMANDS
 #endif
 
 #if defined(WLAN_FEATURE_TSF_PLUS) && defined(WLAN_FEATURE_TSF)
-#define HDD_TSF_IS_PTP_ENABLED(hdd) \
-({ \
-	struct hdd_context *hdd_ctx = (hdd); \
-	hdd_ctx && hdd_ctx->config && hdd_ctx->config->tsf_ptp_options; \
-})
+/**
+ * hdd_tsf_is_tx_set() - check ini configuration
+ * @hdd: pointer to hdd context
+ *
+ * This function checks tsf configuration for ptp on tx
+ *
+ * Return: true on enable, false on disable
+ */
 
-#define HDD_TSF_IS_TX_SET(hdd) \
-({ \
-	struct hdd_context *hdd_ctx = (hdd); \
-	hdd_ctx && hdd_ctx->config && \
-	(hdd_ctx->config->tsf_ptp_options & CFG_SET_TSF_PTP_OPT_TX); \
-})
-
-#define HDD_TSF_IS_RX_SET(hdd) \
-({ \
-	struct hdd_context *hdd_ctx = (hdd); \
-	hdd_ctx && hdd_ctx->config && \
-	(hdd_ctx->config->tsf_ptp_options & CFG_SET_TSF_PTP_OPT_RX); \
-})
-
-#define HDD_TSF_IS_RAW_SET(hdd) \
-({ \
-	struct hdd_context *hdd_ctx = (hdd); \
-	hdd_ctx && hdd_ctx->config && \
-	(hdd_ctx->config->tsf_ptp_options & CFG_SET_TSF_PTP_OPT_RAW); \
-})
-
-#define HDD_TSF_IS_DBG_FS_SET(hdd) \
-({ \
-	struct hdd_context *hdd_ctx = (hdd); \
-	hdd_ctx && hdd_ctx->config && \
-	(hdd_ctx->config->tsf_ptp_options & CFG_SET_TSF_DBG_FS); \
-})
+bool hdd_tsf_is_tx_set(struct hdd_context *hdd);
+/**
+ * hdd_tsf_is_rx_set() - check ini configuration
+ * @hdd: pointer to hdd context
+ *
+ * This function checks tsf configuration for ptp on rx
+ *
+ * Return: true on enable, false on disable
+ */
+bool hdd_tsf_is_rx_set(struct hdd_context *hdd);
+/**
+ * hdd_tsf_is_raw_set() - check ini configuration
+ * @hdd: pointer to hdd context
+ *
+ * This function checks tsf configuration for ptp on raw
+ *
+ * Return: true on enable, false on disable
+ */
+bool hdd_tsf_is_raw_set(struct hdd_context *hdd);
+/**
+ * hdd_tsf_is_dbg_fs_set() - check ini configuration
+ * @hdd: pointer to hdd context
+ *
+ * This function checks tsf configuration for ptp on dbg fs
+ *
+ * Return: true on enable, false on disable
+ */
+bool hdd_tsf_is_dbg_fs_set(struct hdd_context *hdd);
 
 /**
  * hdd_start_tsf_sync() - start tsf sync
@@ -225,33 +233,27 @@ int hdd_start_tsf_sync(struct hdd_adapter *adapter);
 int hdd_stop_tsf_sync(struct hdd_adapter *adapter);
 
 /**
- * hdd_tsf_notify_wlan_state_change() -
- *     notify tsf module of wlan connection state
- * @old_state: old wlan state
- * @new_state: new wlan state
+ * hdd_capture_req_timer_expired_handler() - capture req timer handler
+ * @arg: pointer to a adapter
  *
- * This function check the old and new connection state, determine whether
- * to start or stop tsf sync
+ * This function set a timeout handler for TSF capture timer.
  *
- * Return: nothing
+ * Return: none
  */
-void hdd_tsf_notify_wlan_state_change(struct hdd_adapter *adapter,
-				      eConnectionState old_state,
-				      eConnectionState new_state);
+
+void hdd_capture_req_timer_expired_handler(void *arg);
 
 /**
- * hdd_tx_timestamp() - time stamp TX netbuf
+ * hdd_tsf_is_tsf64_tx_set() - check ini configuration
+ * @hdd: pointer to hdd context
  *
- * @netbuf: pointer to a TX netbuf
- * @target_time: TX time for the netbuf
+ * This function checks tsf configuration for ptp on tsf64 tx
  *
- * This function  get corresponding host time from target time,
- * and time stamp the TX netbuf with this time
- *
- * Return: Describe the execute result of this routine
+ * Return: true on enable, false on disable
  */
-int hdd_tx_timestamp(qdf_nbuf_t netbuf, uint64_t target_time);
+bool hdd_tsf_is_tsf64_tx_set(struct hdd_context *hdd);
 
+#ifdef WLAN_FEATURE_TSF_PLUS_SOCK_TS
 /**
  * hdd_rx_timestamp() - time stamp RX netbuf
  *
@@ -264,6 +266,7 @@ int hdd_tx_timestamp(qdf_nbuf_t netbuf, uint64_t target_time);
  * Return: Describe the execute result of this routine
  */
 int hdd_rx_timestamp(qdf_nbuf_t netbuf, uint64_t target_time);
+#endif
 #else
 static inline int hdd_start_tsf_sync(struct hdd_adapter *adapter)
 {
@@ -276,24 +279,26 @@ static inline int hdd_stop_tsf_sync(struct hdd_adapter *adapter)
 }
 
 static inline
-void hdd_tsf_notify_wlan_state_change(struct hdd_adapter *adapter,
-				      eConnectionState old_state,
-				      eConnectionState new_state)
-
+void hdd_capture_req_timer_expired_handler(void *arg)
 {
 }
 
 static inline
-int hdd_tx_timestamp(qdf_nbuf_t netbuf, uint64_t target_time)
+bool hdd_tsf_is_tsf64_tx_set(struct hdd_context *hdd)
 {
-	return -ENOTSUPP;
-}
-
-static inline
-int hdd_rx_timestamp(qdf_nbuf_t netbuf, uint64_t target_time)
-{
-	return -ENOTSUPP;
+	return FALSE;
 }
 #endif
 
+#ifdef WLAN_FEATURE_TSF_PTP
+/**
+ * wlan_get_ts_info() - return ts info to uplayer
+ * @dev: pointer to net_device
+ * @info: pointer to ethtool_ts_info
+ *
+ * Return: Describe the execute result of this routine
+ */
+int wlan_get_ts_info(struct net_device *dev, struct ethtool_ts_info *info);
+
+#endif
 #endif

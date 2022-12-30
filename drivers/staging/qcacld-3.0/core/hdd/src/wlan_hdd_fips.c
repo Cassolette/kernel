@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017 The Linux Foundation. All rights reserved.
+ * Copyright (c) 2017-2020 The Linux Foundation. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -22,15 +22,14 @@
  * WLAN Host Device Driver FIPS Certification Feature
  */
 
+#include "osif_sync.h"
 #include "wlan_hdd_main.h"
 #include "wlan_hdd_fips.h"
-#include "wlan_hdd_request_manager.h"
+#include "wlan_osif_request_manager.h"
 #include "qdf_mem.h"
 #include "sme_api.h"
 
-
 #define WLAN_WAIT_TIME_FIPS 5000
-
 
 /**
  * hdd_fips_context - hdd fips context
@@ -60,10 +59,9 @@ static int hdd_fips_event_dup(struct wmi_host_fips_event_param *dest,
 	*dest = *src;
 	if  (dest->data_len) {
 		dest->data = qdf_mem_malloc(dest->data_len);
-		if (!dest->data) {
-			hdd_err("memory allocation failed");
+		if (!dest->data)
 			return -ENOMEM;
-		}
+
 		qdf_mem_copy(dest->data, src->data, src->data_len);
 	} else {
 		/* make sure we don't have a rogue pointer */
@@ -83,17 +81,17 @@ static int hdd_fips_event_dup(struct wmi_host_fips_event_param *dest,
 static void hdd_fips_cb(void *cookie,
 			struct wmi_host_fips_event_param *response)
 {
-	struct hdd_request *request;
+	struct osif_request *request;
 	struct hdd_fips_context *context;
 
-	ENTER();
+	hdd_enter();
 
 	if (!response) {
 		hdd_err("response is NULL");
 		return;
 	}
 
-	request = hdd_request_get(cookie);
+	request = osif_request_get(cookie);
 	if (!request) {
 		hdd_debug("Obsolete request");
 		return;
@@ -106,7 +104,7 @@ static void hdd_fips_cb(void *cookie,
 	qdf_trace_hex_dump(QDF_MODULE_ID_HDD, QDF_TRACE_LEVEL_DEBUG,
 			   response->data, response->data_len);
 
-	context = hdd_request_priv(request);
+	context = osif_request_priv(request);
 	if (response->error_status) {
 		context->status = -ETIMEDOUT;
 	} else {
@@ -114,9 +112,9 @@ static void hdd_fips_cb(void *cookie,
 						     response);
 	}
 
-	hdd_request_complete(request);
-	hdd_request_put(request);
-	EXIT();
+	osif_request_complete(request);
+	osif_request_put(request);
+	hdd_exit();
 }
 
 static void hdd_fips_context_dealloc(void *priv)
@@ -177,17 +175,17 @@ static int __hdd_fips_test(struct net_device *dev,
 	int ret;
 	QDF_STATUS qdf_status;
 	void *cookie;
-	struct hdd_request *request;
+	struct osif_request *request;
 	struct hdd_fips_context *context;
 	struct fips_params *fips_request;
 	struct wmi_host_fips_event_param *fips_response;
-	static const struct hdd_request_params params = {
+	static const struct osif_request_params params = {
 		.priv_size = sizeof(*context),
 		.timeout_ms = WLAN_WAIT_TIME_FIPS,
 		.dealloc = hdd_fips_context_dealloc,
 	};
 
-	ENTER_DEV(dev);
+	hdd_enter_dev(dev);
 
 	adapter = WLAN_HDD_GET_PRIV_PTR(dev);
 	hdd_ctx = WLAN_HDD_GET_CTX(adapter);
@@ -201,12 +199,12 @@ static int __hdd_fips_test(struct net_device *dev,
 	if (ret)
 		return ret;
 
-	request = hdd_request_alloc(&params);
+	request = osif_request_alloc(&params);
 	if (!request) {
 		hdd_err("Request allocation failure");
 		return -ENOMEM;
 	}
-	context = hdd_request_priv(request);
+	context = osif_request_priv(request);
 	fips_request = &context->request;
 	fips_request->key = &user_request->key[0];
 	fips_request->key_len = user_request->key_len;
@@ -216,8 +214,8 @@ static int __hdd_fips_test(struct net_device *dev,
 	fips_request->op = user_request->operation;
 	fips_request->pdev_id = WMI_PDEV_ID_1ST;
 
-	cookie = hdd_request_cookie(request);
-	qdf_status = sme_fips_request(hdd_ctx->hHal, &context->request,
+	cookie = osif_request_cookie(request);
+	qdf_status = sme_fips_request(hdd_ctx->mac_handle, &context->request,
 				      hdd_fips_cb, cookie);
 
 	if (!QDF_IS_STATUS_SUCCESS(qdf_status)) {
@@ -226,7 +224,7 @@ static int __hdd_fips_test(struct net_device *dev,
 		goto cleanup;
 	}
 
-	ret = hdd_request_wait_for_response(request);
+	ret = osif_request_wait_for_response(request);
 	if (ret) {
 		hdd_err("Target response timed out");
 		goto cleanup;
@@ -271,9 +269,9 @@ static int __hdd_fips_test(struct net_device *dev,
 		ret = -EFAULT;
 
 cleanup:
-	hdd_request_put(request);
+	osif_request_put(request);
 
-	EXIT();
+	hdd_exit();
 	return ret;
 }
 
@@ -281,11 +279,16 @@ int hdd_fips_test(struct net_device *dev,
 		  struct iw_request_info *info,
 		  union iwreq_data *wrqu, char *extra)
 {
-	int ret;
+	int errno;
+	struct osif_vdev_sync *vdev_sync;
 
-	cds_ssr_protect(__func__);
-	ret = __hdd_fips_test(dev, info, wrqu, extra);
-	cds_ssr_unprotect(__func__);
+	errno = osif_vdev_sync_op_start(dev, &vdev_sync);
+	if (errno)
+		return errno;
 
-	return ret;
+	errno = __hdd_fips_test(dev, info, wrqu, extra);
+
+	osif_vdev_sync_op_stop(vdev_sync);
+
+	return errno;
 }

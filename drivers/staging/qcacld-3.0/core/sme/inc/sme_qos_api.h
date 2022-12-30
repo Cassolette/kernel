@@ -1,8 +1,5 @@
 /*
- * Copyright (c) 2014-2017 The Linux Foundation. All rights reserved.
- *
- * Previously licensed under the ISC license by Qualcomm Atheros, Inc.
- *
+ * Copyright (c) 2014-2020 The Linux Foundation. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -17,12 +14,6 @@
  * PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR OTHER
  * TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
  * PERFORMANCE OF THIS SOFTWARE.
- */
-
-/*
- * This file was originally distributed by Qualcomm Atheros, Inc.
- * under proprietary terms before Copyright ownership was assigned
- * to the Linux Foundation.
  */
 
 #if !defined(__SME_QOSAPI_H)
@@ -142,6 +133,8 @@ enum sme_qos_statustype {
 
 };
 
+#define WLAN_MAX_DSCP 0x3f
+
 /*
  * Enumeration of the various User priority (UP) types
  * From 802.1D/802.11e/WMM specifications (all refer to same table)
@@ -203,27 +196,48 @@ struct sme_qos_wmmtspecinfo {
 	uint16_t medium_time;
 };
 
+static inline enum sme_qos_wmmuptype qca_wlan_ac_to_sme_qos(u8 priority)
+{
+	switch (priority) {
+	case QCA_WLAN_AC_BE:
+		return SME_QOS_WMM_UP_BE;
+	case QCA_WLAN_AC_BK:
+		return SME_QOS_WMM_UP_BK;
+	case QCA_WLAN_AC_VI:
+		return SME_QOS_WMM_UP_VI;
+	case QCA_WLAN_AC_VO:
+		return SME_QOS_WMM_UP_VO;
+	default:
+		return SME_QOS_WMM_UP_BE;
+	}
+}
+
 /* External APIs */
-typedef QDF_STATUS (*sme_QosCallback)(tHalHandle hHal, void *HDDcontext,
+typedef QDF_STATUS (*sme_QosCallback)(mac_handle_t mac_handle, void *HDDcontext,
 		struct sme_qos_wmmtspecinfo *pCurrentQoSInfo,
 		enum sme_qos_statustype status, uint32_t QosFlowID);
-enum sme_qos_statustype sme_qos_setup_req(tHalHandle hHal, uint32_t sessionId,
-		struct sme_qos_wmmtspecinfo *pQoSInfo,
-		sme_QosCallback QoSCallback, void *HDDcontext,
-		enum sme_qos_wmmuptype UPType, uint32_t *pQosFlowID);
-enum sme_qos_statustype sme_qos_modify_req(tHalHandle hHal,
+enum sme_qos_statustype sme_qos_setup_req(mac_handle_t mac_handle,
+					  uint32_t sessionId,
+					  struct sme_qos_wmmtspecinfo *pQoSInfo,
+					  sme_QosCallback QoSCallback,
+					  void *HDDcontext,
+					  enum sme_qos_wmmuptype UPType,
+					  uint32_t *pQosFlowID);
+enum sme_qos_statustype sme_qos_modify_req(mac_handle_t mac_handle,
 		struct sme_qos_wmmtspecinfo *pQoSInfo, uint32_t QosFlowID);
-enum sme_qos_statustype sme_qos_release_req(tHalHandle hHal, uint8_t session_id,
-				      uint32_t QosFlowID);
-bool sme_qos_is_ts_info_ack_policy_valid(tpAniSirGlobal pMac,
-		struct sme_qos_wmmtspecinfo *pQoSInfo, uint8_t sessionId);
+enum sme_qos_statustype sme_qos_release_req(mac_handle_t mac_handle,
+					    uint8_t session_id,
+					    uint32_t QosFlowID);
+bool sme_qos_is_ts_info_ack_policy_valid(mac_handle_t mac_handle,
+					 struct sme_qos_wmmtspecinfo *pQoSInfo,
+					 uint8_t sessionId);
 void sme_qos_update_hand_off(uint8_t sessionId, bool updateHandOff);
-QDF_STATUS sme_update_dsc_pto_up_mapping(tHalHandle hHal,
+QDF_STATUS sme_update_dsc_pto_up_mapping(mac_handle_t mac_handle,
 		enum sme_qos_wmmuptype *dscpmapping, uint8_t sessionId);
 
-QDF_STATUS sme_offload_qos_process_out_of_uapsd_mode(tpAniSirGlobal mac_ctx,
+QDF_STATUS sme_offload_qos_process_out_of_uapsd_mode(struct mac_context *mac_ctx,
 		uint32_t session_id);
-QDF_STATUS sme_offload_qos_process_into_uapsd_mode(tpAniSirGlobal mac_ctx,
+QDF_STATUS sme_offload_qos_process_into_uapsd_mode(struct mac_context *mac_ctx,
 		uint32_t session_id);
 
 

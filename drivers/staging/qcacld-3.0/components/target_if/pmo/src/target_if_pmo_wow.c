@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017 The Linux Foundation. All rights reserved.
+ * Copyright (c) 2017-2018 The Linux Foundation. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -33,6 +33,7 @@ QDF_STATUS target_if_pmo_enable_wow_wakeup_event(struct wlan_objmgr_vdev *vdev,
 	uint8_t vdev_id;
 	struct wlan_objmgr_psoc *psoc;
 	QDF_STATUS status;
+	wmi_unified_t wmi_handle;
 
 	if (!vdev) {
 		target_if_err("vdev ptr passed is NULL");
@@ -46,8 +47,14 @@ QDF_STATUS target_if_pmo_enable_wow_wakeup_event(struct wlan_objmgr_vdev *vdev,
 		return QDF_STATUS_E_INVAL;
 	}
 
-	status = wmi_unified_add_wow_wakeup_event_cmd(
-			GET_WMI_HDL_FROM_PSOC(psoc), vdev_id, bitmap, true);
+	wmi_handle = get_wmi_unified_hdl_from_psoc(psoc);
+	if (!wmi_handle) {
+		target_if_err("Invalid wmi handle");
+		return QDF_STATUS_E_INVAL;
+	}
+
+	status = wmi_unified_add_wow_wakeup_event_cmd(wmi_handle, vdev_id,
+						      bitmap, true);
 	if (status)
 		target_if_err("Failed to config wow wakeup event");
 
@@ -60,6 +67,7 @@ QDF_STATUS target_if_pmo_disable_wow_wakeup_event(struct wlan_objmgr_vdev *vdev,
 	uint8_t vdev_id;
 	struct wlan_objmgr_psoc *psoc;
 	QDF_STATUS status;
+	wmi_unified_t wmi_handle;
 
 	if (!vdev) {
 		target_if_err("vdev ptr passed is NULL");
@@ -73,8 +81,14 @@ QDF_STATUS target_if_pmo_disable_wow_wakeup_event(struct wlan_objmgr_vdev *vdev,
 		return QDF_STATUS_E_INVAL;
 	}
 
-	status = wmi_unified_add_wow_wakeup_event_cmd(
-			GET_WMI_HDL_FROM_PSOC(psoc), vdev_id, bitmap, false);
+	wmi_handle = get_wmi_unified_hdl_from_psoc(psoc);
+	if (!wmi_handle) {
+		target_if_err("Invalid wmi handle");
+		return QDF_STATUS_E_INVAL;
+	}
+
+	status = wmi_unified_add_wow_wakeup_event_cmd(wmi_handle, vdev_id,
+						      bitmap, false);
 	if (status)
 		target_if_err("Failed to config wow wakeup event");
 
@@ -90,6 +104,7 @@ QDF_STATUS target_if_pmo_send_wow_patterns_to_fw(struct wlan_objmgr_vdev *vdev,
 	uint8_t vdev_id;
 	struct wlan_objmgr_psoc *psoc;
 	QDF_STATUS status;
+	wmi_unified_t wmi_handle;
 
 	if (!vdev) {
 		target_if_err("vdev ptr passed is NULL");
@@ -103,11 +118,48 @@ QDF_STATUS target_if_pmo_send_wow_patterns_to_fw(struct wlan_objmgr_vdev *vdev,
 		return QDF_STATUS_E_INVAL;
 	}
 
-	status = wmi_unified_wow_patterns_to_fw_cmd(
-				GET_WMI_HDL_FROM_PSOC(psoc),
-				vdev_id, ptrn_id, ptrn,
-				ptrn_len, ptrn_offset, mask,
-				mask_len, user, 0);
+	wmi_handle = get_wmi_unified_hdl_from_psoc(psoc);
+	if (!wmi_handle) {
+		target_if_err("Invalid wmi handle");
+		return QDF_STATUS_E_INVAL;
+	}
+
+	status = wmi_unified_wow_patterns_to_fw_cmd(wmi_handle,
+						    vdev_id, ptrn_id, ptrn,
+						    ptrn_len, ptrn_offset,
+						    mask, mask_len, user, 0);
+
+	return status;
+}
+
+QDF_STATUS target_if_pmo_del_wow_patterns_to_fw(struct wlan_objmgr_vdev *vdev,
+		uint8_t ptrn_id)
+{
+	uint8_t vdev_id;
+	struct wlan_objmgr_psoc *psoc;
+	QDF_STATUS status;
+	wmi_unified_t wmi_handle;
+
+	if (!vdev) {
+		target_if_err("vdev ptr passed is NULL");
+		return QDF_STATUS_E_INVAL;
+	}
+
+	psoc = wlan_vdev_get_psoc(vdev);
+	vdev_id = wlan_vdev_get_id(vdev);
+	if (!psoc) {
+		target_if_err("psoc handle is NULL");
+		return QDF_STATUS_E_INVAL;
+	}
+
+	wmi_handle = get_wmi_unified_hdl_from_psoc(psoc);
+	if (!wmi_handle) {
+		target_if_err("Invalid wmi handle");
+		return QDF_STATUS_E_INVAL;
+	}
+
+	status = wmi_unified_wow_delete_pattern_cmd(wmi_handle, ptrn_id,
+						    vdev_id);
 
 	return status;
 }

@@ -1,8 +1,5 @@
 /*
- * Copyright (c) 2011-2017 The Linux Foundation. All rights reserved.
- *
- * Previously licensed under the ISC license by Qualcomm Atheros, Inc.
- *
+ * Copyright (c) 2011-2021 The Linux Foundation. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -20,12 +17,6 @@
  */
 
 /*
- * This file was originally distributed by Qualcomm Atheros, Inc.
- * under proprietary terms before Copyright ownership was assigned
- * to the Linux Foundation.
- */
-
-/*
  *
  * This file lim_process_beacon_frame.cc contains the code
  * for processing Received Beacon Frame.
@@ -39,7 +30,6 @@
 
 #include "wni_cfg.h"
 #include "ani_global.h"
-#include "cfg_api.h"
 #include "sch_api.h"
 #include "utils_api.h"
 #include "lim_types.h"
@@ -64,11 +54,14 @@
  */
 
 void
-lim_process_beacon_frame(tpAniSirGlobal mac_ctx, uint8_t *rx_pkt_info,
-			 tpPESession session)
+lim_process_beacon_frame(struct mac_context *mac_ctx, uint8_t *rx_pkt_info,
+			 struct pe_session *session)
 {
 	tpSirMacMgmtHdr mac_hdr;
 	tSchBeaconStruct *bcn_ptr;
+	uint8_t *frame;
+	const uint8_t *owe_transition_ie;
+	uint16_t frame_len;
 
 	mac_ctx->lim.gLimNumBeaconsRcvd++;
 
@@ -77,20 +70,24 @@ lim_process_beacon_frame(tpAniSirGlobal mac_ctx, uint8_t *rx_pkt_info,
 	 * beacon counter
 	 */
 	mac_hdr = WMA_GET_RX_MAC_HEADER(rx_pkt_info);
-	pe_debug("Received Beacon frame with length: %d from",
-		WMA_GET_RX_MPDU_LEN(rx_pkt_info));
-		lim_print_mac_addr(mac_ctx, mac_hdr->sa, LOG2);
+	frame = WMA_GET_RX_MPDU_DATA(rx_pkt_info);
+	frame_len = WMA_GET_RX_PAYLOAD_LEN(rx_pkt_info);
+
+	pe_debug("Beacon (len %d): " QDF_MAC_ADDR_FMT " RSSI %d",
+		 WMA_GET_RX_MPDU_LEN(rx_pkt_info),
+		 QDF_MAC_ADDR_REF(mac_hdr->sa),
+		 (uint)abs((int8_t)
+		 WMA_GET_RX_RSSI_NORMALIZED(rx_pkt_info)));
 
 	/* Expect Beacon in any state as Scan is independent of LIM state */
 	bcn_ptr = qdf_mem_malloc(sizeof(*bcn_ptr));
-	if (NULL == bcn_ptr) {
-		pe_err("Unable to allocate memory");
+	if (!bcn_ptr)
 		return;
-	}
+
 	/* Parse received Beacon */
 	if (sir_convert_beacon_frame2_struct(mac_ctx,
 			rx_pkt_info, bcn_ptr) !=
-			eSIR_SUCCESS) {
+			QDF_STATUS_SUCCESS) {
 		/*
 		 * Received wrongly formatted/invalid Beacon.
 		 * Ignore it and move on.
@@ -106,53 +103,54 @@ lim_process_beacon_frame(tpAniSirGlobal mac_ctx, uint8_t *rx_pkt_info,
 	/*
 	 * during scanning, when any session is active, and
 	 * beacon/Pr belongs to one of the session, fill up the
-	 * following, TBD - HB couter
+	 * following, TBD - HB counter
 	 */
 	if (sir_compare_mac_addr(session->bssId,
 				bcn_ptr->bssid)) {
 		qdf_mem_copy((uint8_t *)&session->lastBeaconTimeStamp,
 			(uint8_t *) bcn_ptr->timeStamp,
 			sizeof(uint64_t));
-		session->lastBeaconDtimCount =
-				bcn_ptr->tim.dtimCount;
 		session->currentBssBeaconCnt++;
 	}
 	MTRACE(mac_trace(mac_ctx,
-		TRACE_CODE_RX_MGMT_TSF, 0, bcn_ptr->timeStamp[0]);)
+		TRACE_CODE_RX_MGMT_TSF, 0, bcn_ptr->timeStamp[0]));
 	MTRACE(mac_trace(mac_ctx, TRACE_CODE_RX_MGMT_TSF, 0,
-		bcn_ptr->timeStamp[1]);)
+		bcn_ptr->timeStamp[1]));
 
-	if ((mac_ctx->lim.gLimMlmState ==
-				eLIM_MLM_WT_PROBE_RESP_STATE) ||
-		(mac_ctx->lim.gLimMlmState ==
-				eLIM_MLM_PASSIVE_SCAN_STATE)) {
-		/*
-		 * Calling dfsChannelList which will convert DFS channel
-		 * to active channel for x secs if this channel is DFS
-		 */
-		lim_set_dfs_channel_list(mac_ctx,
-			bcn_ptr->channelNumber,
-			&mac_ctx->lim.dfschannelList);
-	} else if (session->limMlmState ==
+	if (session->limMlmState ==
 			eLIM_MLM_WT_JOIN_BEACON_STATE) {
-		if (session->beacon != NULL) {
+		owe_transition_ie = wlan_get_vendor_ie_ptr_from_oui(
+					OWE_TRANSITION_OUI_TYPE,
+					OWE_TRANSITION_OUI_SIZE,
+					frame + SIR_MAC_B_PR_SSID_OFFSET,
+					frame_len - SIR_MAC_B_PR_SSID_OFFSET);
+		if (session->connected_akm == ANI_AKM_TYPE_OWE &&
+		    owe_transition_ie) {
+			pe_debug("vdev:%d Drop OWE rx beacon. Wait for probe for join success",
+				 session->vdev_id);
+			qdf_mem_free(bcn_ptr);
+			return;
+		}
+
+		if (session->beacon) {
 			qdf_mem_free(session->beacon);
 			session->beacon = NULL;
 			session->bcnLen = 0;
 		}
-		session->bcnLen = WMA_GET_RX_PAYLOAD_LEN(rx_pkt_info);
+
+		mac_ctx->lim.bss_rssi =
+			(int8_t)WMA_GET_RX_RSSI_NORMALIZED(rx_pkt_info);
+		session->bcnLen = WMA_GET_RX_MPDU_LEN(rx_pkt_info);
 		session->beacon = qdf_mem_malloc(session->bcnLen);
-		if (NULL == session->beacon) {
-			pe_err("fail to alloc mem to store bcn");
-		} else {
+		if (session->beacon)
 			/*
-			 * Store the Beacon/ProbeRsp. This is sent to
+			 * Store the whole Beacon frame. This is sent to
 			 * csr/hdd in join cnf response.
 			 */
 			qdf_mem_copy(session->beacon,
-				WMA_GET_RX_MPDU_DATA(rx_pkt_info),
+				WMA_GET_RX_MAC_HEADER(rx_pkt_info),
 				session->bcnLen);
-		}
+
 		lim_check_and_announce_join_success(mac_ctx, bcn_ptr,
 				mac_hdr, session);
 	}

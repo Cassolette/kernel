@@ -1,8 +1,5 @@
 /*
- * Copyright (c) 2012-2017 The Linux Foundation. All rights reserved.
- *
- * Previously licensed under the ISC license by Qualcomm Atheros, Inc.
- *
+ * Copyright (c) 2012-2021 The Linux Foundation. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -17,12 +14,6 @@
  * PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR OTHER
  * TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
  * PERFORMANCE OF THIS SOFTWARE.
- */
-
-/*
- * This file was originally distributed by Qualcomm Atheros, Inc.
- * under proprietary terms before Copyright ownership was assigned
- * to the Linux Foundation.
  */
 
 /*
@@ -42,6 +33,8 @@
 
 #include "utils_parser.h"
 #include "sme_power_save_api.h"
+#include "wlan_mlme_ucfg_api.h"
+#include "wlan_cm_roam_api.h"
 
 #ifndef WLAN_MDM_CODE_REDUCTION_OPT
 /* TODO : 6Mbps as Cisco APs seem to like only this value; analysis req.   */
@@ -77,7 +70,7 @@
 #define SME_QOS_SEARCH_KEY_INDEX_4       8      /* ac + direction */
 #define SME_QOS_SEARCH_KEY_INDEX_5       0x10   /* ac + tspec_mask */
 /* special value for searching any Session Id */
-#define SME_QOS_SEARCH_SESSION_ID_ANY    CSR_ROAM_SESSION_MAX
+#define SME_QOS_SEARCH_SESSION_ID_ANY    WLAN_MAX_VDEVS
 #define SME_QOS_ACCESS_POLICY_EDCA       1
 #define SME_QOS_MAX_TID                  255
 #define SME_QOS_TSPEC_IE_LENGTH          61
@@ -89,6 +82,14 @@
 /* The Dialog Token field shall be set [...] to a non-zero value */
 #define SME_QOS_MIN_DIALOG_TOKEN         1
 #define SME_QOS_MAX_DIALOG_TOKEN         0xFF
+
+#ifdef WLAN_FEATURE_MSCS
+#define MSCS_USER_PRIORITY               0x07C0
+#define MSCS_STREAM_TIMEOUT              60 /* in sec */
+#define MSCS_TCLAS_CLASSIFIER_MASK       0x5F
+#define MSCS_TCLAS_CLASSIFIER_TYPE       4
+#endif
+
 /* Type declarations */
 /* Enumeration of the various states in the QoS state m/c */
 enum sme_qos_states {
@@ -126,28 +127,15 @@ enum sme_qos_reasontype {
 /* Table to map user priority passed in as an argument to appropriate Access
  * Category as specified in 802.11e/WMM
  */
-sme_QosEdcaAcType sme_qos_u_pto_ac_map[SME_QOS_WMM_UP_MAX] = {
-	SME_QOS_EDCA_AC_BE,     /* User Priority 0 */
-	SME_QOS_EDCA_AC_BK,     /* User Priority 1 */
-	SME_QOS_EDCA_AC_BK,     /* User Priority 2 */
-	SME_QOS_EDCA_AC_BE,     /* User Priority 3 */
-	SME_QOS_EDCA_AC_VI,     /* User Priority 4 */
-	SME_QOS_EDCA_AC_VI,     /* User Priority 5 */
-	SME_QOS_EDCA_AC_VO,     /* User Priority 6 */
-	SME_QOS_EDCA_AC_VO      /* User Priority 7 */
-};
-
-/*
- * Table to map access category (AC) to appropriate user priority as specified
- * in 802.11e/WMM
- * Note: there is a quantization loss here because 4 ACs are mapped to 8 UPs
- * Mapping is done for consistency
- */
-enum sme_qos_wmmuptype sme_qos_a_cto_up_map[SME_QOS_EDCA_AC_MAX] = {
-	SME_QOS_WMM_UP_BE,      /* AC BE */
-	SME_QOS_WMM_UP_BK,      /* AC BK */
-	SME_QOS_WMM_UP_VI,      /* AC VI */
-	SME_QOS_WMM_UP_VO       /* AC VO */
+enum qca_wlan_ac_type sme_qos_up_to_ac_map[SME_QOS_WMM_UP_MAX] = {
+	QCA_WLAN_AC_BE,     /* User Priority 0 */
+	QCA_WLAN_AC_BK,     /* User Priority 1 */
+	QCA_WLAN_AC_BK,     /* User Priority 2 */
+	QCA_WLAN_AC_BE,     /* User Priority 3 */
+	QCA_WLAN_AC_VI,     /* User Priority 4 */
+	QCA_WLAN_AC_VI,     /* User Priority 5 */
+	QCA_WLAN_AC_VO,     /* User Priority 6 */
+	QCA_WLAN_AC_VO      /* User Priority 7 */
 };
 
 /*
@@ -161,7 +149,7 @@ struct sme_qos_flowinfoentry {
 	uint8_t tspec_mask;
 	enum sme_qos_reasontype reason;
 	uint32_t QosFlowID;
-	sme_QosEdcaAcType ac_type;
+	enum qca_wlan_ac_type ac_type;
 	struct sme_qos_wmmtspecinfo QoSInfo;
 	void *HDDcontext;
 	sme_QosCallback QoSCallback;
@@ -191,7 +179,7 @@ struct sme_qos_setupcmdinfo {
  */
 struct sme_qos_modifycmdinfo {
 	uint32_t QosFlowID;
-	sme_QosEdcaAcType ac;
+	enum qca_wlan_ac_type ac;
 	struct sme_qos_wmmtspecinfo QoSInfo;
 };
 /*
@@ -200,7 +188,7 @@ struct sme_qos_modifycmdinfo {
  */
 struct sme_qos_resendcmdinfo {
 	uint8_t tspecMask;
-	sme_QosEdcaAcType ac;
+	enum qca_wlan_ac_type ac;
 	struct sme_qos_wmmtspecinfo QoSInfo;
 };
 /*
@@ -216,7 +204,7 @@ struct sme_qos_releasecmdinfo {
  */
 struct sme_qos_cmdinfo {
 	enum sme_qos_cmdtype command;
-	tpAniSirGlobal pMac;
+	struct mac_context *mac;
 	uint8_t sessionId;
 	union {
 		struct sme_qos_setupcmdinfo setupCmdInfo;
@@ -281,7 +269,7 @@ struct sme_qos_sessioninfo {
 	/* is the session currently active */
 	bool sessionActive;
 	/* All AC info for this session */
-	struct sme_qos_acinfo ac_info[SME_QOS_EDCA_AC_MAX];
+	struct sme_qos_acinfo ac_info[QCA_WLAN_AC_ALL];
 	/* Bitmask of the ACs with APSD on */
 	/* Bit0:VO; Bit1:VI; Bit2:BK; Bit3:BE all other bits are ignored */
 	uint8_t apsdMask;
@@ -289,16 +277,8 @@ struct sme_qos_sessioninfo {
 	sme_QosAssocInfo assocInfo;
 	/* ID assigned to our reassoc request */
 	uint32_t roamID;
-	/* maintaining a powersave status in QoS module, to be fed back to PMC
-	 * at times through the sme_qos_pmc_check_routine
-	 */
-	bool readyForPowerSave;
 	/* are we in the process of handing off to a different AP */
 	bool handoffRequested;
-	/* following reassoc or AddTS has UAPSD already been requested
-	 * from PMC
-	 */
-	bool uapsdAlreadyRequested;
 	/* commands that are being buffered for this session */
 	tDblLinkList bufferedCommandList;
 
@@ -312,7 +292,7 @@ struct sme_qos_sessioninfo {
  */
 union sme_qos_searchkey {
 	uint32_t QosFlowID;
-	sme_QosEdcaAcType ac_type;
+	enum qca_wlan_ac_type ac_type;
 	enum sme_qos_reasontype reason;
 };
 /*
@@ -329,28 +309,11 @@ struct sme_qos_searchinfo {
 	enum sme_qos_wmm_dir_type direction;
 	uint8_t tspec_mask;
 };
-/*
- *  DESCRIPTION
- *  SME QoS module's internal control block.
- */
-struct sme_qos_cb_s {
-	/* global Mac pointer */
-	tpAniSirGlobal pMac;
-	/* All Session Info */
-	struct sme_qos_sessioninfo sessionInfo[CSR_ROAM_SESSION_MAX];
-	/* All FLOW info */
-	tDblLinkList flow_list;
-	/* default TSPEC params */
-	struct sme_qos_wmmtspecinfo def_QoSInfo[SME_QOS_EDCA_AC_MAX];
-	/* counter for assigning Flow IDs */
-	uint32_t nextFlowId;
-	/* counter for assigning Dialog Tokens */
-	uint8_t nextDialogToken;
-} sme_qos_cb;
-typedef QDF_STATUS (*sme_QosProcessSearchEntry)(tpAniSirGlobal pMac,
+
+typedef QDF_STATUS (*sme_QosProcessSearchEntry)(struct mac_context *mac,
 						tListElem *pEntry);
 
-static enum sme_qos_statustype sme_qos_internal_setup_req(tpAniSirGlobal pMac,
+static enum sme_qos_statustype sme_qos_internal_setup_req(struct mac_context *mac,
 					  uint8_t sessionId,
 					  struct sme_qos_wmmtspecinfo *pQoSInfo,
 					  sme_QosCallback QoSCallback,
@@ -358,64 +321,62 @@ static enum sme_qos_statustype sme_qos_internal_setup_req(tpAniSirGlobal pMac,
 					  enum sme_qos_wmmuptype UPType,
 					  uint32_t QosFlowID,
 					  bool buffered_cmd, bool hoRenewal);
-static enum sme_qos_statustype sme_qos_internal_modify_req(tpAniSirGlobal pMac,
+static enum sme_qos_statustype sme_qos_internal_modify_req(struct mac_context *mac,
 					  struct sme_qos_wmmtspecinfo *pQoSInfo,
 					  uint32_t QosFlowID,
 					  bool buffered_cmd);
-static enum sme_qos_statustype sme_qos_internal_release_req(tpAniSirGlobal pMac,
+static enum sme_qos_statustype sme_qos_internal_release_req(struct mac_context *mac,
 					       uint8_t session_id,
 					       uint32_t QosFlowID,
 					       bool buffered_cmd);
-static enum sme_qos_statustype sme_qos_setup(tpAniSirGlobal pMac,
+static enum sme_qos_statustype sme_qos_setup(struct mac_context *mac,
 				uint8_t sessionId,
 				struct sme_qos_wmmtspecinfo *pTspec_Info,
-				sme_QosEdcaAcType ac);
-static QDF_STATUS sme_qos_add_ts_req(tpAniSirGlobal pMac,
+				enum qca_wlan_ac_type ac);
+static QDF_STATUS sme_qos_add_ts_req(struct mac_context *mac,
 			      uint8_t sessionId,
 			      struct sme_qos_wmmtspecinfo *pTspec_Info,
-			      sme_QosEdcaAcType ac);
-static QDF_STATUS sme_qos_del_ts_req(tpAniSirGlobal pMac,
+			      enum qca_wlan_ac_type ac);
+static QDF_STATUS sme_qos_del_ts_req(struct mac_context *mac,
 			      uint8_t sessionId,
-			      sme_QosEdcaAcType ac, uint8_t tspec_mask);
-static QDF_STATUS sme_qos_process_add_ts_rsp(tpAniSirGlobal pMac,
-						void *pMsgBuf);
-static QDF_STATUS sme_qos_process_del_ts_ind(tpAniSirGlobal pMac,
-						void *pMsgBuf);
-static QDF_STATUS sme_qos_process_del_ts_rsp(tpAniSirGlobal pMac,
-						void *pMsgBuf);
-static QDF_STATUS sme_qos_process_assoc_complete_ev(tpAniSirGlobal pMac,
+			      enum qca_wlan_ac_type ac, uint8_t tspec_mask);
+static QDF_STATUS sme_qos_process_add_ts_rsp(struct mac_context *mac,
+						void *msg_buf);
+static QDF_STATUS sme_qos_process_del_ts_ind(struct mac_context *mac,
+						void *msg_buf);
+static QDF_STATUS sme_qos_process_del_ts_rsp(struct mac_context *mac,
+						void *msg_buf);
+static QDF_STATUS sme_qos_process_assoc_complete_ev(struct mac_context *mac,
 					uint8_t sessionId, void *pEvent_info);
-static QDF_STATUS sme_qos_process_reassoc_req_ev(tpAniSirGlobal pMac,
+static QDF_STATUS sme_qos_process_reassoc_req_ev(struct mac_context *mac,
 					uint8_t sessionId, void *pEvent_info);
-static QDF_STATUS sme_qos_process_reassoc_success_ev(tpAniSirGlobal pMac,
+static QDF_STATUS sme_qos_process_reassoc_success_ev(struct mac_context *mac,
 					  uint8_t sessionId, void *pEvent_info);
-static QDF_STATUS sme_qos_process_reassoc_failure_ev(tpAniSirGlobal pMac,
+static QDF_STATUS sme_qos_process_reassoc_failure_ev(struct mac_context *mac,
 					  uint8_t sessionId, void *pEvent_info);
-static QDF_STATUS sme_qos_process_disconnect_ev(tpAniSirGlobal pMac, uint8_t
+static QDF_STATUS sme_qos_process_disconnect_ev(struct mac_context *mac, uint8_t
 					sessionId, void *pEvent_info);
-static QDF_STATUS sme_qos_process_join_req_ev(tpAniSirGlobal pMac, uint8_t
+static QDF_STATUS sme_qos_process_join_req_ev(struct mac_context *mac, uint8_t
 						sessionId, void *pEvent_info);
-static QDF_STATUS sme_qos_process_handoff_assoc_req_ev(tpAniSirGlobal pMac,
+static QDF_STATUS sme_qos_process_handoff_assoc_req_ev(struct mac_context *mac,
 						uint8_t sessionId,
 						void *pEvent_info);
-static QDF_STATUS sme_qos_process_handoff_success_ev(tpAniSirGlobal pMac,
+static QDF_STATUS sme_qos_process_handoff_success_ev(struct mac_context *mac,
 					  uint8_t sessionId, void *pEvent_info);
-static QDF_STATUS sme_qos_process_handoff_failure_ev(tpAniSirGlobal pMac,
-					  uint8_t sessionId, void *pEvent_info);
-static QDF_STATUS sme_qos_process_preauth_success_ind(tpAniSirGlobal pMac,
+static QDF_STATUS sme_qos_process_preauth_success_ind(struct mac_context *mac,
 					       uint8_t sessionId,
 					       void *pEvent_info);
-static QDF_STATUS sme_qos_process_set_key_success_ind(tpAniSirGlobal pMac,
+static QDF_STATUS sme_qos_process_set_key_success_ind(struct mac_context *mac,
 					       uint8_t sessionId,
 						void *pEvent_info);
-static QDF_STATUS sme_qos_process_aggr_qos_rsp(tpAniSirGlobal pMac,
-						void *pMsgBuf);
-static QDF_STATUS sme_qos_ft_aggr_qos_req(tpAniSirGlobal pMac, uint8_t
+static QDF_STATUS sme_qos_process_aggr_qos_rsp(struct mac_context *mac,
+						void *msg_buf);
+static QDF_STATUS sme_qos_ft_aggr_qos_req(struct mac_context *mac, uint8_t
 					sessionId);
-static QDF_STATUS sme_qos_process_add_ts_success_rsp(tpAniSirGlobal pMac,
+static QDF_STATUS sme_qos_process_add_ts_success_rsp(struct mac_context *mac,
 					      uint8_t sessionId,
 					      tSirAddtsRspInfo *pRsp);
-static QDF_STATUS sme_qos_process_add_ts_failure_rsp(tpAniSirGlobal pMac,
+static QDF_STATUS sme_qos_process_add_ts_failure_rsp(struct mac_context *mac,
 					      uint8_t sessionId,
 					      tSirAddtsRspInfo *pRsp);
 static QDF_STATUS sme_qos_aggregate_params(
@@ -423,67 +384,67 @@ static QDF_STATUS sme_qos_aggregate_params(
 	struct sme_qos_wmmtspecinfo *pCurrent_Tspec_Info,
 	struct sme_qos_wmmtspecinfo *pUpdated_Tspec_Info);
 static QDF_STATUS sme_qos_update_params(uint8_t sessionId,
-				      sme_QosEdcaAcType ac,
+				      enum qca_wlan_ac_type ac,
 				      uint8_t tspec_mask,
 				      struct sme_qos_wmmtspecinfo *pTspec_Info);
-static sme_QosEdcaAcType sme_qos_up_to_ac(enum sme_qos_wmmuptype up);
-static bool sme_qos_is_acm(tpAniSirGlobal pMac, tSirBssDescription *pSirBssDesc,
-		    sme_QosEdcaAcType ac, tDot11fBeaconIEs *pIes);
+static enum qca_wlan_ac_type sme_qos_up_to_ac(enum sme_qos_wmmuptype up);
+
+static bool
+sme_qos_is_acm(struct mac_context *mac, struct bss_description *pSirBssDesc,
+	       enum qca_wlan_ac_type ac, tDot11fBeaconIEs *pIes);
+
 static tListElem *sme_qos_find_in_flow_list(struct sme_qos_searchinfo
 						search_key);
-static QDF_STATUS sme_qos_find_all_in_flow_list(tpAniSirGlobal pMac,
+static QDF_STATUS sme_qos_find_all_in_flow_list(struct mac_context *mac,
 					 struct sme_qos_searchinfo search_key,
 					 sme_QosProcessSearchEntry fnp);
 static void sme_qos_state_transition(uint8_t sessionId,
-				     sme_QosEdcaAcType ac,
+				     enum qca_wlan_ac_type ac,
 				     enum sme_qos_states new_state);
 static QDF_STATUS sme_qos_buffer_cmd(struct sme_qos_cmdinfo *pcmd, bool
 					insert_head);
 static QDF_STATUS sme_qos_process_buffered_cmd(uint8_t sessionId);
 static QDF_STATUS sme_qos_save_assoc_info(struct sme_qos_sessioninfo *pSession,
 				   sme_QosAssocInfo *pAssoc_info);
-static QDF_STATUS sme_qos_setup_fnp(tpAniSirGlobal pMac, tListElem *pEntry);
-static QDF_STATUS sme_qos_modification_notify_fnp(tpAniSirGlobal pMac,
+static QDF_STATUS sme_qos_setup_fnp(struct mac_context *mac, tListElem *pEntry);
+static QDF_STATUS sme_qos_modification_notify_fnp(struct mac_context *mac,
 					   tListElem *pEntry);
-static QDF_STATUS sme_qos_modify_fnp(tpAniSirGlobal pMac, tListElem *pEntry);
-static QDF_STATUS sme_qos_del_ts_ind_fnp(tpAniSirGlobal pMac, tListElem
+static QDF_STATUS sme_qos_modify_fnp(struct mac_context *mac, tListElem *pEntry);
+static QDF_STATUS sme_qos_del_ts_ind_fnp(struct mac_context *mac, tListElem
 					*pEntry);
-static QDF_STATUS sme_qos_reassoc_success_ev_fnp(tpAniSirGlobal pMac,
+static QDF_STATUS sme_qos_reassoc_success_ev_fnp(struct mac_context *mac,
 					tListElem *pEntry);
-static QDF_STATUS sme_qos_add_ts_failure_fnp(tpAniSirGlobal pMac, tListElem
+static QDF_STATUS sme_qos_add_ts_failure_fnp(struct mac_context *mac, tListElem
 						*pEntry);
-static QDF_STATUS sme_qos_add_ts_success_fnp(tpAniSirGlobal pMac, tListElem
+static QDF_STATUS sme_qos_add_ts_success_fnp(struct mac_context *mac, tListElem
 						*pEntry);
-static bool sme_qos_is_rsp_pending(uint8_t sessionId, sme_QosEdcaAcType ac);
+static bool sme_qos_is_rsp_pending(uint8_t sessionId, enum qca_wlan_ac_type ac);
 static bool sme_qos_is_uapsd_active(void);
 
-static void sme_qos_pmc_offload_start_uapsd_callback(void *callbackContext,
-					 uint32_t sessionId, QDF_STATUS status);
-
-static QDF_STATUS sme_qos_buffer_existing_flows(tpAniSirGlobal pMac,
+static QDF_STATUS sme_qos_buffer_existing_flows(struct mac_context *mac,
 						uint8_t sessionId);
-static QDF_STATUS sme_qos_delete_existing_flows(tpAniSirGlobal pMac,
+static QDF_STATUS sme_qos_delete_existing_flows(struct mac_context *mac,
 						uint8_t sessionId);
-static void sme_qos_cleanup_ctrl_blk_for_handoff(tpAniSirGlobal pMac,
+static void sme_qos_cleanup_ctrl_blk_for_handoff(struct mac_context *mac,
 						 uint8_t sessionId);
-static QDF_STATUS sme_qos_delete_buffered_requests(tpAniSirGlobal pMac,
+static QDF_STATUS sme_qos_delete_buffered_requests(struct mac_context *mac,
 						   uint8_t sessionId);
-static bool sme_qos_validate_requested_params(tpAniSirGlobal pMac,
+static bool sme_qos_validate_requested_params(struct mac_context *mac,
 				       struct sme_qos_wmmtspecinfo *pQoSInfo,
 				       uint8_t sessionId);
 
-static QDF_STATUS qos_issue_command(tpAniSirGlobal pMac, uint8_t sessionId,
+static QDF_STATUS qos_issue_command(struct mac_context *mac, uint8_t sessionId,
 				    eSmeCommandType cmdType,
 				    struct sme_qos_wmmtspecinfo *pQoSInfo,
-				    sme_QosEdcaAcType ac, uint8_t tspec_mask);
+				    enum qca_wlan_ac_type ac, uint8_t tspec_mask);
 /* sme_qos_re_request_add_ts to re-send AddTS for the combined QoS request */
-static enum sme_qos_statustype sme_qos_re_request_add_ts(tpAniSirGlobal pMac,
+static enum sme_qos_statustype sme_qos_re_request_add_ts(struct mac_context *mac,
 					  uint8_t sessionId,
 					  struct sme_qos_wmmtspecinfo *pQoSInfo,
-					  sme_QosEdcaAcType ac,
+					  enum qca_wlan_ac_type ac,
 					  uint8_t tspecMask);
-static void sme_qos_init_a_cs(tpAniSirGlobal pMac, uint8_t sessionId);
-static QDF_STATUS sme_qos_request_reassoc(tpAniSirGlobal pMac,
+static void sme_qos_init_a_cs(struct mac_context *mac, uint8_t sessionId);
+static QDF_STATUS sme_qos_request_reassoc(struct mac_context *mac,
 					uint8_t sessionId,
 					  tCsrRoamModifyProfileFields *
 					  pModFields, bool fForce);
@@ -493,18 +454,89 @@ static QDF_STATUS sme_qos_update_tspec_mask(uint8_t sessionId,
 					   struct sme_qos_searchinfo search_key,
 					    uint8_t new_tspec_mask);
 
+/*
+ *  DESCRIPTION
+ *  SME QoS module's internal control block.
+ */
+struct sme_qos_cb_s {
+	/* global Mac pointer */
+	struct mac_context *mac;
+	/* All Session Info */
+	struct sme_qos_sessioninfo *sessionInfo;
+	/* All FLOW info */
+	tDblLinkList flow_list;
+	/* default TSPEC params */
+	struct sme_qos_wmmtspecinfo *def_QoSInfo;
+	/* counter for assigning Flow IDs */
+	uint32_t nextFlowId;
+	/* counter for assigning Dialog Tokens */
+	uint8_t nextDialogToken;
+} sme_qos_cb;
+
+#ifdef WLAN_ALLOCATE_GLOBAL_BUFFERS_DYNAMICALLY
+static inline QDF_STATUS sme_qos_allocate_control_block_buffer(void)
+{
+	uint32_t buf_size;
+
+	buf_size = WLAN_MAX_VDEVS * sizeof(struct sme_qos_sessioninfo);
+	sme_qos_cb.sessionInfo = qdf_mem_malloc(buf_size);
+	if (!sme_qos_cb.sessionInfo)
+		return QDF_STATUS_E_NOMEM;
+
+	buf_size = QCA_WLAN_AC_ALL * sizeof(struct sme_qos_wmmtspecinfo);
+	sme_qos_cb.def_QoSInfo = qdf_mem_malloc(buf_size);
+
+	if (!sme_qos_cb.def_QoSInfo) {
+		qdf_mem_free(sme_qos_cb.sessionInfo);
+		return QDF_STATUS_E_NOMEM;
+	}
+
+	return QDF_STATUS_SUCCESS;
+}
+
+static inline void sme_qos_free_control_block_buffer(void)
+{
+	qdf_mem_free(sme_qos_cb.sessionInfo);
+	sme_qos_cb.sessionInfo = NULL;
+
+	qdf_mem_free(sme_qos_cb.def_QoSInfo);
+	sme_qos_cb.def_QoSInfo = NULL;
+}
+
+#else /* WLAN_ALLOCATE_GLOBAL_BUFFERS_DYNAMICALLY */
+
+struct sme_qos_sessioninfo sessionInfo[WLAN_MAX_VDEVS];
+struct sme_qos_wmmtspecinfo def_QoSInfo[QCA_WLAN_AC_ALL];
+
+static inline QDF_STATUS sme_qos_allocate_control_block_buffer(void)
+{
+	qdf_mem_zero(&sessionInfo, sizeof(sessionInfo));
+	sme_qos_cb.sessionInfo = sessionInfo;
+	qdf_mem_zero(&def_QoSInfo, sizeof(def_QoSInfo));
+	sme_qos_cb.def_QoSInfo = def_QoSInfo;
+
+	return QDF_STATUS_SUCCESS;
+}
+
+static inline void sme_qos_free_control_block_buffer(void)
+{
+	sme_qos_cb.sessionInfo = NULL;
+	sme_qos_cb.def_QoSInfo = NULL;
+}
+#endif /* WLAN_ALLOCATE_GLOBAL_BUFFERS_DYNAMICALLY */
+
 /* External APIs definitions */
 
 /**
  * sme_qos_open() - called to initialize SME QoS module.
- * @pMac: global MAC context
+ * @mac: global MAC context
  *
  * This function must be called before any API call to
  * SME QoS module.
  *
  * Return: QDF_STATUS
  */
-QDF_STATUS sme_qos_open(tpAniSirGlobal pMac)
+QDF_STATUS sme_qos_open(struct mac_context *mac)
 {
 	struct sme_qos_sessioninfo *pSession;
 	uint8_t sessionId;
@@ -512,36 +544,42 @@ QDF_STATUS sme_qos_open(tpAniSirGlobal pMac)
 
 	QDF_TRACE(QDF_MODULE_ID_SME, QDF_TRACE_LEVEL_DEBUG,
 		  "%s: %d: initializing SME-QoS module", __func__, __LINE__);
-	/* init the control block */
+	/* alloc and init the control block */
 	/* (note that this will make all sessions invalid) */
-	qdf_mem_zero(&sme_qos_cb, sizeof(sme_qos_cb));
-	sme_qos_cb.pMac = pMac;
+	if (!QDF_IS_STATUS_SUCCESS(sme_qos_allocate_control_block_buffer())) {
+		QDF_TRACE_ERROR(QDF_MODULE_ID_SME,
+				"%s: %d: Failed to allocate buffer",
+				__func__, __LINE__);
+		return QDF_STATUS_E_NOMEM;
+	}
+	sme_qos_cb.mac = mac;
 	sme_qos_cb.nextFlowId = SME_QOS_MIN_FLOW_ID;
 	sme_qos_cb.nextDialogToken = SME_QOS_MIN_DIALOG_TOKEN;
+
 	/* init flow list */
-	status = csr_ll_open(pMac->hHdd, &sme_qos_cb.flow_list);
+	status = csr_ll_open(&sme_qos_cb.flow_list);
 	if (!QDF_IS_STATUS_SUCCESS(status)) {
 		QDF_TRACE(QDF_MODULE_ID_SME, QDF_TRACE_LEVEL_ERROR,
 			  "%s: %d: cannot initialize Flow List",
 			  __func__, __LINE__);
+		sme_qos_free_control_block_buffer();
 		return QDF_STATUS_E_FAILURE;
 	}
 
-	for (sessionId = 0; sessionId < CSR_ROAM_SESSION_MAX; ++sessionId) {
+	for (sessionId = 0; sessionId < WLAN_MAX_VDEVS; ++sessionId) {
 		pSession = &sme_qos_cb.sessionInfo[sessionId];
 		pSession->sessionId = sessionId;
 		/* initialize the session's per-AC information */
-		sme_qos_init_a_cs(pMac, sessionId);
+		sme_qos_init_a_cs(mac, sessionId);
 		/* initialize the session's buffered command list */
-		status = csr_ll_open(pMac->hHdd, &pSession->
-					bufferedCommandList);
+		status = csr_ll_open(&pSession->bufferedCommandList);
 		if (!QDF_IS_STATUS_SUCCESS(status)) {
 			QDF_TRACE(QDF_MODULE_ID_SME, QDF_TRACE_LEVEL_ERROR,
 				  "%s: %d: cannot initialize cmd list for session %d",
 				  __func__, __LINE__, sessionId);
+			sme_qos_free_control_block_buffer();
 			return QDF_STATUS_E_FAILURE;
 		}
-		pSession->readyForPowerSave = true;
 	}
 
 	QDF_TRACE(QDF_MODULE_ID_SME, QDF_TRACE_LEVEL_DEBUG,
@@ -555,13 +593,13 @@ QDF_STATUS sme_qos_open(tpAniSirGlobal pMac)
  *   any API call into this module after calling this function until another
  *   call of sme_qos_open.
  *
- * pMac - Pointer to the global MAC parameter structure.
+ * mac - Pointer to the global MAC parameter structure.
  * Return QDF_STATUS
  */
-QDF_STATUS sme_qos_close(tpAniSirGlobal pMac)
+QDF_STATUS sme_qos_close(struct mac_context *mac)
 {
 	struct sme_qos_sessioninfo *pSession;
-	sme_QosEdcaAcType ac;
+	enum qca_wlan_ac_type ac;
 	uint8_t sessionId;
 
 	QDF_TRACE(QDF_MODULE_ID_SME, QDF_TRACE_LEVEL_DEBUG,
@@ -571,37 +609,35 @@ QDF_STATUS sme_qos_close(tpAniSirGlobal pMac)
 	/* close the flow list */
 	csr_ll_close(&sme_qos_cb.flow_list);
 	/* shut down all of the sessions */
-	for (sessionId = 0; sessionId < CSR_ROAM_SESSION_MAX; ++sessionId) {
+	for (sessionId = 0; sessionId < WLAN_MAX_VDEVS; ++sessionId) {
 		pSession = &sme_qos_cb.sessionInfo[sessionId];
-		if (pSession == NULL)
+		if (!pSession)
 			continue;
 
-		sme_qos_init_a_cs(pMac, sessionId);
+		sme_qos_init_a_cs(mac, sessionId);
 		/* this session doesn't require UAPSD */
 		pSession->apsdMask = 0;
 
-		pSession->uapsdAlreadyRequested = false;
 		pSession->handoffRequested = false;
-		pSession->readyForPowerSave = true;
 		pSession->roamID = 0;
 		/* need to clean up buffered req */
-		sme_qos_delete_buffered_requests(pMac, sessionId);
+		sme_qos_delete_buffered_requests(mac, sessionId);
 		/* need to clean up flows */
-		sme_qos_delete_existing_flows(pMac, sessionId);
+		sme_qos_delete_existing_flows(mac, sessionId);
 
 		/* Clean up the assoc info if already allocated */
-		if (pSession->assocInfo.pBssDesc) {
-			qdf_mem_free(pSession->assocInfo.pBssDesc);
-			pSession->assocInfo.pBssDesc = NULL;
+		if (pSession->assocInfo.bss_desc) {
+			qdf_mem_free(pSession->assocInfo.bss_desc);
+			pSession->assocInfo.bss_desc = NULL;
 		}
 		/* close the session's buffered command list */
 		csr_ll_close(&pSession->bufferedCommandList);
-		for (ac = SME_QOS_EDCA_AC_BE; ac < SME_QOS_EDCA_AC_MAX; ac++)
+		for (ac = QCA_WLAN_AC_BE; ac < QCA_WLAN_AC_ALL; ac++)
 			sme_qos_state_transition(sessionId, ac, SME_QOS_CLOSED);
 
 		pSession->sessionActive = false;
-		pSession->readyForPowerSave = true;
 	}
+	sme_qos_free_control_block_buffer();
 	QDF_TRACE(QDF_MODULE_ID_SME, QDF_TRACE_LEVEL_DEBUG,
 		  "%s: %d: closed down QoS", __func__, __LINE__);
 	return QDF_STATUS_SUCCESS;
@@ -610,7 +646,7 @@ QDF_STATUS sme_qos_close(tpAniSirGlobal pMac)
 /**
  * sme_qos_setup_req() - The SME QoS API exposed to HDD to request for QoS
  *                       on a particular AC.
- * @hHal: The handle returned by mac_open.
+ * @mac_handle: The handle returned by mac_open.
  * @sessionId: sessionId returned by sme_open_session.
  * @pQoSInfo: Pointer to struct sme_qos_wmmtspecinfo which contains the
  *             WMM TSPEC related info as defined above, provided by HDD
@@ -635,29 +671,27 @@ QDF_STATUS sme_qos_close(tpAniSirGlobal pMac)
  * Return: QDF_STATUS_SUCCESS - Setup is successful.
  *          Other status means Setup request failed
  */
-enum sme_qos_statustype sme_qos_setup_req(tHalHandle hHal, uint32_t sessionId,
-				    struct sme_qos_wmmtspecinfo *pQoSInfo,
-				    sme_QosCallback QoSCallback,
-				    void *HDDcontext,
-				    enum sme_qos_wmmuptype UPType,
-				    uint32_t *pQosFlowID)
+enum sme_qos_statustype sme_qos_setup_req(mac_handle_t mac_handle,
+					  uint32_t sessionId,
+					  struct sme_qos_wmmtspecinfo *pQoSInfo,
+					  sme_QosCallback QoSCallback,
+					  void *HDDcontext,
+					  enum sme_qos_wmmuptype UPType,
+					  uint32_t *pQosFlowID)
 {
 	struct sme_qos_sessioninfo *pSession;
 	QDF_STATUS lock_status = QDF_STATUS_E_FAILURE;
-	tpAniSirGlobal pMac = PMAC_STRUCT(hHal);
+	struct mac_context *mac = MAC_CONTEXT(mac_handle);
 	enum sme_qos_statustype status;
 
 	QDF_TRACE(QDF_MODULE_ID_SME, QDF_TRACE_LEVEL_DEBUG,
 		  "%s: %d: QoS Setup requested by client on session %d",
 		  __func__, __LINE__, sessionId);
-	lock_status = sme_acquire_global_lock(&pMac->sme);
-	if (!QDF_IS_STATUS_SUCCESS(lock_status)) {
-		QDF_TRACE(QDF_MODULE_ID_SME, QDF_TRACE_LEVEL_ERROR,
-			  "%s: %d: Unable to obtain lock", __func__, __LINE__);
+	lock_status = sme_acquire_global_lock(&mac->sme);
+	if (!QDF_IS_STATUS_SUCCESS(lock_status))
 		return SME_QOS_STATUS_SETUP_FAILURE_RSP;
-	}
 	/* Make sure the session is valid */
-	if (!CSR_IS_SESSION_VALID(pMac, sessionId)) {
+	if (!CSR_IS_SESSION_VALID(mac, sessionId)) {
 		QDF_TRACE(QDF_MODULE_ID_SME, QDF_TRACE_LEVEL_ERROR,
 			  "%s: %d: Supplied Session ID %d is invalid",
 			  __func__, __LINE__, sessionId);
@@ -679,7 +713,7 @@ enum sme_qos_statustype sme_qos_setup_req(tHalHandle hHal, uint32_t sessionId,
 			/* Call the internal function for QoS setup, */
 			/* adding a layer of abstraction */
 			status =
-				sme_qos_internal_setup_req(pMac, (uint8_t)
+				sme_qos_internal_setup_req(mac, (uint8_t)
 							sessionId,
 							  pQoSInfo, QoSCallback,
 							   HDDcontext, UPType,
@@ -687,7 +721,7 @@ enum sme_qos_statustype sme_qos_setup_req(tHalHandle hHal, uint32_t sessionId,
 							   false);
 		}
 	}
-	sme_release_global_lock(&pMac->sme);
+	sme_release_global_lock(&mac->sme);
 	QDF_TRACE(QDF_MODULE_ID_SME, QDF_TRACE_LEVEL_DEBUG,
 		  "%s: %d: QoS setup return status on session %d is %d",
 		  __func__, __LINE__, sessionId, status);
@@ -697,7 +731,7 @@ enum sme_qos_statustype sme_qos_setup_req(tHalHandle hHal, uint32_t sessionId,
 /**
  * sme_qos_modify_req() - The SME QoS API exposed to HDD to request for
  *  modification of certain QoS params on a flow running on a particular AC.
- * @hHal: The handle returned by mac_open.
+ * @mac_handle: The handle returned by mac_open.
  * @pQoSInfo: Pointer to struct sme_qos_wmmtspecinfo which contains the
  *             WMM TSPEC related info as defined above, provided by HDD
  * @QosFlowID: Identification per flow running on each AC generated by
@@ -705,7 +739,7 @@ enum sme_qos_statustype sme_qos_setup_req(tHalHandle hHal, uint32_t sessionId,
  *             been successful already
  *
  * This function should be called after a link has been established,
- * i.e. STA is associated with an AP etc. & a QoS setup has been succesful for
+ * i.e. STA is associated with an AP etc. & a QoS setup has been successful for
  * that flow. If the request involves admission control on the requested AC,
  * HDD needs to provide the necessary Traffic Specification (TSPEC) parameters &
  * SME might start the renegotiation process through ADDTS.
@@ -713,18 +747,18 @@ enum sme_qos_statustype sme_qos_setup_req(tHalHandle hHal, uint32_t sessionId,
  * Return: SME_QOS_STATUS_SETUP_SUCCESS_RSP - Modification is successful.
  *         Other status means request failed
  */
-enum sme_qos_statustype sme_qos_modify_req(tHalHandle hHal,
-				     struct sme_qos_wmmtspecinfo *pQoSInfo,
-				     uint32_t QosFlowID)
+enum sme_qos_statustype sme_qos_modify_req(mac_handle_t mac_handle,
+					struct sme_qos_wmmtspecinfo *pQoSInfo,
+					uint32_t QosFlowID)
 {
 	QDF_STATUS lock_status = QDF_STATUS_E_FAILURE;
-	tpAniSirGlobal pMac = PMAC_STRUCT(hHal);
+	struct mac_context *mac = MAC_CONTEXT(mac_handle);
 	enum sme_qos_statustype status;
 
 	QDF_TRACE(QDF_MODULE_ID_SME, QDF_TRACE_LEVEL_DEBUG,
 		  "%s: %d: QoS Modify requested by client for Flow %d",
 		  __func__, __LINE__, QosFlowID);
-	lock_status = sme_acquire_global_lock(&pMac->sme);
+	lock_status = sme_acquire_global_lock(&mac->sme);
 	if (!QDF_IS_STATUS_SUCCESS(lock_status)) {
 		QDF_TRACE(QDF_MODULE_ID_SME, QDF_TRACE_LEVEL_ERROR,
 			  "%s: %d: Unable to obtain lock", __func__, __LINE__);
@@ -733,8 +767,8 @@ enum sme_qos_statustype sme_qos_modify_req(tHalHandle hHal,
 	/* Call the internal function for QoS modify, adding a
 	 * layer of abstraction
 	 */
-	status = sme_qos_internal_modify_req(pMac, pQoSInfo, QosFlowID, false);
-	sme_release_global_lock(&pMac->sme);
+	status = sme_qos_internal_modify_req(mac, pQoSInfo, QosFlowID, false);
+	sme_release_global_lock(&mac->sme);
 	QDF_TRACE(QDF_MODULE_ID_SME, QDF_TRACE_LEVEL_DEBUG,
 		  "%s: %d: QoS Modify return status on Flow %d is %d",
 		  __func__, __LINE__, QosFlowID, status);
@@ -745,7 +779,7 @@ enum sme_qos_statustype sme_qos_modify_req(tHalHandle hHal,
  * sme_qos_release_req() - The SME QoS API exposed to HDD to request for
  *                         releasing a QoS flow running on a particular AC.
  *
- * @hHal: The handle returned by mac_open.
+ * @mac_handle: The handle returned by mac_open.
  * @session_id: session_id returned by sme_open_session.
  * @QosFlowID: Identification per flow running on each AC generated by SME
  *             It is only meaningful if the QoS setup for the flow is successful
@@ -756,17 +790,18 @@ enum sme_qos_statustype sme_qos_modify_req(tHalHandle hHal,
  *
  * Return: QDF_STATUS_SUCCESS - Release is successful.
  */
-enum sme_qos_statustype sme_qos_release_req(tHalHandle hHal, uint8_t session_id,
-				      uint32_t QosFlowID)
+enum sme_qos_statustype sme_qos_release_req(mac_handle_t mac_handle,
+					    uint8_t session_id,
+					    uint32_t QosFlowID)
 {
 	QDF_STATUS lock_status = QDF_STATUS_E_FAILURE;
-	tpAniSirGlobal pMac = PMAC_STRUCT(hHal);
+	struct mac_context *mac = MAC_CONTEXT(mac_handle);
 	enum sme_qos_statustype status;
 
 	QDF_TRACE(QDF_MODULE_ID_SME, QDF_TRACE_LEVEL_DEBUG,
 		  "%s: %d: QoS Release requested by client for Flow %d",
 		  __func__, __LINE__, QosFlowID);
-	lock_status = sme_acquire_global_lock(&pMac->sme);
+	lock_status = sme_acquire_global_lock(&mac->sme);
 	if (!QDF_IS_STATUS_SUCCESS(lock_status)) {
 		QDF_TRACE(QDF_MODULE_ID_SME, QDF_TRACE_LEVEL_ERROR,
 			  "%s: %d: Unable to obtain lock", __func__, __LINE__);
@@ -775,19 +810,19 @@ enum sme_qos_statustype sme_qos_release_req(tHalHandle hHal, uint8_t session_id,
 	/* Call the internal function for QoS release, adding a
 	 * layer of abstraction
 	 */
-	status = sme_qos_internal_release_req(pMac, session_id, QosFlowID,
+	status = sme_qos_internal_release_req(mac, session_id, QosFlowID,
 					      false);
-	sme_release_global_lock(&pMac->sme);
+	sme_release_global_lock(&mac->sme);
 	QDF_TRACE(QDF_MODULE_ID_SME, QDF_TRACE_LEVEL_DEBUG,
 		  "%s: %d: QoS Release return status on Flow %d is %d",
 		  __func__, __LINE__, QosFlowID, status);
 	return status;
 }
 
-void qos_release_command(tpAniSirGlobal pMac, tSmeCmd *pCommand)
+void qos_release_command(struct mac_context *mac, tSmeCmd *pCommand)
 {
 	qdf_mem_zero(&pCommand->u.qosCmd, sizeof(tGenericQosCmd));
-	csr_release_command(pMac, pCommand);
+	csr_release_command(mac, pCommand);
 }
 
 /**
@@ -801,7 +836,7 @@ void qos_release_command(tpAniSirGlobal pMac, tSmeCmd *pCommand)
  *
  * Return: QDF_STATUS enumeration.
  */
-QDF_STATUS sme_qos_msg_processor(tpAniSirGlobal mac_ctx,
+QDF_STATUS sme_qos_msg_processor(struct mac_context *mac_ctx,
 	uint16_t msg_type, void *msg)
 {
 	QDF_STATUS status = QDF_STATUS_E_FAILURE;
@@ -815,7 +850,7 @@ QDF_STATUS sme_qos_msg_processor(tpAniSirGlobal mac_ctx,
 	case eWNI_SME_ADDTS_RSP:
 		entry = csr_nonscan_active_ll_peek_head(mac_ctx,
 				LL_ACCESS_LOCK);
-		if (NULL == entry)
+		if (!entry)
 			break;
 		command = GET_BASE_ADDR(entry, tSmeCmd, Link);
 		if (eSmeCommandAddTs == command->command) {
@@ -829,7 +864,7 @@ QDF_STATUS sme_qos_msg_processor(tpAniSirGlobal mac_ctx,
 	case eWNI_SME_DELTS_RSP:
 		entry = csr_nonscan_active_ll_peek_head(mac_ctx,
 				LL_ACCESS_LOCK);
-		if (NULL == entry)
+		if (!entry)
 			break;
 		command = GET_BASE_ADDR(entry, tSmeCmd, Link);
 		if (eSmeCommandDelTs == command->command) {
@@ -857,151 +892,102 @@ QDF_STATUS sme_qos_msg_processor(tpAniSirGlobal mac_ctx,
 }
 
 /**
- * sme_qos_validate_params() - validate SME QOS parameters.
- * @pMac: Pointer to the global MAC parameter structure.
- * @pBssDesc: Pointer to the BSS Descriptor information passed down by
- *            CSR to PE while issuing the Join request
+ * sme_qos_process_disconnect_roam_ind() - Delete the existing TSPEC
+ * flows when roaming due to disconnect is complete.
+ * @mac - Pointer to the global MAC parameter structure.
+ * @vdev_id: Vdev id
  *
- * The SME QoS API exposed to CSR to validate AP
- * capabilities regarding QoS support & any other QoS parameter validation.
- *
- * Return: QDF_STATUS
+ * Return: None
  */
-QDF_STATUS sme_qos_validate_params(tpAniSirGlobal pMac,
-				   tSirBssDescription *pBssDesc)
+static void
+sme_qos_process_disconnect_roam_ind(struct mac_context *mac,
+				    uint8_t vdev_id)
 {
-	tDot11fBeaconIEs *pIes = NULL;
-	QDF_STATUS status = QDF_STATUS_E_FAILURE;
-
-	QDF_TRACE(QDF_MODULE_ID_SME, QDF_TRACE_LEVEL_DEBUG,
-		  "%s: %d: validation for QAP & APSD", __func__, __LINE__);
-	do {
-		if (!QDF_IS_STATUS_SUCCESS(
-			csr_get_parsed_bss_description_ies(
-				pMac, pBssDesc,	&pIes))) {
-			/* err msg */
-			QDF_TRACE(QDF_MODULE_ID_SME, QDF_TRACE_LEVEL_ERROR,
-				  "%s: %d: csr_get_parsed_bss_description_ies() failed",
-				  __func__, __LINE__);
-			break;
-		}
-		/* check if the AP is QAP & it supports APSD */
-		if (!CSR_IS_QOS_BSS(pIes)) {
-			/* err msg */
-			QDF_TRACE(QDF_MODULE_ID_SME, QDF_TRACE_LEVEL_ERROR,
-				  "%s: %d: AP doesn't support QoS",
-				  __func__, __LINE__);
-
-			break;
-		}
-		if (!(pIes->WMMParams.qosInfo & SME_QOS_AP_SUPPORTS_APSD) &&
-		    !(pIes->WMMInfoAp.uapsd)) {
-			/* err msg */
-			QDF_TRACE(QDF_MODULE_ID_SME, QDF_TRACE_LEVEL_ERROR,
-				  "%s: %d: AP doesn't support APSD",
-				  __func__, __LINE__);
-			break;
-		}
-		status = QDF_STATUS_SUCCESS;
-	} while (0);
-	QDF_TRACE(QDF_MODULE_ID_SME, QDF_TRACE_LEVEL_DEBUG,
-		  "%s: %d: validated with status = %d",
-		  __func__, __LINE__, status);
-	if (pIes)
-		qdf_mem_free(pIes);
-
-	return status;
+	sme_qos_delete_existing_flows(mac, vdev_id);
 }
 
 /*
  * sme_qos_csr_event_ind() - The QoS sub-module in SME expects notifications
  * from CSR when certain events occur as mentioned in sme_qos_csr_event_indType.
  *
- * pMac - Pointer to the global MAC parameter structure.
+ * mac - Pointer to the global MAC parameter structure.
  * ind - The event occurred of type sme_qos_csr_event_indType.
  * pEvent_info - Information related to the event
  * Return QDF_STATUS
  */
-QDF_STATUS sme_qos_csr_event_ind(tpAniSirGlobal pMac,
+QDF_STATUS sme_qos_csr_event_ind(struct mac_context *mac,
 				 uint8_t sessionId,
 			sme_qos_csr_event_indType ind, void *pEvent_info)
 {
 	QDF_STATUS status = QDF_STATUS_E_FAILURE;
 
-	QDF_TRACE(QDF_MODULE_ID_SME, QDF_TRACE_LEVEL_DEBUG,
-		  "%s: %d: On Session %d Event %d received from CSR",
-		  __func__, __LINE__, sessionId, ind);
+	sme_debug("On Session %d Event %d received from CSR", sessionId, ind);
 	switch (ind) {
 	case SME_QOS_CSR_ASSOC_COMPLETE:
 		/* expecting assoc info in pEvent_info */
-		status = sme_qos_process_assoc_complete_ev(pMac, sessionId,
+		status = sme_qos_process_assoc_complete_ev(mac, sessionId,
 							pEvent_info);
 		break;
 	case SME_QOS_CSR_REASSOC_REQ:
 		/* nothing expected in pEvent_info */
-		status = sme_qos_process_reassoc_req_ev(pMac, sessionId,
+		status = sme_qos_process_reassoc_req_ev(mac, sessionId,
 							pEvent_info);
 		break;
 	case SME_QOS_CSR_REASSOC_COMPLETE:
 		/* expecting assoc info in pEvent_info */
 		status =
-			sme_qos_process_reassoc_success_ev(pMac, sessionId,
+			sme_qos_process_reassoc_success_ev(mac, sessionId,
 							   pEvent_info);
 		break;
 	case SME_QOS_CSR_REASSOC_FAILURE:
 		/* nothing expected in pEvent_info */
 		status =
-			sme_qos_process_reassoc_failure_ev(pMac, sessionId,
+			sme_qos_process_reassoc_failure_ev(mac, sessionId,
 							   pEvent_info);
 		break;
 	case SME_QOS_CSR_DISCONNECT_REQ:
 	case SME_QOS_CSR_DISCONNECT_IND:
 		/* nothing expected in pEvent_info */
-		status = sme_qos_process_disconnect_ev(pMac, sessionId,
+		status = sme_qos_process_disconnect_ev(mac, sessionId,
 							pEvent_info);
 		break;
 	case SME_QOS_CSR_JOIN_REQ:
 		/* nothing expected in pEvent_info */
-		status = sme_qos_process_join_req_ev(pMac, sessionId,
+		status = sme_qos_process_join_req_ev(mac, sessionId,
 							pEvent_info);
 		break;
 	case SME_QOS_CSR_HANDOFF_ASSOC_REQ:
 		/* nothing expected in pEvent_info */
-		status = sme_qos_process_handoff_assoc_req_ev(pMac, sessionId,
+		status = sme_qos_process_handoff_assoc_req_ev(mac, sessionId,
 							     pEvent_info);
 		break;
 	case SME_QOS_CSR_HANDOFF_COMPLETE:
 		/* nothing expected in pEvent_info */
 		status =
-			sme_qos_process_handoff_success_ev(pMac, sessionId,
-							   pEvent_info);
-		break;
-	case SME_QOS_CSR_HANDOFF_FAILURE:
-		/* nothing expected in pEvent_info */
-		status =
-			sme_qos_process_handoff_failure_ev(pMac, sessionId,
+			sme_qos_process_handoff_success_ev(mac, sessionId,
 							   pEvent_info);
 		break;
 	case SME_QOS_CSR_PREAUTH_SUCCESS_IND:
 		status =
-			sme_qos_process_preauth_success_ind(pMac, sessionId,
+			sme_qos_process_preauth_success_ind(mac, sessionId,
 							    pEvent_info);
 		break;
 	case SME_QOS_CSR_SET_KEY_SUCCESS_IND:
 		status =
-			sme_qos_process_set_key_success_ind(pMac, sessionId,
+			sme_qos_process_set_key_success_ind(mac, sessionId,
 							    pEvent_info);
+		break;
+	case SME_QOS_CSR_DISCONNECT_ROAM_COMPLETE:
+		sme_qos_process_disconnect_roam_ind(mac, sessionId);
+		status = QDF_STATUS_SUCCESS;
 		break;
 	default:
 		/* Err msg */
-		QDF_TRACE(QDF_MODULE_ID_SME, QDF_TRACE_LEVEL_ERROR,
-			  "%s: %d: On Session %d Unknown Event %d received from CSR",
-			  __func__, __LINE__, sessionId, ind);
+		sme_err("On Session %d Unknown Event %d received from CSR",
+			sessionId, ind);
 		break;
 	}
-	QDF_TRACE(QDF_MODULE_ID_SME, QDF_TRACE_LEVEL_DEBUG,
-		  "%s: %d: On Session %d processed Event %d with status %d",
-		  __func__, __LINE__, sessionId, ind, status);
+
 	return status;
 }
 
@@ -1010,21 +996,21 @@ QDF_STATUS sme_qos_csr_event_ind(tpAniSirGlobal pMac,
  *  AP mandates Admission Control (ACM = 1)
  *  (Bit0:VO; Bit1:VI; Bit2:BK; Bit3:BE all other bits are ignored)
  *
- * pMac - Pointer to the global MAC parameter structure.
+ * mac - Pointer to the global MAC parameter structure.
  * pSirBssDesc - The event occurred of type sme_qos_csr_event_indType.
  * Return a bit mask indicating for which ACs AP has ACM set to 1
  */
-uint8_t sme_qos_get_acm_mask(tpAniSirGlobal pMac, tSirBssDescription
+uint8_t sme_qos_get_acm_mask(struct mac_context *mac, struct bss_description
 				*pSirBssDesc, tDot11fBeaconIEs *pIes)
 {
-	sme_QosEdcaAcType ac;
+	enum qca_wlan_ac_type ac;
 	uint8_t acm_mask = 0;
 
 	QDF_TRACE(QDF_MODULE_ID_SME, QDF_TRACE_LEVEL_DEBUG,
 		  "%s: %d: invoked", __func__, __LINE__);
-	for (ac = SME_QOS_EDCA_AC_BE; ac < SME_QOS_EDCA_AC_MAX; ac++) {
-		if (sme_qos_is_acm(pMac, pSirBssDesc, ac, pIes))
-			acm_mask = acm_mask | (1 << (SME_QOS_EDCA_AC_VO - ac));
+	for (ac = QCA_WLAN_AC_BE; ac < QCA_WLAN_AC_ALL; ac++) {
+		if (sme_qos_is_acm(mac, pSirBssDesc, ac, pIes))
+			acm_mask = acm_mask | (1 << (QCA_WLAN_AC_VO - ac));
 	}
 	QDF_TRACE(QDF_MODULE_ID_SME, QDF_TRACE_LEVEL_DEBUG,
 		  "%s: %d: mask is %d", __func__, __LINE__, acm_mask);
@@ -1037,7 +1023,7 @@ uint8_t sme_qos_get_acm_mask(tpAniSirGlobal pMac, tSirBssDescription
  *  sme_qos_internal_setup_req() - The SME QoS internal setup request handling
  *                                 function.
  *
- *  @pMac: Pointer to the global MAC parameter structure.
+ *  @mac: Pointer to the global MAC parameter structure.
  *  @pQoSInfo: Pointer to struct sme_qos_wmmtspecinfo which contains the
  *              WMM TSPEC related info as defined above, provided by HDD
  *  @QoSCallback: The callback which is registered per flow while
@@ -1063,7 +1049,7 @@ uint8_t sme_qos_get_acm_mask(tpAniSirGlobal pMac, tSirBssDescription
  *  Return: QDF_STATUS_SUCCESS - Setup is successful.
  *          Other status means Setup request failed
  */
-static enum sme_qos_statustype sme_qos_internal_setup_req(tpAniSirGlobal pMac,
+static enum sme_qos_statustype sme_qos_internal_setup_req(struct mac_context *mac,
 					  uint8_t sessionId,
 					  struct sme_qos_wmmtspecinfo *pQoSInfo,
 					  sme_QosCallback QoSCallback,
@@ -1074,7 +1060,7 @@ static enum sme_qos_statustype sme_qos_internal_setup_req(tpAniSirGlobal pMac,
 {
 	struct sme_qos_sessioninfo *pSession;
 	struct sme_qos_acinfo *pACInfo;
-	sme_QosEdcaAcType ac;
+	enum qca_wlan_ac_type ac;
 	struct sme_qos_wmmtspecinfo Tspec_Info;
 	enum sme_qos_states new_state = SME_QOS_CLOSED;
 	struct sme_qos_flowinfoentry *pentry = NULL;
@@ -1096,7 +1082,7 @@ static enum sme_qos_statustype sme_qos_internal_setup_req(tpAniSirGlobal pMac,
 			  __func__, __LINE__);
 		/* find the AC with UPType passed in */
 		ac = sme_qos_up_to_ac(UPType);
-		if (SME_QOS_EDCA_AC_MAX == ac) {
+		if (QCA_WLAN_AC_ALL == ac) {
 			QDF_TRACE(QDF_MODULE_ID_SME, QDF_TRACE_LEVEL_ERROR,
 				  "%s: %d: invalid AC %d from UP %d",
 				  __func__, __LINE__, ac, UPType);
@@ -1107,7 +1093,7 @@ static enum sme_qos_statustype sme_qos_internal_setup_req(tpAniSirGlobal pMac,
 	} else {
 		/* find the AC */
 		ac = sme_qos_up_to_ac(pQoSInfo->ts_info.up);
-		if (SME_QOS_EDCA_AC_MAX == ac) {
+		if (QCA_WLAN_AC_ALL == ac) {
 			QDF_TRACE(QDF_MODULE_ID_SME, QDF_TRACE_LEVEL_ERROR,
 				  "%s: %d: invalid AC %d from UP %d",
 				  __func__, __LINE__, ac, pQoSInfo->ts_info.up);
@@ -1115,7 +1101,7 @@ static enum sme_qos_statustype sme_qos_internal_setup_req(tpAniSirGlobal pMac,
 			return SME_QOS_STATUS_SETUP_INVALID_PARAMS_RSP;
 		}
 		/* validate QoS params */
-		if (!sme_qos_validate_requested_params(pMac, pQoSInfo,
+		if (!sme_qos_validate_requested_params(mac, pQoSInfo,
 							sessionId)) {
 			QDF_TRACE(QDF_MODULE_ID_SME, QDF_TRACE_LEVEL_ERROR,
 				  "%s: %d: invalid params", __func__, __LINE__);
@@ -1124,8 +1110,6 @@ static enum sme_qos_statustype sme_qos_internal_setup_req(tpAniSirGlobal pMac,
 		Tspec_Info = *pQoSInfo;
 	}
 	pACInfo = &pSession->ac_info[ac];
-	/* need to vote off powersave for the duration of this request */
-	pSession->readyForPowerSave = false;
 	/* check to consider the following flowing scenario.
 	 * Addts request is pending on one AC, while APSD requested on another
 	 * which needs a reassoc. Will buffer a request if Addts is pending
@@ -1138,7 +1122,7 @@ static enum sme_qos_statustype sme_qos_internal_setup_req(tpAniSirGlobal pMac,
 			  __func__, __LINE__, QosFlowID, pACInfo->curr_state);
 		/* we need to buffer the command */
 		cmd.command = SME_QOS_SETUP_REQ;
-		cmd.pMac = pMac;
+		cmd.mac = mac;
 		cmd.sessionId = sessionId;
 		cmd.u.setupCmdInfo.HDDcontext = HDDcontext;
 		cmd.u.setupCmdInfo.QoSInfo = Tspec_Info;
@@ -1151,9 +1135,6 @@ static enum sme_qos_statustype sme_qos_internal_setup_req(tpAniSirGlobal pMac,
 			QDF_TRACE(QDF_MODULE_ID_SME, QDF_TRACE_LEVEL_ERROR,
 				  "%s: %d: couldn't buffer the setup request in state = %d",
 				  __func__, __LINE__, pACInfo->curr_state);
-			/* unable to buffer the request */
-			/* nothing is pending so vote powersave back on */
-			pSession->readyForPowerSave = true;
 			return SME_QOS_STATUS_SETUP_FAILURE_RSP;
 		}
 		QDF_TRACE(QDF_MODULE_ID_SME, QDF_TRACE_LEVEL_DEBUG,
@@ -1168,14 +1149,10 @@ static enum sme_qos_statustype sme_qos_internal_setup_req(tpAniSirGlobal pMac,
 		 * request is NOP, or need reassoc for APSD and/or need to
 		 * send out ADDTS
 		 */
-		status = sme_qos_setup(pMac, sessionId, &Tspec_Info, ac);
+		status = sme_qos_setup(mac, sessionId, &Tspec_Info, ac);
 		QDF_TRACE(QDF_MODULE_ID_SME, QDF_TRACE_LEVEL_DEBUG,
 			  "%s: %d: On session %d with AC %d in state SME_QOS_LINK_UP sme_qos_setup returned with status %d",
 			  __func__, __LINE__, sessionId, ac, status);
-		if (SME_QOS_STATUS_SETUP_REQ_PENDING_RSP != status)
-			/* we aren't waiting for a response from the AP */
-			/* so vote powersave back on */
-			pSession->readyForPowerSave = true;
 
 		if ((SME_QOS_STATUS_SETUP_REQ_PENDING_RSP == status) ||
 		    (SME_QOS_STATUS_SETUP_SUCCESS_NO_ACM_NO_APSD_RSP == status)
@@ -1184,13 +1161,9 @@ static enum sme_qos_statustype sme_qos_internal_setup_req(tpAniSirGlobal pMac,
 			/* we received an expected "good" status */
 			/* create an entry in the flow list */
 			pentry = qdf_mem_malloc(sizeof(*pentry));
-			if (!pentry) {
-				QDF_TRACE(QDF_MODULE_ID_SME,
-					  QDF_TRACE_LEVEL_ERROR,
-					  "%s: %d: couldn't allocate memory for the new entry in the Flow List",
-					__func__,  __LINE__);
+			if (!pentry)
 				return SME_QOS_STATUS_SETUP_FAILURE_RSP;
-			}
+
 			pentry->ac_type = ac;
 			pentry->HDDcontext = HDDcontext;
 			pentry->QoSCallback = QoSCallback;
@@ -1237,7 +1210,8 @@ static enum sme_qos_statustype sme_qos_internal_setup_req(tpAniSirGlobal pMac,
 				pACInfo->curr_QoSInfo[SME_QOS_TSPEC_INDEX_0] =
 					Tspec_Info;
 				if (buffered_cmd && !pentry->hoRenewal) {
-					QoSCallback(pMac, HDDcontext,
+					QoSCallback(MAC_HANDLE(mac),
+						    HDDcontext,
 						    &pACInfo->
 						    curr_QoSInfo
 						    [SME_QOS_TSPEC_INDEX_0],
@@ -1265,7 +1239,7 @@ static enum sme_qos_statustype sme_qos_internal_setup_req(tpAniSirGlobal pMac,
 				  __func__, __LINE__, sessionId, status);
 			new_state = pACInfo->curr_state;
 			if (buffered_cmd && hoRenewal)
-				QoSCallback(pMac, HDDcontext,
+				QoSCallback(MAC_HANDLE(mac), HDDcontext,
 					    &pACInfo->
 					    curr_QoSInfo[SME_QOS_TSPEC_INDEX_0],
 					    SME_QOS_STATUS_RELEASE_QOS_LOST_IND,
@@ -1279,7 +1253,7 @@ static enum sme_qos_statustype sme_qos_internal_setup_req(tpAniSirGlobal pMac,
 			  __func__, __LINE__, QosFlowID, pACInfo->curr_state);
 		/* buffer cmd */
 		cmd.command = SME_QOS_SETUP_REQ;
-		cmd.pMac = pMac;
+		cmd.mac = mac;
 		cmd.sessionId = sessionId;
 		cmd.u.setupCmdInfo.HDDcontext = HDDcontext;
 		cmd.u.setupCmdInfo.QoSInfo = Tspec_Info;
@@ -1293,9 +1267,6 @@ static enum sme_qos_statustype sme_qos_internal_setup_req(tpAniSirGlobal pMac,
 				  "%s: %d: On session %d couldn't buffer the setup request for flow %d in state = %d",
 				  __func__, __LINE__,
 				  sessionId, QosFlowID, pACInfo->curr_state);
-			/* unable to buffer the request */
-			/* nothing is pending so vote powersave back on */
-			pSession->readyForPowerSave = true;
 			return SME_QOS_STATUS_SETUP_FAILURE_RSP;
 		}
 		status = SME_QOS_STATUS_SETUP_REQ_PENDING_RSP;
@@ -1309,9 +1280,9 @@ static enum sme_qos_statustype sme_qos_internal_setup_req(tpAniSirGlobal pMac,
 			/* do we need to care about the case where APSD
 			 * needed on ACM = 0 below?
 			 */
-			if (CSR_IS_ADDTS_WHEN_ACMOFF_SUPPORTED(pMac) ||
-			    sme_qos_is_acm(pMac, pSession->assocInfo.pBssDesc,
-					ac, NULL)) {
+			if (CSR_IS_ADDTS_WHEN_ACMOFF_SUPPORTED(mac) ||
+			    sme_qos_is_acm(mac, pSession->assocInfo.bss_desc,
+					   ac, NULL)) {
 				QDF_TRACE(QDF_MODULE_ID_SME,
 					  QDF_TRACE_LEVEL_DEBUG,
 					  "%s: %d: tspec_mask_status = %d for AC = %d",
@@ -1323,11 +1294,6 @@ static enum sme_qos_statustype sme_qos_internal_setup_req(tpAniSirGlobal pMac,
 						  "%s: %d: tspec_mask_status can't be 0 for ac: %d in state: %d",
 						__func__, __LINE__, ac,
 						  pACInfo->curr_state);
-					/* unable to service the request
-					 * nothing is pending so vote powersave
-					 * back on
-					 */
-					pSession->readyForPowerSave = true;
 					return status;
 				}
 				/* Flow aggregation */
@@ -1497,10 +1463,6 @@ static enum sme_qos_statustype sme_qos_internal_setup_req(tpAniSirGlobal pMac,
 						  QDF_TRACE_LEVEL_ERROR,
 						  "%s: %d: failed to aggregate params",
 						  __func__, __LINE__);
-					/* unable to service the request nothing
-					 * is pending so vote powersave back on
-					 */
-					pSession->readyForPowerSave = true;
 					return SME_QOS_STATUS_SETUP_FAILURE_RSP;
 				}
 			} else {
@@ -1517,9 +1479,6 @@ static enum sme_qos_statustype sme_qos_internal_setup_req(tpAniSirGlobal pMac,
 			QDF_TRACE(QDF_MODULE_ID_SME, QDF_TRACE_LEVEL_ERROR,
 				  "%s: %d: no flows running for ac = %d while in state = %d",
 				  __func__, __LINE__, ac, pACInfo->curr_state);
-			/* unable to service the request */
-			/* nothing is pending so vote powersave back on */
-			pSession->readyForPowerSave = true;
 			return status;
 		}
 		/* although aggregating, make sure to request on the correct
@@ -1534,33 +1493,22 @@ static enum sme_qos_statustype sme_qos_internal_setup_req(tpAniSirGlobal pMac,
 		pACInfo->requested_QoSInfo[tmask - 1].ts_info.psb =
 			Tspec_Info.ts_info.psb;
 		status =
-			sme_qos_setup(pMac, sessionId,
+			sme_qos_setup(mac, sessionId,
 				      &pACInfo->requested_QoSInfo[tmask - 1],
 					ac);
 		QDF_TRACE(QDF_MODULE_ID_SME, QDF_TRACE_LEVEL_DEBUG,
 			  "%s: %d: On session %d with AC %d in state SME_QOS_QOS_ON sme_qos_setup returned with status %d",
 			__func__,  __LINE__, sessionId, ac, status);
-		if (SME_QOS_STATUS_SETUP_REQ_PENDING_RSP != status) {
-			/* we aren't waiting for a response from the AP */
-			/* so vote powersave back on */
-			pSession->readyForPowerSave = true;
-		}
 		if ((SME_QOS_STATUS_SETUP_REQ_PENDING_RSP == status) ||
 		    (SME_QOS_STATUS_SETUP_SUCCESS_NO_ACM_NO_APSD_RSP == status)
 		    || (SME_QOS_STATUS_SETUP_SUCCESS_APSD_SET_ALREADY ==
 			status)) {
 			/* we received an expected "good" status */
 			/* create an entry in the flow list */
-			pentry =
-				(struct sme_qos_flowinfoentry *)
-				qdf_mem_malloc(sizeof(*pentry));
-			if (!pentry) {
-				QDF_TRACE(QDF_MODULE_ID_SME,
-					  QDF_TRACE_LEVEL_ERROR,
-					  "%s: %d: couldn't allocate memory for the new entry in the Flow List",
-					__func__,  __LINE__);
+			pentry = qdf_mem_malloc(sizeof(*pentry));
+			if (!pentry)
 				return SME_QOS_STATUS_SETUP_FAILURE_RSP;
-			}
+
 			pentry->ac_type = ac;
 			pentry->HDDcontext = HDDcontext;
 			pentry->QoSCallback = QoSCallback;
@@ -1580,7 +1528,8 @@ static enum sme_qos_statustype sme_qos_internal_setup_req(tpAniSirGlobal pMac,
 					pACInfo->
 				requested_QoSInfo[SME_QOS_TSPEC_INDEX_0];
 				if (buffered_cmd && !pentry->hoRenewal) {
-					QoSCallback(pMac, HDDcontext,
+					QoSCallback(MAC_HANDLE(mac),
+						    HDDcontext,
 						    &pACInfo->
 						    curr_QoSInfo
 						    [SME_QOS_TSPEC_INDEX_0],
@@ -1604,7 +1553,7 @@ static enum sme_qos_statustype sme_qos_internal_setup_req(tpAniSirGlobal pMac,
 							sessionId;
 						hstatus =
 						sme_qos_find_all_in_flow_list
-							(pMac, search_key,
+							(mac, search_key,
 							sme_qos_setup_fnp);
 						if (!QDF_IS_STATUS_SUCCESS
 							    (hstatus)) {
@@ -1654,9 +1603,6 @@ static enum sme_qos_statustype sme_qos_internal_setup_req(tpAniSirGlobal pMac,
 		QDF_TRACE(QDF_MODULE_ID_SME, QDF_TRACE_LEVEL_ERROR,
 			  "%s: %d: setup requested in unexpected state = %d",
 			  __func__, __LINE__, pACInfo->curr_state);
-		/* unable to service the request */
-		/* nothing is pending so vote powersave back on */
-		pSession->readyForPowerSave = true;
 		new_state = pACInfo->curr_state;
 	}
 	/* If current state is same as previous no need for transistion,
@@ -1683,7 +1629,7 @@ static enum sme_qos_statustype sme_qos_internal_setup_req(tpAniSirGlobal pMac,
 /**
  * sme_qos_internal_modify_req() - The SME QoS internal function to request
  *  for modification of certain QoS params on a flow running on a particular AC.
- * @pMac: Pointer to the global MAC parameter structure.
+ * @mac: Pointer to the global MAC parameter structure.
  * @pQoSInfo: Pointer to struct sme_qos_wmmtspecinfo which contains the
  *            WMM TSPEC related info as defined above, provided by HDD
  * @QosFlowID: Identification per flow running on each AC generated by
@@ -1697,7 +1643,7 @@ static enum sme_qos_statustype sme_qos_internal_setup_req(tpAniSirGlobal pMac,
  * Return: SME_QOS_STATUS_SETUP_SUCCESS_RSP - Modification is successful.
  *         Other status means request failed
  */
-static enum sme_qos_statustype sme_qos_internal_modify_req(tpAniSirGlobal pMac,
+static enum sme_qos_statustype sme_qos_internal_modify_req(struct mac_context *mac,
 					  struct sme_qos_wmmtspecinfo *pQoSInfo,
 					  uint32_t QosFlowID,
 					  bool buffered_cmd)
@@ -1707,7 +1653,7 @@ static enum sme_qos_statustype sme_qos_internal_modify_req(tpAniSirGlobal pMac,
 	struct sme_qos_acinfo *pACInfo;
 	struct sme_qos_flowinfoentry *pNewEntry = NULL;
 	struct sme_qos_flowinfoentry *flow_info = NULL;
-	sme_QosEdcaAcType ac;
+	enum qca_wlan_ac_type ac;
 	enum sme_qos_states new_state = SME_QOS_CLOSED;
 	enum sme_qos_statustype status =
 		SME_QOS_STATUS_MODIFY_SETUP_FAILURE_RSP;
@@ -1743,7 +1689,7 @@ static enum sme_qos_statustype sme_qos_internal_modify_req(tpAniSirGlobal pMac,
 	pACInfo = &pSession->ac_info[ac];
 
 	/* validate QoS params */
-	if (!sme_qos_validate_requested_params(pMac, pQoSInfo, sessionId)) {
+	if (!sme_qos_validate_requested_params(mac, pQoSInfo, sessionId)) {
 		QDF_TRACE(QDF_MODULE_ID_SME, QDF_TRACE_LEVEL_ERROR,
 			  "%s: %d: invalid params", __func__, __LINE__);
 		return SME_QOS_STATUS_MODIFY_SETUP_INVALID_PARAMS_RSP;
@@ -1790,8 +1736,6 @@ static enum sme_qos_statustype sme_qos_internal_modify_req(tpAniSirGlobal pMac,
 		return SME_QOS_STATUS_MODIFY_SETUP_FAILURE_RSP;
 	}
 
-	/* need to vote off powersave for the duration of this request */
-	pSession->readyForPowerSave = false;
 	/* check to consider the following flowing scenario.
 	 * Addts request is pending on one AC, while APSD requested on another
 	 * which needs a reassoc. Will buffer a request if Addts is pending on
@@ -1804,7 +1748,7 @@ static enum sme_qos_statustype sme_qos_internal_modify_req(tpAniSirGlobal pMac,
 			  __func__, __LINE__, QosFlowID, pACInfo->curr_state);
 		/* we need to buffer the command */
 		cmd.command = SME_QOS_MODIFY_REQ;
-		cmd.pMac = pMac;
+		cmd.mac = mac;
 		cmd.sessionId = sessionId;
 		cmd.u.modifyCmdInfo.QosFlowID = QosFlowID;
 		cmd.u.modifyCmdInfo.QoSInfo = *pQoSInfo;
@@ -1813,9 +1757,6 @@ static enum sme_qos_statustype sme_qos_internal_modify_req(tpAniSirGlobal pMac,
 			QDF_TRACE(QDF_MODULE_ID_SME, QDF_TRACE_LEVEL_ERROR,
 				  "%s: %d: couldn't buffer the modify request in state = %d",
 				  __func__, __LINE__, pACInfo->curr_state);
-			/* unable to buffer the request */
-			/* nothing is pending so vote powersave back on */
-			pSession->readyForPowerSave = true;
 			return SME_QOS_STATUS_MODIFY_SETUP_FAILURE_RSP;
 		}
 		QDF_TRACE(QDF_MODULE_ID_SME, QDF_TRACE_LEVEL_DEBUG,
@@ -1830,17 +1771,10 @@ static enum sme_qos_statustype sme_qos_internal_modify_req(tpAniSirGlobal pMac,
 		 * Flow List Once we have decided on OTA exchange needed or
 		 * not we can delete the original one from the List
 		 */
-		pNewEntry = (struct sme_qos_flowinfoentry *) qdf_mem_malloc(
-							sizeof(*pNewEntry));
-		if (!pNewEntry) {
-			QDF_TRACE(QDF_MODULE_ID_SME, QDF_TRACE_LEVEL_ERROR,
-				  "%s: %d: couldn't allocate memory for the new  entry in the Flow List",
-				__func__, __LINE__);
-			/* unable to service the request */
-			/* nothing is pending so vote powersave back on */
-			pSession->readyForPowerSave = true;
+		pNewEntry = qdf_mem_malloc(sizeof(*pNewEntry));
+		if (!pNewEntry)
 			return SME_QOS_STATUS_MODIFY_SETUP_FAILURE_RSP;
-		}
+
 		pNewEntry->ac_type = ac;
 		pNewEntry->sessionId = sessionId;
 		pNewEntry->HDDcontext = flow_info->HDDcontext;
@@ -1872,7 +1806,7 @@ static enum sme_qos_statustype sme_qos_internal_modify_req(tpAniSirGlobal pMac,
 			pACInfo->requested_QoSInfo[pNewEntry->tspec_mask - 1] =
 				Aggr_Tspec_Info;
 			/* if ACM, send out a new ADDTS */
-			status = sme_qos_setup(pMac, sessionId,
+			status = sme_qos_setup(mac, sessionId,
 					       &pACInfo->
 					       requested_QoSInfo[pNewEntry->
 								tspec_mask - 1],
@@ -1880,11 +1814,6 @@ static enum sme_qos_statustype sme_qos_internal_modify_req(tpAniSirGlobal pMac,
 			QDF_TRACE(QDF_MODULE_ID_SME, QDF_TRACE_LEVEL_DEBUG,
 				  "%s: %d: On session %d with AC %d in state SME_QOS_QOS_ON sme_qos_setup returned with status %d",
 				  __func__, __LINE__, sessionId, ac, status);
-			if (SME_QOS_STATUS_SETUP_REQ_PENDING_RSP != status)
-				/* we aren't waiting for a response from the
-				 * AP so vote powersave back on
-				 */
-				pSession->readyForPowerSave = true;
 
 			if (SME_QOS_STATUS_SETUP_REQ_PENDING_RSP == status) {
 				new_state = SME_QOS_REQUESTED;
@@ -1907,7 +1836,7 @@ static enum sme_qos_statustype sme_qos_internal_modify_req(tpAniSirGlobal pMac,
 				search_key.key.ac_type = ac;
 				search_key.index = SME_QOS_SEARCH_KEY_INDEX_2;
 				search_key.sessionId = sessionId;
-				hstatus = sme_qos_find_all_in_flow_list(pMac,
+				hstatus = sme_qos_find_all_in_flow_list(mac,
 							search_key,
 							sme_qos_modify_fnp);
 				if (!QDF_IS_STATUS_SUCCESS(hstatus))
@@ -1934,7 +1863,7 @@ static enum sme_qos_statustype sme_qos_internal_modify_req(tpAniSirGlobal pMac,
 							sessionId;
 						hstatus =
 						sme_qos_find_all_in_flow_list
-							(pMac, search_key,
+							(mac, search_key,
 								sme_qos_modification_notify_fnp);
 						if (!QDF_IS_STATUS_SUCCESS
 							    (hstatus)) {
@@ -1953,7 +1882,7 @@ static enum sme_qos_statustype sme_qos_internal_modify_req(tpAniSirGlobal pMac,
 							SME_QOS_STATUS_MODIFY_SETUP_SUCCESS_NO_ACM_NO_APSD_RSP;
 				}
 				if (buffered_cmd) {
-					flow_info->QoSCallback(pMac,
+					flow_info->QoSCallback(MAC_HANDLE(mac),
 							       flow_info->
 							       HDDcontext,
 							       &pACInfo->
@@ -1980,9 +1909,6 @@ static enum sme_qos_statustype sme_qos_internal_modify_req(tpAniSirGlobal pMac,
 			QDF_TRACE(QDF_MODULE_ID_SME, QDF_TRACE_LEVEL_ERROR,
 				  "%s: %d: sme_qos_update_params() failed",
 				  __func__, __LINE__);
-			/* unable to service the request */
-			/* nothing is pending so vote powersave back on */
-			pSession->readyForPowerSave = true;
 			new_state = SME_QOS_LINK_UP;
 		}
 		/* if we are doing reassoc & we are already in handoff state,
@@ -2002,7 +1928,7 @@ static enum sme_qos_statustype sme_qos_internal_modify_req(tpAniSirGlobal pMac,
 			  __func__, __LINE__, QosFlowID, pACInfo->curr_state);
 		/* buffer cmd */
 		cmd.command = SME_QOS_MODIFY_REQ;
-		cmd.pMac = pMac;
+		cmd.mac = mac;
 		cmd.sessionId = sessionId;
 		cmd.u.modifyCmdInfo.QosFlowID = QosFlowID;
 		cmd.u.modifyCmdInfo.QoSInfo = *pQoSInfo;
@@ -2011,9 +1937,6 @@ static enum sme_qos_statustype sme_qos_internal_modify_req(tpAniSirGlobal pMac,
 			QDF_TRACE(QDF_MODULE_ID_SME, QDF_TRACE_LEVEL_ERROR,
 				  "%s: %d: couldn't buffer the modify request in state = %d",
 				  __func__, __LINE__, pACInfo->curr_state);
-			/* unable to buffer the request */
-			/* nothing is pending so vote powersave back on */
-			pSession->readyForPowerSave = true;
 			return SME_QOS_STATUS_MODIFY_SETUP_FAILURE_RSP;
 		}
 		status = SME_QOS_STATUS_MODIFY_SETUP_PENDING_RSP;
@@ -2025,9 +1948,6 @@ static enum sme_qos_statustype sme_qos_internal_modify_req(tpAniSirGlobal pMac,
 		QDF_TRACE(QDF_MODULE_ID_SME, QDF_TRACE_LEVEL_ERROR,
 			  "%s: %d: modify requested in unexpected state = %d",
 			  __func__, __LINE__, pACInfo->curr_state);
-		/* unable to service the request */
-		/* nothing is pending so vote powersave back on */
-		pSession->readyForPowerSave = true;
 		break;
 	}
 	if ((SME_QOS_STATUS_MODIFY_SETUP_SUCCESS_NO_ACM_NO_APSD_RSP == status)
@@ -2040,7 +1960,7 @@ static enum sme_qos_statustype sme_qos_internal_modify_req(tpAniSirGlobal pMac,
 
 /**
  * sme_qos_internal_release_req() - release QOS flow on a particular AC
- * @pMac: Pointer to the global MAC parameter structure.
+ * @mac: Pointer to the global MAC parameter structure.
  * @sessionId: sessionId returned by sme_open_session.
  * @QosFlowID: Identification per flow running on each AC generated by SME
  *             It is only meaningful if the QoS setup for the flow is successful
@@ -2050,7 +1970,7 @@ static enum sme_qos_statustype sme_qos_internal_modify_req(tpAniSirGlobal pMac,
 
  * Return: QDF_STATUS_SUCCESS - Release is successful.
  */
-static enum sme_qos_statustype sme_qos_internal_release_req(tpAniSirGlobal pMac,
+static enum sme_qos_statustype sme_qos_internal_release_req(struct mac_context *mac,
 					       uint8_t sessionId,
 					       uint32_t QosFlowID,
 					       bool buffered_cmd)
@@ -2060,7 +1980,7 @@ static enum sme_qos_statustype sme_qos_internal_release_req(tpAniSirGlobal pMac,
 	struct sme_qos_acinfo *pACInfo;
 	struct sme_qos_flowinfoentry *flow_info = NULL;
 	struct sme_qos_flowinfoentry *pDeletedFlow = NULL;
-	sme_QosEdcaAcType ac;
+	enum qca_wlan_ac_type ac;
 	enum sme_qos_states new_state = SME_QOS_CLOSED;
 	enum sme_qos_statustype status = SME_QOS_STATUS_RELEASE_FAILURE_RSP;
 	struct sme_qos_wmmtspecinfo Aggr_Tspec_Info;
@@ -2073,6 +1993,7 @@ static enum sme_qos_statustype sme_qos_internal_release_req(tpAniSirGlobal pMac,
 	bool uplinkFlowsPresent = false;
 	bool downlinkFlowsPresent = false;
 	tListElem *pResult = NULL;
+	mac_handle_t mac_hdl = MAC_HANDLE(mac);
 
 	QDF_TRACE(QDF_MODULE_ID_SME, QDF_TRACE_LEVEL_DEBUG,
 		  "%s: %d: invoked for flow %d", __func__, __LINE__, QosFlowID);
@@ -2096,7 +2017,7 @@ static enum sme_qos_statustype sme_qos_internal_release_req(tpAniSirGlobal pMac,
 		    !csr_ll_is_list_empty(&pSession->bufferedCommandList,
 					  false)) {
 			cmd.command = SME_QOS_RELEASE_REQ;
-			cmd.pMac = pMac;
+			cmd.mac = mac;
 			cmd.sessionId = sessionId;
 			cmd.u.releaseCmdInfo.QosFlowID = QosFlowID;
 			hstatus = sme_qos_buffer_cmd(&cmd, buffered_cmd);
@@ -2114,7 +2035,7 @@ static enum sme_qos_statustype sme_qos_internal_release_req(tpAniSirGlobal pMac,
 	ac = flow_info->ac_type;
 	sessionId = flow_info->sessionId;
 
-	if (!CSR_IS_SESSION_VALID(pMac, sessionId)) {
+	if (!CSR_IS_SESSION_VALID(mac, sessionId)) {
 		QDF_TRACE(QDF_MODULE_ID_SME, QDF_TRACE_LEVEL_ERROR,
 			"%s: %d: Session Id: %d is invalid",
 			__func__, __LINE__, sessionId);
@@ -2123,8 +2044,6 @@ static enum sme_qos_statustype sme_qos_internal_release_req(tpAniSirGlobal pMac,
 
 	pSession = &sme_qos_cb.sessionInfo[sessionId];
 	pACInfo = &pSession->ac_info[ac];
-	/* need to vote off powersave for the duration of this request */
-	pSession->readyForPowerSave = false;
 	/* check to consider the following flowing scenario.
 	 * Addts request is pending on one AC, while APSD requested on another
 	 * which needs a reassoc. Will buffer a request if Addts is pending on
@@ -2137,7 +2056,7 @@ static enum sme_qos_statustype sme_qos_internal_release_req(tpAniSirGlobal pMac,
 			  __func__, __LINE__, QosFlowID, pACInfo->curr_state);
 		/* we need to buffer the command */
 		cmd.command = SME_QOS_RELEASE_REQ;
-		cmd.pMac = pMac;
+		cmd.mac = mac;
 		cmd.sessionId = sessionId;
 		cmd.u.releaseCmdInfo.QosFlowID = QosFlowID;
 		hstatus = sme_qos_buffer_cmd(&cmd, buffered_cmd);
@@ -2145,9 +2064,6 @@ static enum sme_qos_statustype sme_qos_internal_release_req(tpAniSirGlobal pMac,
 			QDF_TRACE(QDF_MODULE_ID_SME, QDF_TRACE_LEVEL_ERROR,
 				  "%s: %d: couldn't buffer the release request in state = %d",
 				  __func__, __LINE__, pACInfo->curr_state);
-			/* unable to buffer the request */
-			/* nothing is pending so vote powersave back on */
-			pSession->readyForPowerSave = true;
 			return SME_QOS_STATUS_RELEASE_FAILURE_RSP;
 		}
 		QDF_TRACE(QDF_MODULE_ID_SME, QDF_TRACE_LEVEL_DEBUG,
@@ -2271,7 +2187,7 @@ static enum sme_qos_statustype sme_qos_internal_release_req(tpAniSirGlobal pMac,
 						 */
 						cmd.command =
 							SME_QOS_RESEND_REQ;
-						cmd.pMac = pMac;
+						cmd.mac = mac;
 						cmd.sessionId = sessionId;
 						cmd.u.resendCmdInfo.ac = ac;
 						cmd.u.resendCmdInfo.tspecMask =
@@ -2296,15 +2212,6 @@ static enum sme_qos_statustype sme_qos_internal_release_req(tpAniSirGlobal pMac,
 								pACInfo->
 								curr_state);
 
-							/* unable to buffer the
-							 * request nothing is
-							 * pending so vote
-							 * powersave back on
-							 */
-							pSession->
-							readyForPowerSave =
-								true;
-
 							return
 								SME_QOS_STATUS_MODIFY_SETUP_FAILURE_RSP;
 						}
@@ -2327,7 +2234,7 @@ static enum sme_qos_statustype sme_qos_internal_release_req(tpAniSirGlobal pMac,
 							   tspec_mask - 1] =
 					Aggr_Tspec_Info;
 				/* if ACM, send out a new ADDTS */
-				status = sme_qos_setup(pMac, sessionId,
+				status = sme_qos_setup(mac, sessionId,
 						       &pACInfo->
 						       requested_QoSInfo
 						       [flow_info->tspec_mask -
@@ -2337,12 +2244,6 @@ static enum sme_qos_statustype sme_qos_internal_release_req(tpAniSirGlobal pMac,
 					  "%s: %d: On session %d with AC %d in state SME_QOS_QOS_ON sme_qos_setup returned with status %d",
 					  __func__, __LINE__, sessionId, ac,
 					  status);
-				if (SME_QOS_STATUS_SETUP_REQ_PENDING_RSP !=
-				    status)
-					/* we aren't waiting for a response from
-					 * the AP so vote powersave back on
-					 */
-					pSession->readyForPowerSave = true;
 
 				if (SME_QOS_STATUS_SETUP_REQ_PENDING_RSP ==
 				    status) {
@@ -2381,7 +2282,7 @@ static enum sme_qos_statustype sme_qos_internal_release_req(tpAniSirGlobal pMac,
 							sessionId;
 						hstatus =
 						sme_qos_find_all_in_flow_list
-							(pMac, search_key,
+							(mac, search_key,
 							sme_qos_setup_fnp);
 						if (!QDF_IS_STATUS_SUCCESS
 							    (hstatus)) {
@@ -2396,7 +2297,7 @@ static enum sme_qos_statustype sme_qos_internal_release_req(tpAniSirGlobal pMac,
 					status =
 					SME_QOS_STATUS_RELEASE_SUCCESS_RSP;
 					if (buffered_cmd) {
-						flow_info->QoSCallback(pMac,
+						flow_info->QoSCallback(MAC_HANDLE(mac),
 								     flow_info->
 								     HDDcontext,
 								     &pACInfo->
@@ -2435,7 +2336,7 @@ static enum sme_qos_statustype sme_qos_internal_release_req(tpAniSirGlobal pMac,
 							    pEntry, true);
 					pDeletedFlow = flow_info;
 					if (buffered_cmd) {
-						flow_info->QoSCallback(pMac,
+						flow_info->QoSCallback(MAC_HANDLE(mac),
 								     flow_info->
 								     HDDcontext,
 								      &pACInfo->
@@ -2453,13 +2354,9 @@ static enum sme_qos_statustype sme_qos_internal_release_req(tpAniSirGlobal pMac,
 					  QDF_TRACE_LEVEL_ERROR,
 					  "%s: %d: sme_qos_update_params() failed",
 					  __func__, __LINE__);
-				/* unable to service the request */
-				/* nothing is pending so vote powersave back on
-				 */
-				pSession->readyForPowerSave = true;
 				new_state = SME_QOS_LINK_UP;
 				if (buffered_cmd) {
-					flow_info->QoSCallback(pMac,
+					flow_info->QoSCallback(MAC_HANDLE(mac),
 							       flow_info->
 							       HDDcontext,
 							       &pACInfo->
@@ -2475,9 +2372,9 @@ static enum sme_qos_statustype sme_qos_internal_release_req(tpAniSirGlobal pMac,
 			/* this is the only flow aggregated in this TSPEC */
 			status = SME_QOS_STATUS_RELEASE_SUCCESS_RSP;
 			/* check if delts needs to be sent */
-			if (CSR_IS_ADDTS_WHEN_ACMOFF_SUPPORTED(pMac) ||
-			    sme_qos_is_acm(pMac, pSession->assocInfo.pBssDesc,
-						ac, NULL)) {
+			if (CSR_IS_ADDTS_WHEN_ACMOFF_SUPPORTED(mac) ||
+			    sme_qos_is_acm(mac, pSession->assocInfo.bss_desc,
+					   ac, NULL)) {
 				/* check if other TSPEC for this AC is also
 				 * in use
 				 */
@@ -2488,17 +2385,17 @@ static enum sme_qos_statustype sme_qos_internal_release_req(tpAniSirGlobal pMac,
 					 * require APSD
 					 */
 					pSession->apsdMask &=
-					~(1 << (SME_QOS_EDCA_AC_VO - ac));
+					~(1 << (QCA_WLAN_AC_VO - ac));
 					/* Also update modifyProfileFields.
 					 * uapsd_mask in CSR for consistency
 					 */
-					csr_get_modify_profile_fields(pMac,
+					csr_get_modify_profile_fields(mac,
 								     flow_info->
 								      sessionId,
 							&modifyProfileFields);
 					modifyProfileFields.uapsd_mask =
 						pSession->apsdMask;
-					csr_set_modify_profile_fields(pMac,
+					csr_set_modify_profile_fields(mac,
 								     flow_info->
 								      sessionId,
 							&modifyProfileFields);
@@ -2514,14 +2411,15 @@ static enum sme_qos_statustype sme_qos_internal_release_req(tpAniSirGlobal pMac,
 							 * when PMC stops it)
 							 */
 							sme_ps_uapsd_disable(
-							      pMac, sessionId);
+							      mac_hdl,
+							      sessionId);
 					}
 				}
 				if (SME_QOS_RELEASE_DEFAULT ==
 							pACInfo->relTrig) {
 					/* send delts */
 					hstatus =
-						qos_issue_command(pMac,
+						qos_issue_command(mac,
 								sessionId,
 							eSmeCommandDelTs,
 								  NULL, ac,
@@ -2535,12 +2433,6 @@ static enum sme_qos_statustype sme_qos_internal_release_req(tpAniSirGlobal pMac,
 							  __func__, __LINE__);
 						status =
 							SME_QOS_STATUS_RELEASE_FAILURE_RSP;
-						/* we won't be waiting for a
-						 * response from the AP so
-						 * vote powersave back on
-						 */
-						pSession->readyForPowerSave =
-							true;
 					} else {
 						pACInfo->tspec_mask_status &=
 						SME_QOS_TSPEC_MASK_BIT_1_2_SET
@@ -2548,23 +2440,22 @@ static enum sme_qos_statustype sme_qos_internal_release_req(tpAniSirGlobal pMac,
 						deltsIssued = true;
 					}
 				} else {
-					pSession->readyForPowerSave = true;
 					pACInfo->tspec_mask_status &=
 						SME_QOS_TSPEC_MASK_BIT_1_2_SET &
 						(~flow_info->tspec_mask);
 					deltsIssued = true;
 				}
 			} else if (pSession->apsdMask &
-				(1 << (SME_QOS_EDCA_AC_VO - ac))) {
+				(1 << (QCA_WLAN_AC_VO - ac))) {
 				/* reassoc logic */
-				csr_get_modify_profile_fields(pMac, sessionId,
+				csr_get_modify_profile_fields(mac, sessionId,
 							  &modifyProfileFields);
 				modifyProfileFields.uapsd_mask |=
 					pSession->apsdMask;
 				modifyProfileFields.uapsd_mask &=
-					~(1 << (SME_QOS_EDCA_AC_VO - ac));
+					~(1 << (QCA_WLAN_AC_VO - ac));
 				pSession->apsdMask &=
-					~(1 << (SME_QOS_EDCA_AC_VO - ac));
+					~(1 << (QCA_WLAN_AC_VO - ac));
 				if (!pSession->apsdMask) {
 					/* this session no longer needs UAPSD
 					 * do any sessions still require UAPSD?
@@ -2575,9 +2466,9 @@ static enum sme_qos_statustype sme_qos_internal_release_req(tpAniSirGlobal pMac,
 						 * care when PMC stops it)
 						 */
 						sme_ps_uapsd_disable(
-							pMac, sessionId);
+							mac_hdl, sessionId);
 				}
-				hstatus = sme_qos_request_reassoc(pMac,
+				hstatus = sme_qos_request_reassoc(mac,
 								sessionId,
 							&modifyProfileFields,
 								  false);
@@ -2589,11 +2480,6 @@ static enum sme_qos_statustype sme_qos_internal_release_req(tpAniSirGlobal pMac,
 						  __func__, __LINE__);
 					status =
 					SME_QOS_STATUS_RELEASE_FAILURE_RSP;
-					/* we won't be waiting for a response
-					 * from the AP so vote powersave back
-					 * on
-					 */
-					pSession->readyForPowerSave = true;
 				} else {
 					/* no need to wait */
 					pACInfo->reassoc_pending = false;
@@ -2605,14 +2491,10 @@ static enum sme_qos_statustype sme_qos_internal_release_req(tpAniSirGlobal pMac,
 					  QDF_TRACE_LEVEL_DEBUG,
 					  "%s: %d: nothing to do for AC = %d",
 					  __func__, __LINE__, ac);
-				/* we won't be waiting for a response from the
-				 * AP so vote powersave back on
-				 */
-				pSession->readyForPowerSave = true;
 			}
 
 			if (SME_QOS_RELEASE_BY_AP == pACInfo->relTrig) {
-				flow_info->QoSCallback(pMac,
+				flow_info->QoSCallback(MAC_HANDLE(mac),
 						       flow_info->HDDcontext,
 						       &pACInfo->
 						       curr_QoSInfo[flow_info->
@@ -2627,7 +2509,7 @@ static enum sme_qos_statustype sme_qos_internal_release_req(tpAniSirGlobal pMac,
 					  __func__, __LINE__, flow_info,
 					  flow_info->QosFlowID);
 			} else if (buffered_cmd) {
-				flow_info->QoSCallback(pMac,
+				flow_info->QoSCallback(MAC_HANDLE(mac),
 						       flow_info->HDDcontext,
 						       NULL, status,
 						       flow_info->QosFlowID);
@@ -2692,7 +2574,7 @@ static enum sme_qos_statustype sme_qos_internal_release_req(tpAniSirGlobal pMac,
 	case SME_QOS_REQUESTED:
 		/* buffer cmd */
 		cmd.command = SME_QOS_RELEASE_REQ;
-		cmd.pMac = pMac;
+		cmd.mac = mac;
 		cmd.sessionId = sessionId;
 		cmd.u.releaseCmdInfo.QosFlowID = QosFlowID;
 		hstatus = sme_qos_buffer_cmd(&cmd, buffered_cmd);
@@ -2700,9 +2582,6 @@ static enum sme_qos_statustype sme_qos_internal_release_req(tpAniSirGlobal pMac,
 			QDF_TRACE(QDF_MODULE_ID_SME, QDF_TRACE_LEVEL_ERROR,
 				  "%s: %d: couldn't buffer the release request in state = %d",
 				  __func__, __LINE__, pACInfo->curr_state);
-			/* unable to service the request */
-			/* nothing is pending so vote powersave back on */
-			pSession->readyForPowerSave = true;
 			return SME_QOS_STATUS_RELEASE_FAILURE_RSP;
 		}
 		status = SME_QOS_STATUS_RELEASE_REQ_PENDING_RSP;
@@ -2715,9 +2594,6 @@ static enum sme_qos_statustype sme_qos_internal_release_req(tpAniSirGlobal pMac,
 		QDF_TRACE(QDF_MODULE_ID_SME, QDF_TRACE_LEVEL_ERROR,
 			  "%s: %d: release request in unexpected state = %d",
 			  __func__, __LINE__, pACInfo->curr_state);
-		/* unable to service the request */
-		/* nothing is pending so vote powersave back on */
-		pSession->readyForPowerSave = true;
 		break;
 	}
 	/* if we deleted a flow, reclaim the memory */
@@ -2732,7 +2608,7 @@ static enum sme_qos_statustype sme_qos_internal_release_req(tpAniSirGlobal pMac,
 
 /**
  * sme_qos_setup() - internal SME QOS setup function.
- * @pMac: Pointer to the global MAC parameter structure.
+ * @mac: Pointer to the global MAC parameter structure.
  * @sessionId: Session upon which setup is being performed
  * @pTspec_Info: Pointer to struct sme_qos_wmmtspecinfo which contains the WMM
  *               TSPEC related info as defined above
@@ -2764,10 +2640,10 @@ static enum sme_qos_statustype sme_qos_internal_release_req(tpAniSirGlobal pMac,
  *
  * Return: SME_QOS_STATUS_SETUP_SUCCESS_RSP if the setup is successful'
  */
-static enum sme_qos_statustype sme_qos_setup(tpAniSirGlobal pMac,
+static enum sme_qos_statustype sme_qos_setup(struct mac_context *mac,
 				uint8_t sessionId,
 				struct sme_qos_wmmtspecinfo *pTspec_Info,
-				sme_QosEdcaAcType ac)
+				enum qca_wlan_ac_type ac)
 {
 	struct sme_qos_sessioninfo *pSession;
 	struct sme_qos_acinfo *pACInfo;
@@ -2776,7 +2652,7 @@ static enum sme_qos_statustype sme_qos_setup(tpAniSirGlobal pMac,
 	tCsrRoamModifyProfileFields modifyProfileFields;
 	QDF_STATUS hstatus;
 
-	if (!CSR_IS_SESSION_VALID(pMac, sessionId)) {
+	if (!CSR_IS_SESSION_VALID(mac, sessionId)) {
 		QDF_TRACE(QDF_MODULE_ID_SME, QDF_TRACE_LEVEL_ERROR,
 			  "%s: %d: Session Id %d is invalid",
 			  __func__, __LINE__, sessionId);
@@ -2789,14 +2665,14 @@ static enum sme_qos_statustype sme_qos_setup(tpAniSirGlobal pMac,
 			  __func__, __LINE__, sessionId);
 		return status;
 	}
-	if (!pSession->assocInfo.pBssDesc) {
+	if (!pSession->assocInfo.bss_desc) {
 		QDF_TRACE(QDF_MODULE_ID_SME, QDF_TRACE_LEVEL_ERROR,
 			  "%s: %d: Session %d has an Invalid BSS Descriptor",
 			  __func__, __LINE__, sessionId);
 		return status;
 	}
-	hstatus = csr_get_parsed_bss_description_ies(pMac,
-						   pSession->assocInfo.pBssDesc,
+	hstatus = csr_get_parsed_bss_description_ies(mac,
+						   pSession->assocInfo.bss_desc,
 						      &pIes);
 	if (!QDF_IS_STATUS_SUCCESS(hstatus)) {
 		QDF_TRACE(QDF_MODULE_ID_SME, QDF_TRACE_LEVEL_ERROR,
@@ -2823,8 +2699,8 @@ static enum sme_qos_statustype sme_qos_setup(tpAniSirGlobal pMac,
 	pACInfo = &pSession->ac_info[ac];
 	do {
 		/* is ACM enabled for this AC? */
-		if (CSR_IS_ADDTS_WHEN_ACMOFF_SUPPORTED(pMac) ||
-		    sme_qos_is_acm(pMac, pSession->assocInfo.pBssDesc,
+		if (CSR_IS_ADDTS_WHEN_ACMOFF_SUPPORTED(mac) ||
+		    sme_qos_is_acm(mac, pSession->assocInfo.bss_desc,
 				   ac, NULL)) {
 			/* ACM is enabled for this AC so we must send an
 			 * AddTS
@@ -2851,7 +2727,7 @@ static enum sme_qos_statustype sme_qos_setup(tpAniSirGlobal pMac,
 			}
 			/* addts logic */
 			hstatus =
-				qos_issue_command(pMac, sessionId,
+				qos_issue_command(mac, sessionId,
 						eSmeCommandAddTs,
 						  pTspec_Info, ac, 0);
 			if (!QDF_IS_STATUS_SUCCESS(hstatus)) {
@@ -2877,7 +2753,7 @@ static enum sme_qos_statustype sme_qos_setup(tpAniSirGlobal pMac,
 			 * for the above case to let the AP know
 			 */
 			if (pSession->
-			    apsdMask & (1 << (SME_QOS_EDCA_AC_VO - ac))) {
+			    apsdMask & (1 << (QCA_WLAN_AC_VO - ac))) {
 				/* APSD was formerly enabled on this AC but is
 				 * no longer required so we must reassociate
 				 */
@@ -2885,14 +2761,14 @@ static enum sme_qos_statustype sme_qos_setup(tpAniSirGlobal pMac,
 					  QDF_TRACE_LEVEL_DEBUG,
 					  "%s: %d: On session %d reassoc needed to disable APSD on AC %d",
 					__func__,  __LINE__, sessionId, ac);
-				csr_get_modify_profile_fields(pMac, sessionId,
+				csr_get_modify_profile_fields(mac, sessionId,
 							  &modifyProfileFields);
 				modifyProfileFields.uapsd_mask |=
 					pSession->apsdMask;
 				modifyProfileFields.uapsd_mask &=
-					~(1 << (SME_QOS_EDCA_AC_VO - ac));
+					~(1 << (QCA_WLAN_AC_VO - ac));
 				hstatus =
-					sme_qos_request_reassoc(pMac, sessionId,
+					sme_qos_request_reassoc(mac, sessionId,
 							&modifyProfileFields,
 								false);
 				if (!QDF_IS_STATUS_SUCCESS(hstatus)) {
@@ -2934,7 +2810,7 @@ static enum sme_qos_statustype sme_qos_setup(tpAniSirGlobal pMac,
 				  __func__, __LINE__, sessionId);
 			break;
 		} else if (pSession->
-			   apsdMask & (1 << (SME_QOS_EDCA_AC_VO - ac))) {
+			   apsdMask & (1 << (QCA_WLAN_AC_VO - ac))) {
 			/* application is looking for APSD */
 			/* and it is already enabled on this AC */
 			status = SME_QOS_STATUS_SETUP_SUCCESS_APSD_SET_ALREADY;
@@ -2952,13 +2828,13 @@ static enum sme_qos_statustype sme_qos_setup(tpAniSirGlobal pMac,
 			/* reassoc logic */
 			/* update the UAPSD mask to include the new */
 			/* AC on which APSD is requested */
-			csr_get_modify_profile_fields(pMac, sessionId,
+			csr_get_modify_profile_fields(mac, sessionId,
 						&modifyProfileFields);
 			modifyProfileFields.uapsd_mask |=
 					pSession->apsdMask;
 			modifyProfileFields.uapsd_mask |=
-					1 << (SME_QOS_EDCA_AC_VO - ac);
-			hstatus = sme_qos_request_reassoc(pMac, sessionId,
+					1 << (QCA_WLAN_AC_VO - ac);
+			hstatus = sme_qos_request_reassoc(mac, sessionId,
 							&modifyProfileFields,
 							false);
 			if (!QDF_IS_STATUS_SUCCESS(hstatus)) {
@@ -2987,19 +2863,19 @@ static enum sme_qos_statustype sme_qos_setup(tpAniSirGlobal pMac,
  * not required as we are ok with tspec getting programmed before set_key
  * as the roam timings are measured without tspec in reassoc!
  */
-static QDF_STATUS sme_qos_process_set_key_success_ind(tpAniSirGlobal pMac,
+static QDF_STATUS sme_qos_process_set_key_success_ind(struct mac_context *mac,
 					   uint8_t sessionId, void *pEvent_info)
 {
-	QDF_TRACE(QDF_MODULE_ID_SME, QDF_TRACE_LEVEL_INFO,
-		  "########### Set Key Complete #############");
+	sme_debug("Set Key complete");
 	(void)sme_qos_process_buffered_cmd(sessionId);
+
 	return QDF_STATUS_SUCCESS;
 }
 
 #ifdef FEATURE_WLAN_ESE
 /**
  * sme_qos_ese_save_tspec_response() - save TSPEC parameters.
- * @pMac: Pointer to the global MAC parameter structure.
+ * @mac: Pointer to the global MAC parameter structure.
  * @sessionId: SME session ID
  * @pTspec: Pointer to the TSPEC IE from the reassoc rsp
  * @ac:  Access Category for which this TSPEC rsp is received
@@ -3011,7 +2887,7 @@ static QDF_STATUS sme_qos_process_set_key_success_ind(tpAniSirGlobal pMac,
  * Return: QDF_STATUS_SUCCESS - Release is successful.
  */
 static QDF_STATUS
-sme_qos_ese_save_tspec_response(tpAniSirGlobal pMac, uint8_t sessionId,
+sme_qos_ese_save_tspec_response(struct mac_context *mac, uint8_t sessionId,
 				tDot11fIEWMMTSPEC *pTspec, uint8_t ac,
 				uint8_t tspecIndex)
 {
@@ -3019,16 +2895,16 @@ sme_qos_ese_save_tspec_response(tpAniSirGlobal pMac, uint8_t sessionId,
 		&sme_qos_cb.sessionInfo[sessionId].ac_info[ac].
 		addTsRsp[tspecIndex];
 
-	ac = sme_qos_u_pto_ac_map[pTspec->user_priority];
+	ac = sme_qos_up_to_ac_map[pTspec->user_priority];
 
 	qdf_mem_zero(pAddtsRsp, sizeof(tSirAddtsRsp));
 
 	pAddtsRsp->messageType = eWNI_SME_ADDTS_RSP;
 	pAddtsRsp->length = sizeof(tSirAddtsRsp);
-	pAddtsRsp->rc = eSIR_SUCCESS;
+	pAddtsRsp->rc = QDF_STATUS_SUCCESS;
 	pAddtsRsp->sessionId = sessionId;
 	pAddtsRsp->rsp.dialogToken = 0;
-	pAddtsRsp->rsp.status = eSIR_MAC_SUCCESS_STATUS;
+	pAddtsRsp->rsp.status = STATUS_SUCCESS;
 	pAddtsRsp->rsp.wmeTspecPresent = pTspec->present;
 	QDF_TRACE(QDF_MODULE_ID_SME, QDF_TRACE_LEVEL_DEBUG,
 		  "%s: Copy Tspec to local data structure ac=%d, tspecIdx=%d",
@@ -3038,14 +2914,14 @@ sme_qos_ese_save_tspec_response(tpAniSirGlobal pMac, uint8_t sessionId,
 		/* Copy TSPEC params received in assoc response to addts
 		 * response
 		 */
-		convert_wmmtspec(pMac, &pAddtsRsp->rsp.tspec, pTspec);
+		convert_wmmtspec(mac, &pAddtsRsp->rsp.tspec, pTspec);
 
 	return QDF_STATUS_SUCCESS;
 }
 
 /**
  * sme_qos_ese_process_reassoc_tspec_rsp() - process ese reassoc tspec response
- * @pMac: Pointer to the global MAC parameter structure.
+ * @mac: Pointer to the global MAC parameter structure.
  * @sessionId: SME session ID
  * @pEven_info: Pointer to the smeJoinRsp structure
  *
@@ -3058,7 +2934,7 @@ sme_qos_ese_save_tspec_response(tpAniSirGlobal pMac, uint8_t sessionId,
  * Return: QDF_STATUS_SUCCESS - Release is successful.
  */
 static
-QDF_STATUS sme_qos_ese_process_reassoc_tspec_rsp(tpAniSirGlobal pMac,
+QDF_STATUS sme_qos_ese_process_reassoc_tspec_rsp(struct mac_context *mac,
 						 uint8_t sessionId,
 						 void *pEvent_info)
 {
@@ -3072,8 +2948,8 @@ QDF_STATUS sme_qos_ese_process_reassoc_tspec_rsp(tpAniSirGlobal pMac,
 	uint8_t tspec_flow_index, tspec_mask_status;
 	uint32_t tspecIeLen;
 
-	pCsrSession = CSR_GET_SESSION(pMac, sessionId);
-	if (NULL == pCsrSession) {
+	pCsrSession = CSR_GET_SESSION(mac, sessionId);
+	if (!pCsrSession) {
 		QDF_TRACE(QDF_MODULE_ID_SME, QDF_TRACE_LEVEL_ERROR,
 			  FL("session %d not found"), sessionId);
 		return QDF_STATUS_E_FAILURE;
@@ -3107,7 +2983,7 @@ QDF_STATUS sme_qos_ese_process_reassoc_tspec_rsp(tpAniSirGlobal pMac,
 	numTspec = (tspecIeLen) / sizeof(tDot11fIEWMMTSPEC);
 	for (cnt = 0; cnt < numTspec; cnt++) {
 		ac = sme_qos_up_to_ac(pTspecIE->user_priority);
-		if (ac >= SME_QOS_EDCA_AC_MAX) {
+		if (ac >= QCA_WLAN_AC_ALL) {
 			QDF_TRACE(QDF_MODULE_ID_SME, QDF_TRACE_LEVEL_ERROR,
 				  FL("ac %d more than it`s max value"), ac);
 			return QDF_STATUS_E_FAILURE;
@@ -3126,7 +3002,7 @@ QDF_STATUS sme_qos_ese_process_reassoc_tspec_rsp(tpAniSirGlobal pMac,
 					  QDF_TRACE_LEVEL_WARN,
 					  "Found Tspec entry flow = %d AC = %d",
 					  tspec_flow_index, ac);
-				sme_qos_ese_save_tspec_response(pMac, sessionId,
+				sme_qos_ese_save_tspec_response(mac, sessionId,
 								pTspecIE, ac,
 							tspec_flow_index);
 			} else {
@@ -3141,14 +3017,14 @@ QDF_STATUS sme_qos_ese_process_reassoc_tspec_rsp(tpAniSirGlobal pMac,
 	}
 
 	/* Send the Aggregated QoS request to HAL */
-	status = sme_qos_ft_aggr_qos_req(pMac, sessionId);
+	status = sme_qos_ft_aggr_qos_req(mac, sessionId);
 
 	return status;
 }
 
 /**
  * sme_qos_copy_tspec_info() - copy tspec info.
- * @pMac: Pointer to the global MAC parameter structure.
+ * @mac: Pointer to the global MAC parameter structure.
  * @pTspec_Info: source structure
  * @pTspec: destination structure
  *
@@ -3157,9 +3033,9 @@ QDF_STATUS sme_qos_ese_process_reassoc_tspec_rsp(tpAniSirGlobal pMac,
  *
  * Return: None
  */
-static void sme_qos_copy_tspec_info(tpAniSirGlobal pMac,
+static void sme_qos_copy_tspec_info(struct mac_context *mac,
 				    struct sme_qos_wmmtspecinfo *pTspec_Info,
-				    tSirMacTspecIE *pTspec)
+				    struct mac_tspec_ie *pTspec)
 {
 	/* As per WMM_AC_testplan_v0.39 Minimum Service Interval, Maximum
 	 * Service Interval, Service Start Time, Suspension Interval and Delay
@@ -3207,7 +3083,7 @@ static void sme_qos_copy_tspec_info(tpAniSirGlobal pMac,
 
 /**
  * sme_qos_ese_retrieve_tspec_info() - retrieve tspec info.
- * @pMac: Pointer to the global MAC parameter structure.
+ * @mac: Pointer to the global MAC parameter structure.
  * @sessionId: SME session ID
  * @pTspecInfo: Pointer to the structure to carry back the TSPEC parameters
  *
@@ -3217,7 +3093,7 @@ static void sme_qos_copy_tspec_info(tpAniSirGlobal pMac,
  *
  * Return: uint8_t - number of existing negotiated TSPECs
  */
-uint8_t sme_qos_ese_retrieve_tspec_info(tpAniSirGlobal mac_ctx,
+uint8_t sme_qos_ese_retrieve_tspec_info(struct mac_context *mac_ctx,
 	 uint8_t session_id, tTspecInfo *tspec_info)
 {
 	struct sme_qos_sessioninfo *session;
@@ -3231,7 +3107,7 @@ uint8_t sme_qos_ese_retrieve_tspec_info(tpAniSirGlobal mac_ctx,
 	 * if not return
 	 */
 	session = &sme_qos_cb.sessionInfo[session_id];
-	for (ac = SME_QOS_EDCA_AC_BE; ac < SME_QOS_EDCA_AC_MAX; ac++) {
+	for (ac = QCA_WLAN_AC_BE; ac < QCA_WLAN_AC_ALL; ac++) {
 		volatile uint8_t index = 0;
 
 		ac_info = &session->ac_info[ac];
@@ -3273,67 +3149,71 @@ uint8_t sme_qos_ese_retrieve_tspec_info(tpAniSirGlobal mac_ctx,
 
 #endif
 
+#ifdef WLAN_FEATURE_HOST_ROAM
 static
-QDF_STATUS sme_qos_create_tspec_ricie(tpAniSirGlobal pMac,
-				      struct sme_qos_wmmtspecinfo *pTspec_Info,
-				      uint8_t *pRICBuffer, uint32_t *pRICLength,
-				      uint8_t *pRICIdentifier)
+QDF_STATUS sme_qos_create_tspec_ricie(struct mac_context *mac,
+				      struct sme_qos_wmmtspecinfo *tspec_info,
+				      uint8_t *ric_buffer, uint32_t *ric_length,
+				      uint8_t *ric_identifier)
 {
-	tDot11fIERICDataDesc ricIE;
-	uint32_t nStatus;
+	tDot11fIERICDataDesc *ric_ie;
+	uint32_t status;
 
-	if (pRICBuffer == NULL || pRICIdentifier == NULL || pRICLength ==
+	if (!ric_buffer || !ric_identifier || ric_length ==
 								NULL) {
 		QDF_TRACE(QDF_MODULE_ID_SME, QDF_TRACE_LEVEL_ERROR,
 			FL("RIC data is NULL, %pK, %pK, %pK"),
-			pRICBuffer, pRICIdentifier, pRICLength);
+			ric_buffer, ric_identifier, ric_length);
 		return QDF_STATUS_E_FAILURE;
 	}
 
-	qdf_mem_zero(&ricIE, sizeof(tDot11fIERICDataDesc));
+	ric_ie = qdf_mem_malloc(sizeof(*ric_ie));
+	if (!ric_ie) {
+		sme_err("malloc failed for ric IE");
+		return QDF_STATUS_E_NOMEM;
+	}
 
-	ricIE.present = 1;
-	ricIE.RICData.present = 1;
-	ricIE.RICData.resourceDescCount = 1;
-	ricIE.RICData.statusCode = 0;
-	ricIE.RICData.Identifier = sme_qos_assign_dialog_token();
+	ric_ie->present = 1;
+	ric_ie->RICData.present = 1;
+	ric_ie->RICData.resourceDescCount = 1;
+	ric_ie->RICData.statusCode = 0;
+	ric_ie->RICData.Identifier = sme_qos_assign_dialog_token();
 #ifndef USE_80211_WMMTSPEC_FOR_RIC
-	ricIE.TSPEC.present = 1;
-	ricIE.TSPEC.delay_bound = pTspec_Info->delay_bound;
-	ricIE.TSPEC.inactivity_int = pTspec_Info->inactivity_interval;
-	ricIE.TSPEC.burst_size = pTspec_Info->max_burst_size;
-	ricIE.TSPEC.max_msdu_size = pTspec_Info->maximum_msdu_size;
-	ricIE.TSPEC.max_service_int = pTspec_Info->max_service_interval;
-	ricIE.TSPEC.mean_data_rate = pTspec_Info->mean_data_rate;
-	ricIE.TSPEC.medium_time = 0;
-	ricIE.TSPEC.min_data_rate = pTspec_Info->min_data_rate;
-	ricIE.TSPEC.min_phy_rate = pTspec_Info->min_phy_rate;
-	ricIE.TSPEC.min_service_int = pTspec_Info->min_service_interval;
-	ricIE.TSPEC.size = pTspec_Info->nominal_msdu_size;
-	ricIE.TSPEC.peak_data_rate = pTspec_Info->peak_data_rate;
-	ricIE.TSPEC.surplus_bw_allowance = pTspec_Info->surplus_bw_allowance;
-	ricIE.TSPEC.suspension_int = pTspec_Info->suspension_interval;
-	ricIE.TSPEC.service_start_time = pTspec_Info->svc_start_time;
-	ricIE.TSPEC.direction = pTspec_Info->ts_info.direction;
+	ric_ie->TSPEC.present = 1;
+	ric_ie->TSPEC.delay_bound = tspec_info->delay_bound;
+	ric_ie->TSPEC.inactivity_int = tspec_info->inactivity_interval;
+	ric_ie->TSPEC.burst_size = tspec_info->max_burst_size;
+	ric_ie->TSPEC.max_msdu_size = tspec_info->maximum_msdu_size;
+	ric_ie->TSPEC.max_service_int = tspec_info->max_service_interval;
+	ric_ie->TSPEC.mean_data_rate = tspec_info->mean_data_rate;
+	ric_ie->TSPEC.medium_time = 0;
+	ric_ie->TSPEC.min_data_rate = tspec_info->min_data_rate;
+	ric_ie->TSPEC.min_phy_rate = tspec_info->min_phy_rate;
+	ric_ie->TSPEC.min_service_int = tspec_info->min_service_interval;
+	ric_ie->TSPEC.size = tspec_info->nominal_msdu_size;
+	ric_ie->TSPEC.peak_data_rate = tspec_info->peak_data_rate;
+	ric_ie->TSPEC.surplus_bw_allowance = tspec_info->surplus_bw_allowance;
+	ric_ie->TSPEC.suspension_int = tspec_info->suspension_interval;
+	ric_ie->TSPEC.service_start_time = tspec_info->svc_start_time;
+	ric_ie->TSPEC.direction = tspec_info->ts_info.direction;
 	/* Make sure UAPSD is allowed */
-	if (pTspec_Info->ts_info.psb)
-		ricIE.TSPEC.psb = pTspec_Info->ts_info.psb;
+	if (tspec_info->ts_info.psb)
+		ric_ie->TSPEC.psb = tspec_info->ts_info.psb;
 	else
-		ricIE.TSPEC.psb = 0;
+		ric_ie->TSPEC.psb = 0;
 
-	ricIE.TSPEC.tsid = pTspec_Info->ts_info.tid;
-	ricIE.TSPEC.user_priority = pTspec_Info->ts_info.up;
-	ricIE.TSPEC.access_policy = SME_QOS_ACCESS_POLICY_EDCA;
+	ric_ie->TSPEC.tsid = tspec_info->ts_info.tid;
+	ric_ie->TSPEC.user_priority = tspec_info->ts_info.up;
+	ric_ie->TSPEC.access_policy = SME_QOS_ACCESS_POLICY_EDCA;
 
-	*pRICIdentifier = ricIE.RICData.Identifier;
+	*ric_identifier = ric_ie->RICData.Identifier;
 
-	nStatus =
-		dot11f_pack_ie_ric_data_desc(pMac, &ricIE, pRICBuffer,
-					sizeof(ricIE), pRICLength);
-	if (DOT11F_FAILED(nStatus)) {
+	status = dot11f_pack_ie_ric_data_desc(mac, ric_ie, ric_buffer,
+					      sizeof(*ric_ie), ric_length);
+	if (DOT11F_FAILED(status)) {
 		QDF_TRACE(QDF_MODULE_ID_SME, QDF_TRACE_LEVEL_ERROR,
 			"Packing of RIC Data of length %d failed with status %d",
-			  *pRICLength, nStatus);
+			  *ric_length, status);
 	}
 #else                           /* WMM TSPEC */
 	/* As per WMM_AC_testplan_v0.39 Minimum Service Interval, Maximum
@@ -3341,46 +3221,50 @@ QDF_STATUS sme_qos_create_tspec_ricie(tpAniSirGlobal pMac,
 	 * Bound are all intended for HCCA operation and therefore must be set
 	 * to zero
 	 */
-	ricIE.WMMTSPEC.present = 1;
-	ricIE.WMMTSPEC.version = 1;
-	ricIE.WMMTSPEC.delay_bound = pTspec_Info->delay_bound;
-	ricIE.WMMTSPEC.inactivity_int = pTspec_Info->inactivity_interval;
-	ricIE.WMMTSPEC.burst_size = pTspec_Info->max_burst_size;
-	ricIE.WMMTSPEC.max_msdu_size = pTspec_Info->maximum_msdu_size;
-	ricIE.WMMTSPEC.max_service_int = pTspec_Info->max_service_interval;
-	ricIE.WMMTSPEC.mean_data_rate = pTspec_Info->mean_data_rate;
-	ricIE.WMMTSPEC.medium_time = 0;
-	ricIE.WMMTSPEC.min_data_rate = pTspec_Info->min_data_rate;
-	ricIE.WMMTSPEC.min_phy_rate = pTspec_Info->min_phy_rate;
-	ricIE.WMMTSPEC.min_service_int = pTspec_Info->min_service_interval;
-	ricIE.WMMTSPEC.size = pTspec_Info->nominal_msdu_size;
-	ricIE.WMMTSPEC.peak_data_rate = pTspec_Info->peak_data_rate;
-	ricIE.WMMTSPEC.surplus_bw_allowance = pTspec_Info->surplus_bw_allowance;
-	ricIE.WMMTSPEC.suspension_int = pTspec_Info->suspension_interval;
-	ricIE.WMMTSPEC.service_start_time = pTspec_Info->svc_start_time;
-	ricIE.WMMTSPEC.direction = pTspec_Info->ts_info.direction;
+	ric_ie->WMMTSPEC.present = 1;
+	ric_ie->WMMTSPEC.version = 1;
+	ric_ie->WMMTSPEC.delay_bound = tspec_info->delay_bound;
+	ric_ie->WMMTSPEC.inactivity_int = tspec_info->inactivity_interval;
+	ric_ie->WMMTSPEC.burst_size = tspec_info->max_burst_size;
+	ric_ie->WMMTSPEC.max_msdu_size = tspec_info->maximum_msdu_size;
+	ric_ie->WMMTSPEC.max_service_int = tspec_info->max_service_interval;
+	ric_ie->WMMTSPEC.mean_data_rate = tspec_info->mean_data_rate;
+	ric_ie->WMMTSPEC.medium_time = 0;
+	ric_ie->WMMTSPEC.min_data_rate = tspec_info->min_data_rate;
+	ric_ie->WMMTSPEC.min_phy_rate = tspec_info->min_phy_rate;
+	ric_ie->WMMTSPEC.min_service_int = tspec_info->min_service_interval;
+	ric_ie->WMMTSPEC.size = tspec_info->nominal_msdu_size;
+	ric_ie->WMMTSPEC.peak_data_rate = tspec_info->peak_data_rate;
+	ric_ie->WMMTSPEC.surplus_bw_allowance =
+				tspec_info->surplus_bw_allowance;
+	ric_ie->WMMTSPEC.suspension_int = tspec_info->suspension_interval;
+	ric_ie->WMMTSPEC.service_start_time = tspec_info->svc_start_time;
+	ric_ie->WMMTSPEC.direction = tspec_info->ts_info.direction;
 	/* Make sure UAPSD is allowed */
-	if (pTspec_Info->ts_info.psb)
-		ricIE.WMMTSPEC.psb = pTspec_Info->ts_info.psb;
+	if (tspec_info->ts_info.psb)
+		ric_ie->WMMTSPEC.psb = tspec_info->ts_info.psb;
 	else
-		ricIE.WMMTSPEC.psb = 0;
+		ric_ie->WMMTSPEC.psb = 0;
 
-	ricIE.WMMTSPEC.tsid = pTspec_Info->ts_info.tid;
-	ricIE.WMMTSPEC.user_priority = pTspec_Info->ts_info.up;
-	ricIE.WMMTSPEC.access_policy = SME_QOS_ACCESS_POLICY_EDCA;
+	ric_ie->WMMTSPEC.tsid = tspec_info->ts_info.tid;
+	ric_ie->WMMTSPEC.user_priority = tspec_info->ts_info.up;
+	ric_ie->WMMTSPEC.access_policy = SME_QOS_ACCESS_POLICY_EDCA;
 
-	nStatus =
-		dot11f_pack_ie_ric_data_desc(pMac, &ricIE, pRICBuffer,
-					sizeof(ricIE), pRICLength);
-	if (DOT11F_FAILED(nStatus)) {
+	status = dot11f_pack_ie_ric_data_desc(mac, ric_ie, ric_buffer,
+					      sizeof(*ric_ie), ric_length);
+	if (DOT11F_FAILED(status)) {
 		QDF_TRACE(QDF_MODULE_ID_SME, QDF_TRACE_LEVEL_ERROR,
 			"Packing of RIC Data of length %d failed with status %d",
-			  *pRICLength, nStatus);
+			  *ric_length, status);
 	}
 #endif /* 80211_TSPEC */
-	*pRICIdentifier = ricIE.RICData.Identifier;
-	return nStatus;
+	*ric_identifier = ric_ie->RICData.Identifier;
+
+	qdf_mem_free(ric_ie);
+	return status;
 }
+#endif
+
 /**
  * sme_qos_process_ft_reassoc_req_ev()- processes reassoc request
  *
@@ -3405,7 +3289,7 @@ static QDF_STATUS sme_qos_process_ft_reassoc_req_ev(
 
 	session = &sme_qos_cb.sessionInfo[sessionId];
 
-	for (ac = SME_QOS_EDCA_AC_BE; ac < SME_QOS_EDCA_AC_MAX; ac++) {
+	for (ac = QCA_WLAN_AC_BE; ac < QCA_WLAN_AC_ALL; ac++) {
 		ac_info = &session->ac_info[ac];
 		qos_requested = false;
 
@@ -3459,8 +3343,6 @@ static QDF_STATUS sme_qos_process_ft_reassoc_req_ev(
 	 * to reset all these session variables
 	 */
 	session->apsdMask = 0;
-	session->uapsdAlreadyRequested = 0;
-	session->readyForPowerSave = 0;
 
 	/*
 	 * Now change reason and HO renewal of
@@ -3508,7 +3390,7 @@ static void sme_qos_fill_aggr_info(int ac_id, int ts_id,
 				   tSirAggrQosReq *msg,
 				   struct sme_qos_sessioninfo *session)
 {
-	QDF_TRACE(QDF_MODULE_ID_SME, QDF_TRACE_LEVEL_WARN,
+	QDF_TRACE(QDF_MODULE_ID_SME, QDF_TRACE_LEVEL_DEBUG,
 		  FL("Found tspec entry AC=%d, flow=%d, direction = %d"),
 		  ac_id, ts_id, direction);
 
@@ -3549,7 +3431,7 @@ static void sme_qos_fill_aggr_info(int ac_id, int ts_id,
  *
  * Return: QDF_STATUS
  */
-static QDF_STATUS sme_qos_ft_aggr_qos_req(tpAniSirGlobal mac_ctx, uint8_t
+static QDF_STATUS sme_qos_ft_aggr_qos_req(struct mac_context *mac_ctx, uint8_t
 					session_id)
 {
 	tSirAggrQosReq *aggr_req = NULL;
@@ -3563,14 +3445,9 @@ static QDF_STATUS sme_qos_ft_aggr_qos_req(tpAniSirGlobal mac_ctx, uint8_t
 
 	session = &sme_qos_cb.sessionInfo[session_id];
 
-	aggr_req = (tSirAggrQosReq *) qdf_mem_malloc(sizeof(tSirAggrQosReq));
-
-	if (!aggr_req) {
-		/* err msg */
-		QDF_TRACE(QDF_MODULE_ID_SME, QDF_TRACE_LEVEL_ERROR,
-			  FL("couldn't allocate memory for the msg buffer"));
+	aggr_req = qdf_mem_malloc(sizeof(tSirAggrQosReq));
+	if (!aggr_req)
 		return QDF_STATUS_E_NOMEM;
-	}
 
 	aggr_req->messageType = eWNI_SME_FT_AGGR_QOS_REQ;
 	aggr_req->length = sizeof(tSirAggrQosReq);
@@ -3578,10 +3455,10 @@ static QDF_STATUS sme_qos_ft_aggr_qos_req(tpAniSirGlobal mac_ctx, uint8_t
 	aggr_req->timeout = 0;
 	aggr_req->rspReqd = true;
 	qdf_mem_copy(&aggr_req->bssid.bytes[0],
-		     &session->assocInfo.pBssDesc->bssId[0],
+		     &session->assocInfo.bss_desc->bssId[0],
 		     sizeof(struct qdf_mac_addr));
 
-	for (i = 0; i < SME_QOS_EDCA_AC_MAX; i++) {
+	for (i = 0; i < QCA_WLAN_AC_ALL; i++) {
 		for (j = 0; j < SME_QOS_TSPEC_INDEX_MAX; j++) {
 			QDF_TRACE(QDF_MODULE_ID_SME, QDF_TRACE_LEVEL_DEBUG,
 				"ac=%d, tspec_mask_staus=%x, tspec_index=%d",
@@ -3605,7 +3482,7 @@ static QDF_STATUS sme_qos_ft_aggr_qos_req(tpAniSirGlobal mac_ctx, uint8_t
 		}
 	}
 
-	QDF_TRACE(QDF_MODULE_ID_SME, QDF_TRACE_LEVEL_INFO,
+	QDF_TRACE(QDF_MODULE_ID_SME, QDF_TRACE_LEVEL_DEBUG,
 		  FL("Sending aggregated message to HAL 0x%x"),
 		  aggr_req->aggrInfo.tspecIdx);
 
@@ -3619,7 +3496,7 @@ static QDF_STATUS sme_qos_ft_aggr_qos_req(tpAniSirGlobal mac_ctx, uint8_t
 }
 
 static
-QDF_STATUS sme_qos_process_ftric_response(tpAniSirGlobal pMac,
+QDF_STATUS sme_qos_process_ftric_response(struct mac_context *mac,
 					  uint8_t sessionId,
 					  tDot11fIERICDataDesc *pRicDataDesc,
 					  uint8_t ac, uint8_t tspecIndex)
@@ -3641,14 +3518,14 @@ QDF_STATUS sme_qos_process_ftric_response(tpAniSirGlobal pMac,
 		/* Copy TSPEC params received in RIC response to addts
 		 * response
 		 */
-		convert_tspec(pMac, &pAddtsRsp->rsp.tspec,
+		convert_tspec(mac, &pAddtsRsp->rsp.tspec,
 				&pRicDataDesc->TSPEC);
 
 	pAddtsRsp->rsp.numTclas = pRicDataDesc->num_TCLAS;
 	if (pAddtsRsp->rsp.numTclas) {
 		for (i = 0; i < pAddtsRsp->rsp.numTclas; i++)
 			/* Copy TCLAS info per index to the addts response */
-			convert_tclas(pMac, &pAddtsRsp->rsp.tclasInfo[i],
+			convert_tclas(mac, &pAddtsRsp->rsp.tclasInfo[i],
 				      &pRicDataDesc->TCLAS[i]);
 	}
 
@@ -3659,21 +3536,21 @@ QDF_STATUS sme_qos_process_ftric_response(tpAniSirGlobal pMac,
 	pAddtsRsp->rsp.schedulePresent = pRicDataDesc->Schedule.present;
 	if (pAddtsRsp->rsp.schedulePresent) {
 		/* Copy Schedule IE params to addts response */
-		convert_schedule(pMac, &pAddtsRsp->rsp.schedule,
+		convert_schedule(mac, &pAddtsRsp->rsp.schedule,
 				 &pRicDataDesc->Schedule);
 	}
 	/* Need to check the below portion is a part of WMM TSPEC */
 	/* Process Delay element */
 	if (pRicDataDesc->TSDelay.present)
-		convert_ts_delay(pMac, &pAddtsRsp->rsp.delay,
+		convert_ts_delay(mac, &pAddtsRsp->rsp.delay,
 				 &pRicDataDesc->TSDelay);
 
 	/* Need to call for WMMTSPEC */
 	if (pRicDataDesc->WMMTSPEC.present)
-		convert_wmmtspec(pMac, &pAddtsRsp->rsp.tspec,
+		convert_wmmtspec(mac, &pAddtsRsp->rsp.tspec,
 				 &pRicDataDesc->WMMTSPEC);
 
-	/* return sme_qos_process_add_ts_rsp(pMac, &addtsRsp); */
+	/* return sme_qos_process_add_ts_rsp(mac, &addtsRsp); */
 	return QDF_STATUS_SUCCESS;
 }
 
@@ -3687,7 +3564,7 @@ QDF_STATUS sme_qos_process_ftric_response(tpAniSirGlobal pMac,
  *
  * Return: QDF_STATUS
  */
-static QDF_STATUS sme_qos_process_aggr_qos_rsp(tpAniSirGlobal mac_ctx,
+static QDF_STATUS sme_qos_process_aggr_qos_rsp(struct mac_context *mac_ctx,
 					void *msgbuf)
 {
 	tpSirAggrQosRsp rsp = (tpSirAggrQosRsp) msgbuf;
@@ -3700,7 +3577,7 @@ static QDF_STATUS sme_qos_process_aggr_qos_rsp(tpAniSirGlobal mac_ctx,
 		  FL("Received AGGR_QOS resp from LIM"));
 
 	/* Copy the updated response information for TSPEC of all the ACs */
-	for (i = 0; i < SIR_QOS_NUM_AC_MAX; i++) {
+	for (i = 0; i < QCA_WLAN_AC_ALL; i++) {
 		uint8_t tspec_mask_status =
 			sme_qos_cb.sessionInfo[sessionid].ac_info[i].
 			tspec_mask_status;
@@ -3754,7 +3631,7 @@ static QDF_STATUS sme_qos_process_aggr_qos_rsp(tpAniSirGlobal mac_ctx,
  *
  * Return: QDF_STATUS
  */
-static QDF_STATUS sme_qos_find_matching_tspec(tpAniSirGlobal mac_ctx,
+static QDF_STATUS sme_qos_find_matching_tspec(struct mac_context *mac_ctx,
 		uint8_t sessionid, uint8_t ac, struct sme_qos_acinfo *ac_info,
 		tDot11fIERICDataDesc *ric_data_desc, uint32_t *ric_rsplen)
 {
@@ -3828,7 +3705,7 @@ static QDF_STATUS sme_qos_find_matching_tspec(tpAniSirGlobal mac_ctx,
  *
  * Return: QDF_STATUS
  */
-static QDF_STATUS sme_qos_find_matching_tspec_lfr3(tpAniSirGlobal mac_ctx,
+static QDF_STATUS sme_qos_find_matching_tspec_lfr3(struct mac_context *mac_ctx,
 		uint8_t sessionid, uint8_t ac, struct sme_qos_sessioninfo
 		*qos_session,
 		tDot11fIERICDataDesc *ric_data_desc, uint32_t ric_rsplen)
@@ -3845,6 +3722,10 @@ static QDF_STATUS sme_qos_find_matching_tspec_lfr3(tpAniSirGlobal mac_ctx,
 	QDF_TRACE(QDF_MODULE_ID_SME, QDF_TRACE_LEVEL_DEBUG,
 			FL("invoked on session %d"), sessionid);
 
+	if (ac == QCA_WLAN_AC_ALL) {
+		sme_err("Invalid AC %d", ac);
+		return QDF_STATUS_E_FAILURE;
+	}
 	ric_data = ric_data_desc;
 	ric_len = ric_rsplen;
 	ac_info = &qos_session->ac_info[ac];
@@ -3858,10 +3739,10 @@ static QDF_STATUS sme_qos_find_matching_tspec_lfr3(tpAniSirGlobal mac_ctx,
 		do {
 			ac1 = sme_qos_up_to_ac(
 				ric_data->WMMTSPEC.user_priority);
-			if (ac == SME_QOS_EDCA_AC_MAX) {
+			if (ac1 == QCA_WLAN_AC_ALL) {
 				QDF_TRACE(QDF_MODULE_ID_SME,
 				  QDF_TRACE_LEVEL_ERROR,
-				  FL("Invalid AC %d UP %d"), ac,
+				  FL("Invalid AC %d UP %d"), ac1,
 				  ric_data->WMMTSPEC.user_priority);
 				break;
 			}
@@ -3893,7 +3774,7 @@ sme_qos_next_ric:
 #endif /* WLAN_FEATURE_ROAM_OFFLOAD */
 
 static
-QDF_STATUS sme_qos_process_ft_reassoc_rsp_ev(tpAniSirGlobal mac_ctx,
+QDF_STATUS sme_qos_process_ft_reassoc_rsp_ev(struct mac_context *mac_ctx,
 				uint8_t sessionid, void *event_info)
 {
 	struct sme_qos_sessioninfo *qos_session;
@@ -3910,7 +3791,7 @@ QDF_STATUS sme_qos_process_ft_reassoc_rsp_ev(tpAniSirGlobal mac_ctx,
 	uint32_t ric_len;
 #endif
 
-	if (NULL == csr_session) {
+	if (!csr_session) {
 		QDF_TRACE(QDF_MODULE_ID_SME, QDF_TRACE_LEVEL_ERROR,
 			  FL("The Session pointer is NULL"));
 		return QDF_STATUS_E_FAILURE;
@@ -3929,9 +3810,9 @@ QDF_STATUS sme_qos_process_ft_reassoc_rsp_ev(tpAniSirGlobal mac_ctx,
 				 csr_conn_info->nAssocRspLength));
 
 #ifdef WLAN_FEATURE_ROAM_OFFLOAD
-	if (!csr_session->roam_synch_in_progress) {
+	if (!MLME_IS_ROAM_SYNCH_IN_PROGRESS(mac_ctx->psoc, sessionid)) {
 #endif
-		for (ac = SME_QOS_EDCA_AC_BE; ac < SME_QOS_EDCA_AC_MAX; ac++) {
+		for (ac = QCA_WLAN_AC_BE; ac < QCA_WLAN_AC_ALL; ac++) {
 			ac_info = &qos_session->ac_info[ac];
 			sme_qos_find_matching_tspec(mac_ctx, sessionid, ac,
 					ac_info, ric_data_desc, &ric_rsplen);
@@ -3950,7 +3831,7 @@ QDF_STATUS sme_qos_process_ft_reassoc_rsp_ev(tpAniSirGlobal mac_ctx,
 		ric_len = ric_rsplen;
 		if (ric_rsplen && ric_data_desc->present &&
 		    ric_data_desc->WMMTSPEC.present) {
-			for (ac = SME_QOS_EDCA_AC_BE; ac < SME_QOS_EDCA_AC_MAX;
+			for (ac = QCA_WLAN_AC_BE; ac < QCA_WLAN_AC_ALL;
 			     ac++) {
 				sme_qos_find_matching_tspec_lfr3(mac_ctx,
 					sessionid, ac, qos_session, ric_data,
@@ -3968,9 +3849,55 @@ QDF_STATUS sme_qos_process_ft_reassoc_rsp_ev(tpAniSirGlobal mac_ctx,
 	return status;
 }
 
+#ifdef WLAN_FEATURE_MSCS
+void sme_send_mscs_action_frame(uint8_t vdev_id)
+{
+	struct mscs_req_info *mscs_req;
+	struct sme_qos_sessioninfo *qos_session;
+	struct scheduler_msg msg = {0};
+	QDF_STATUS qdf_status;
+
+	qos_session = &sme_qos_cb.sessionInfo[vdev_id];
+	if (!qos_session) {
+		sme_debug("qos_session is NULL");
+		return;
+	}
+	mscs_req = qdf_mem_malloc(sizeof(*mscs_req));
+	if (!mscs_req)
+		return;
+
+	mscs_req->vdev_id = vdev_id;
+	if (!qos_session->assocInfo.bss_desc) {
+		sme_err("BSS descriptor is NULL so we won't send request to PE");
+		qdf_mem_free(mscs_req);
+		return;
+	}
+	qdf_mem_copy(&mscs_req->bssid.bytes[0],
+		     &qos_session->assocInfo.bss_desc->bssId[0],
+		     sizeof(struct qdf_mac_addr));
+
+	mscs_req->dialog_token = sme_qos_assign_dialog_token();
+	mscs_req->dec.request_type = SCS_REQ_ADD;
+	mscs_req->dec.user_priority_control = MSCS_USER_PRIORITY;
+	mscs_req->dec.stream_timeout = (MSCS_STREAM_TIMEOUT * 1000);
+	mscs_req->dec.tclas_mask.classifier_type = MSCS_TCLAS_CLASSIFIER_TYPE;
+	mscs_req->dec.tclas_mask.classifier_mask = MSCS_TCLAS_CLASSIFIER_MASK;
+
+	msg.type = eWNI_SME_MSCS_REQ;
+	msg.reserved = 0;
+	msg.bodyptr = mscs_req;
+	qdf_status = scheduler_post_message(QDF_MODULE_ID_SME, QDF_MODULE_ID_PE,
+					    QDF_MODULE_ID_PE, &msg);
+	if (QDF_IS_STATUS_ERROR(qdf_status)) {
+		sme_err("Fail to send mscs request to PE");
+		qdf_mem_free(mscs_req);
+	}
+}
+#endif
+
 /**
  * sme_qos_add_ts_req() - send ADDTS request.
- * @pMac: Pointer to the global MAC parameter structure.
+ * @mac: Pointer to the global MAC parameter structure.
  * @sessionId: Session upon which the TSPEC should be added
  * @pTspec_Info: Pointer to struct sme_qos_wmmtspecinfo which contains the WMM
  *               TSPEC related info as defined above
@@ -3980,24 +3907,21 @@ QDF_STATUS sme_qos_process_ft_reassoc_rsp_ev(tpAniSirGlobal mac_ctx,
  *
  * Return: QDF_STATUS
  */
-static QDF_STATUS sme_qos_add_ts_req(tpAniSirGlobal pMac,
+static QDF_STATUS sme_qos_add_ts_req(struct mac_context *mac,
 			      uint8_t sessionId,
 			      struct sme_qos_wmmtspecinfo *pTspec_Info,
-			      sme_QosEdcaAcType ac)
+			      enum qca_wlan_ac_type ac)
 {
 	tSirAddtsReq *pMsg = NULL;
 	struct sme_qos_sessioninfo *pSession;
 	QDF_STATUS status = QDF_STATUS_E_FAILURE;
-#ifdef FEATURE_WLAN_ESE
-	struct csr_roam_session *pCsrSession = CSR_GET_SESSION(pMac, sessionId);
-#endif
 #ifdef FEATURE_WLAN_DIAG_SUPPORT
 	WLAN_HOST_DIAG_EVENT_DEF(qos, host_event_wlan_qos_payload_type);
 #endif
 	QDF_TRACE(QDF_MODULE_ID_SME, QDF_TRACE_LEVEL_DEBUG,
 		  "%s: %d: invoked on session %d for AC %d",
 		  __func__, __LINE__, sessionId, ac);
-	if (sessionId >= CSR_ROAM_SESSION_MAX) {
+	if (sessionId >= WLAN_MAX_VDEVS) {
 		/* err msg */
 		QDF_TRACE(QDF_MODULE_ID_SME, QDF_TRACE_LEVEL_ERROR,
 			  "%s: %d: sessionId(%d) is invalid",
@@ -4006,14 +3930,10 @@ static QDF_STATUS sme_qos_add_ts_req(tpAniSirGlobal pMac,
 	}
 
 	pSession = &sme_qos_cb.sessionInfo[sessionId];
-	pMsg = (tSirAddtsReq *) qdf_mem_malloc(sizeof(tSirAddtsReq));
-	if (!pMsg) {
-		/* err msg */
-		QDF_TRACE(QDF_MODULE_ID_SME, QDF_TRACE_LEVEL_ERROR,
-			  "%s: %d: couldn't allocate memory for the msg buffer",
-			  __func__, __LINE__);
+	pMsg = qdf_mem_malloc(sizeof(tSirAddtsReq));
+	if (!pMsg)
 		return QDF_STATUS_E_NOMEM;
-	}
+
 	pMsg->messageType = eWNI_SME_ADDTS_REQ;
 	pMsg->length = sizeof(tSirAddtsReq);
 	pMsg->sessionId = sessionId;
@@ -4060,7 +3980,7 @@ static QDF_STATUS sme_qos_add_ts_req(tpAniSirGlobal pMac,
 		pTspec_Info->ts_info.ack_policy;
 	pMsg->req.tspec.type = SME_QOS_TSPEC_IE_TYPE;
 	/*Fill the BSSID pMsg->req.bssId */
-	if (NULL == pSession->assocInfo.pBssDesc) {
+	if (!pSession->assocInfo.bss_desc) {
 		QDF_TRACE(QDF_MODULE_ID_SME, QDF_TRACE_LEVEL_ERROR,
 			  "%s: %d: BSS descriptor is NULL so we don't send request to PE",
 			  __func__, __LINE__);
@@ -4068,14 +3988,14 @@ static QDF_STATUS sme_qos_add_ts_req(tpAniSirGlobal pMac,
 		return QDF_STATUS_E_FAILURE;
 	}
 	qdf_mem_copy(&pMsg->bssid.bytes[0],
-		     &pSession->assocInfo.pBssDesc->bssId[0],
+		     &pSession->assocInfo.bss_desc->bssId[0],
 		     sizeof(struct qdf_mac_addr));
 	QDF_TRACE(QDF_MODULE_ID_SME, QDF_TRACE_LEVEL_DEBUG,
 		  "%s: %d: up = %d, tid = %d",
 		  __func__, __LINE__,
 		  pTspec_Info->ts_info.up, pTspec_Info->ts_info.tid);
 #ifdef FEATURE_WLAN_ESE
-	if (pCsrSession->connectedProfile.isESEAssoc) {
+	if (wlan_cm_get_ese_assoc(mac->pdev, sessionId)) {
 		pMsg->req.tsrsIE.tsid = pTspec_Info->ts_info.up;
 		pMsg->req.tsrsPresent = 1;
 	}
@@ -4099,21 +4019,20 @@ static QDF_STATUS sme_qos_add_ts_req(tpAniSirGlobal pMac,
  * sme_qos_del_ts_req() - To send down the DELTS request with TSPEC params
  *  to PE
  *
- * pMac - Pointer to the global MAC parameter structure.
+ * mac - Pointer to the global MAC parameter structure.
  * sessionId - Session from which the TSPEC should be deleted
  * ac - Enumeration of the various EDCA Access Categories.
  * tspec_mask - on which tspec per AC, the delts is requested
  * Return QDF_STATUS
  */
-static QDF_STATUS sme_qos_del_ts_req(tpAniSirGlobal pMac,
+static QDF_STATUS sme_qos_del_ts_req(struct mac_context *mac,
 			      uint8_t sessionId,
-			      sme_QosEdcaAcType ac, uint8_t tspec_mask)
+			      enum qca_wlan_ac_type ac, uint8_t tspec_mask)
 {
 	struct sme_qos_sessioninfo *pSession;
 	struct sme_qos_acinfo *pACInfo;
 	tSirDeltsReq *pMsg;
 	struct sme_qos_wmmtspecinfo *pTspecInfo;
-	QDF_STATUS status = QDF_STATUS_E_FAILURE;
 
 #ifdef FEATURE_WLAN_DIAG_SUPPORT
 	WLAN_HOST_DIAG_EVENT_DEF(qos, host_event_wlan_qos_payload_type);
@@ -4121,14 +4040,10 @@ static QDF_STATUS sme_qos_del_ts_req(tpAniSirGlobal pMac,
 	QDF_TRACE(QDF_MODULE_ID_SME, QDF_TRACE_LEVEL_DEBUG,
 		  "%s: %d: invoked on session %d for AC %d",
 		  __func__, __LINE__, sessionId, ac);
-	pMsg = (tSirDeltsReq *) qdf_mem_malloc(sizeof(tSirDeltsReq));
-	if (!pMsg) {
-		/* err msg */
-		QDF_TRACE(QDF_MODULE_ID_SME, QDF_TRACE_LEVEL_ERROR,
-			  "%s: %d: couldn't allocate memory for the msg buffer",
-			  __func__, __LINE__);
+	pMsg = qdf_mem_malloc(sizeof(tSirDeltsReq));
+	if (!pMsg)
 		return QDF_STATUS_E_NOMEM;
-	}
+
 	/* get pointer to the TSPEC being deleted */
 	pSession = &sme_qos_cb.sessionInfo[sessionId];
 	pACInfo = &pSession->ac_info[ac];
@@ -4166,7 +4081,7 @@ static QDF_STATUS sme_qos_del_ts_req(tpAniSirGlobal pMac,
 		pTspecInfo->ts_info.ack_policy;
 	pMsg->req.tspec.type = SME_QOS_TSPEC_IE_TYPE;
 	/*Fill the BSSID pMsg->req.bssId */
-	if (NULL == pSession->assocInfo.pBssDesc) {
+	if (!pSession->assocInfo.bss_desc) {
 		QDF_TRACE(QDF_MODULE_ID_SME, QDF_TRACE_LEVEL_ERROR,
 			  "%s: %d: BSS descriptor is NULL so we don't send request to PE",
 			  __func__, __LINE__);
@@ -4174,7 +4089,7 @@ static QDF_STATUS sme_qos_del_ts_req(tpAniSirGlobal pMac,
 		return QDF_STATUS_E_FAILURE;
 	}
 	qdf_mem_copy(&pMsg->bssid.bytes[0],
-		     &pSession->assocInfo.pBssDesc->bssId[0],
+		     &pSession->assocInfo.bss_desc->bssId[0],
 		     sizeof(struct qdf_mac_addr));
 
 	QDF_TRACE(QDF_MODULE_ID_SME, QDF_TRACE_LEVEL_DEBUG,
@@ -4183,36 +4098,37 @@ static QDF_STATUS sme_qos_del_ts_req(tpAniSirGlobal pMac,
 		  pTspecInfo->ts_info.up, pTspecInfo->ts_info.tid);
 	qdf_mem_zero(&pACInfo->curr_QoSInfo[tspec_mask - 1],
 		     sizeof(struct sme_qos_wmmtspecinfo));
-	if (QDF_IS_STATUS_SUCCESS(umac_send_mb_message_to_mac(pMsg))) {
-		status = QDF_STATUS_SUCCESS;
-		QDF_TRACE(QDF_MODULE_ID_SME, QDF_TRACE_LEVEL_DEBUG,
-			  "%s: %d: sme_qos_del_ts_req:Test: sent down a DELTS req to PE",
-			  __func__, __LINE__);
-		/* event: EVENT_WLAN_QOS */
-#ifdef FEATURE_WLAN_DIAG_SUPPORT
-		qos.eventId = SME_QOS_DIAG_DELTS;
-		qos.reasonCode = SME_QOS_DIAG_USER_REQUESTED;
-		WLAN_HOST_DIAG_EVENT_REPORT(&qos, EVENT_WLAN_QOS);
-#endif /* FEATURE_WLAN_DIAG_SUPPORT */
-	}
-	sme_set_tspec_uapsd_mask_per_session(pMac,
-			&pMsg->req.tspec.tsinfo,
-			sessionId);
 
-	return status;
+	if (!QDF_IS_STATUS_SUCCESS(umac_send_mb_message_to_mac(pMsg))) {
+		sme_err("DELTS req to PE failed");
+		return QDF_STATUS_E_FAILURE;
+	}
+
+	sme_debug("sent down a DELTS req to PE");
+#ifdef FEATURE_WLAN_DIAG_SUPPORT
+	qos.eventId = SME_QOS_DIAG_DELTS;
+	qos.reasonCode = SME_QOS_DIAG_USER_REQUESTED;
+	WLAN_HOST_DIAG_EVENT_REPORT(&qos, EVENT_WLAN_QOS);
+#endif
+
+	sme_set_tspec_uapsd_mask_per_session(mac, &pMsg->req.tspec.tsinfo,
+					     sessionId);
+
+	return QDF_STATUS_SUCCESS;
 }
 
 /*
  * sme_qos_process_add_ts_rsp() - Function to process the
- *  eWNI_SME_ADDTS_RSP came from PE
+ * eWNI_SME_ADDTS_RSP came from PE
  *
- * pMac - Pointer to the global MAC parameter structure.
- * pMsgBuf - Pointer to the msg buffer came from PE.
+ * @mac - Pointer to the global MAC parameter structure.
+ * @msg_buf - Pointer to the msg buffer came from PE.
  * Return QDF_STATUS
  */
-static QDF_STATUS sme_qos_process_add_ts_rsp(tpAniSirGlobal pMac, void *pMsgBuf)
+static QDF_STATUS sme_qos_process_add_ts_rsp(struct mac_context *mac,
+					     void *msg_buf)
 {
-	tpSirAddtsRsp paddts_rsp = (tpSirAddtsRsp) pMsgBuf;
+	tpSirAddtsRsp paddts_rsp = (tpSirAddtsRsp) msg_buf;
 	struct sme_qos_sessioninfo *pSession;
 	uint8_t sessionId = paddts_rsp->sessionId;
 	QDF_STATUS status = QDF_STATUS_E_FAILURE;
@@ -4220,7 +4136,7 @@ static QDF_STATUS sme_qos_process_add_ts_rsp(tpAniSirGlobal pMac, void *pMsgBuf)
 		(enum sme_qos_wmmuptype)
 		paddts_rsp->rsp.tspec.tsinfo.traffic.userPrio;
 	struct sme_qos_acinfo *pACInfo;
-	sme_QosEdcaAcType ac;
+	enum qca_wlan_ac_type ac;
 #ifdef FEATURE_WLAN_DIAG_SUPPORT
 	WLAN_HOST_DIAG_EVENT_DEF(qos, host_event_wlan_qos_payload_type);
 #endif
@@ -4232,7 +4148,7 @@ static QDF_STATUS sme_qos_process_add_ts_rsp(tpAniSirGlobal pMac, void *pMsgBuf)
 		  __func__, __LINE__, sessionId, up);
 
 	ac = sme_qos_up_to_ac(up);
-	if (SME_QOS_EDCA_AC_MAX == ac) {
+	if (QCA_WLAN_AC_ALL == ac) {
 		/* err msg */
 		QDF_TRACE(QDF_MODULE_ID_SME, QDF_TRACE_LEVEL_ERROR,
 			  "%s: %d: invalid AC %d from UP %d",
@@ -4245,16 +4161,12 @@ static QDF_STATUS sme_qos_process_add_ts_rsp(tpAniSirGlobal pMac, void *pMsgBuf)
 		QDF_TRACE(QDF_MODULE_ID_SME, QDF_TRACE_LEVEL_DEBUG,
 			"ADDTS Rsp received for AC %d in HANDOFF State. Dropping",
 			ac);
-		pSession->readyForPowerSave = true;
 		return QDF_STATUS_SUCCESS;
 	}
 
 	QDF_TRACE(QDF_MODULE_ID_SME, QDF_TRACE_LEVEL_DEBUG,
 		  "%s: %d: Invoked on session %d with return code %d",
 		  __func__, __LINE__, sessionId, paddts_rsp->rc);
-	/* our outstanding request has been serviced */
-	/* we can go into powersave */
-	pSession->readyForPowerSave = true;
 	if (paddts_rsp->rc) {
 		/* event: EVENT_WLAN_QOS */
 #ifdef FEATURE_WLAN_DIAG_SUPPORT
@@ -4263,11 +4175,11 @@ static QDF_STATUS sme_qos_process_add_ts_rsp(tpAniSirGlobal pMac, void *pMsgBuf)
 		WLAN_HOST_DIAG_EVENT_REPORT(&qos, EVENT_WLAN_QOS);
 #endif /* FEATURE_WLAN_DIAG_SUPPORT */
 		status =
-			sme_qos_process_add_ts_failure_rsp(pMac, sessionId,
+			sme_qos_process_add_ts_failure_rsp(mac, sessionId,
 							   &paddts_rsp->rsp);
 	} else {
 		status =
-			sme_qos_process_add_ts_success_rsp(pMac, sessionId,
+			sme_qos_process_add_ts_success_rsp(mac, sessionId,
 							   &paddts_rsp->rsp);
 	}
 	return status;
@@ -4277,14 +4189,15 @@ static QDF_STATUS sme_qos_process_add_ts_rsp(tpAniSirGlobal pMac, void *pMsgBuf)
  * sme_qos_process_del_ts_rsp() - Function to process the
  *  eWNI_SME_DELTS_RSP came from PE
  *
- * pMac - Pointer to the global MAC parameter structure.
- * pMsgBuf - Pointer to the msg buffer came from PE.
+ * mac - Pointer to the global MAC parameter structure.
+ * msg_buf - Pointer to the msg buffer came from PE.
  *
  * Return QDF_STATUS
  */
-static QDF_STATUS sme_qos_process_del_ts_rsp(tpAniSirGlobal pMac, void *pMsgBuf)
+static
+QDF_STATUS sme_qos_process_del_ts_rsp(struct mac_context *mac, void *msg_buf)
 {
-	tpSirDeltsRsp pDeltsRsp = (tpSirDeltsRsp) pMsgBuf;
+	tpSirDeltsRsp pDeltsRsp = (tpSirDeltsRsp) msg_buf;
 	struct sme_qos_sessioninfo *pSession;
 	uint8_t sessionId = pDeltsRsp->sessionId;
 
@@ -4293,9 +4206,6 @@ static QDF_STATUS sme_qos_process_del_ts_rsp(tpAniSirGlobal pMac, void *pMsgBuf)
 		  "%s: %d: Invoked on session %d with return code %d",
 		  __func__, __LINE__, sessionId, pDeltsRsp->rc);
 	pSession = &sme_qos_cb.sessionInfo[sessionId];
-	/* our outstanding request has been serviced */
-	/* we can go into powersave */
-	pSession->readyForPowerSave = true;
 	(void)sme_qos_process_buffered_cmd(sessionId);
 	return QDF_STATUS_SUCCESS;
 }
@@ -4307,20 +4217,21 @@ static QDF_STATUS sme_qos_process_del_ts_rsp(tpAniSirGlobal pMac, void *pMsgBuf)
  * Since it's a DELTS indication from AP, will notify all the flows running on
  * this AC about QoS release
  *
- * pMac - Pointer to the global MAC parameter structure.
- * pMsgBuf - Pointer to the msg buffer came from PE.
+ * mac - Pointer to the global MAC parameter structure.
+ * msg_buf - Pointer to the msg buffer came from PE.
  *
  * Return QDF_STATUS
  */
-static QDF_STATUS sme_qos_process_del_ts_ind(tpAniSirGlobal pMac, void *pMsgBuf)
+static QDF_STATUS sme_qos_process_del_ts_ind(struct mac_context *mac,
+					     void *msg_buf)
 {
-	tpSirDeltsRsp pdeltsind = (tpSirDeltsRsp) pMsgBuf;
+	tpSirDeltsRsp pdeltsind = (tpSirDeltsRsp)msg_buf;
 	struct sme_qos_sessioninfo *pSession;
 	struct sme_qos_acinfo *pACInfo;
 	uint8_t sessionId = pdeltsind->sessionId;
-	sme_QosEdcaAcType ac;
+	enum qca_wlan_ac_type ac;
 	struct sme_qos_searchinfo search_key;
-	tSirMacTSInfo *tsinfo;
+	struct mac_ts_info *tsinfo;
 	enum sme_qos_wmmuptype up =
 		(enum sme_qos_wmmuptype)
 		pdeltsind->rsp.tspec.tsinfo.traffic.userPrio;
@@ -4332,7 +4243,7 @@ static QDF_STATUS sme_qos_process_del_ts_ind(tpAniSirGlobal pMac, void *pMsgBuf)
 		  __func__, __LINE__, sessionId, up);
 	tsinfo = &pdeltsind->rsp.tspec.tsinfo;
 	ac = sme_qos_up_to_ac(up);
-	if (SME_QOS_EDCA_AC_MAX == ac) {
+	if (QCA_WLAN_AC_ALL == ac) {
 		/* err msg */
 		QDF_TRACE(QDF_MODULE_ID_SME, QDF_TRACE_LEVEL_ERROR,
 			  "%s: %d: invalid AC %d from UP %d",
@@ -4351,14 +4262,14 @@ static QDF_STATUS sme_qos_process_del_ts_ind(tpAniSirGlobal pMac, void *pMsgBuf)
 	 * indication through the callback it registered per request
 	 */
 	if (!QDF_IS_STATUS_SUCCESS
-		    (sme_qos_find_all_in_flow_list(pMac, search_key,
+		    (sme_qos_find_all_in_flow_list(mac, search_key,
 						sme_qos_del_ts_ind_fnp))) {
 		QDF_TRACE(QDF_MODULE_ID_SME, QDF_TRACE_LEVEL_ERROR,
 			  "%s: %d: no match found for ac = %d", __func__,
 			  __LINE__, search_key.key.ac_type);
 		return QDF_STATUS_E_FAILURE;
 	}
-	sme_set_tspec_uapsd_mask_per_session(pMac, tsinfo, sessionId);
+	sme_set_tspec_uapsd_mask_per_session(mac, tsinfo, sessionId);
 /* event: EVENT_WLAN_QOS */
 #ifdef FEATURE_WLAN_DIAG_SUPPORT
 	qos.eventId = SME_QOS_DIAG_DELTS;
@@ -4377,25 +4288,25 @@ static QDF_STATUS sme_qos_process_del_ts_ind(tpAniSirGlobal pMac, void *pMsgBuf)
  *
  * Return QDF_STATUS
  */
-static QDF_STATUS sme_qos_process_assoc_complete_ev(tpAniSirGlobal pMac, uint8_t
+static QDF_STATUS sme_qos_process_assoc_complete_ev(struct mac_context *mac, uint8_t
 						sessionId, void *pEvent_info)
 {
 	struct sme_qos_sessioninfo *pSession;
 	struct sme_qos_acinfo *pACInfo;
 	QDF_STATUS status = QDF_STATUS_E_FAILURE;
-	sme_QosEdcaAcType ac = SME_QOS_EDCA_AC_BE;
+	enum qca_wlan_ac_type ac = QCA_WLAN_AC_BE;
 
 	QDF_TRACE(QDF_MODULE_ID_SME, QDF_TRACE_LEVEL_DEBUG,
 		  "%s: %d: invoked on session %d",
 		  __func__, __LINE__, sessionId);
 	pSession = &sme_qos_cb.sessionInfo[sessionId];
-	if (((SME_QOS_INIT == pSession->ac_info[SME_QOS_EDCA_AC_BE].curr_state)
+	if (((SME_QOS_INIT == pSession->ac_info[QCA_WLAN_AC_BE].curr_state)
 	     && (SME_QOS_INIT ==
-		 pSession->ac_info[SME_QOS_EDCA_AC_BK].curr_state)
+		 pSession->ac_info[QCA_WLAN_AC_BK].curr_state)
 	     && (SME_QOS_INIT ==
-		 pSession->ac_info[SME_QOS_EDCA_AC_VI].curr_state)
+		 pSession->ac_info[QCA_WLAN_AC_VI].curr_state)
 	     && (SME_QOS_INIT ==
-		 pSession->ac_info[SME_QOS_EDCA_AC_VO].curr_state))
+		 pSession->ac_info[QCA_WLAN_AC_VO].curr_state))
 	    || (pSession->handoffRequested)) {
 		/* get the association info */
 		if (!pEvent_info) {
@@ -4405,19 +4316,19 @@ static QDF_STATUS sme_qos_process_assoc_complete_ev(tpAniSirGlobal pMac, uint8_t
 				  __func__, __LINE__);
 			return status;
 		}
-		if (!((sme_QosAssocInfo *) pEvent_info)->pBssDesc) {
+		if (!((sme_QosAssocInfo *)pEvent_info)->bss_desc) {
 			/* err msg */
 			QDF_TRACE(QDF_MODULE_ID_SME, QDF_TRACE_LEVEL_ERROR,
-				  "%s: %d: pBssDesc is NULL",
+				  "%s: %d: bss_desc is NULL",
 				  __func__, __LINE__);
 			return status;
 		}
-		if ((pSession->assocInfo.pBssDesc) &&
+		if ((pSession->assocInfo.bss_desc) &&
 		    (csr_is_bssid_match
-			     (pMac, (struct qdf_mac_addr *)
-					&pSession->assocInfo.pBssDesc->bssId,
+			     ((struct qdf_mac_addr *)
+					&pSession->assocInfo.bss_desc->bssId,
 			     (struct qdf_mac_addr *) &(((sme_QosAssocInfo *)
-					pEvent_info)->pBssDesc->bssId)))) {
+					pEvent_info)->bss_desc->bssId)))) {
 			QDF_TRACE(QDF_MODULE_ID_SME, QDF_TRACE_LEVEL_ERROR,
 				  "%s: %d: assoc with the same BSS, no update needed",
 				  __func__, __LINE__);
@@ -4427,10 +4338,10 @@ static QDF_STATUS sme_qos_process_assoc_complete_ev(tpAniSirGlobal pMac, uint8_t
 		QDF_TRACE(QDF_MODULE_ID_SME, QDF_TRACE_LEVEL_ERROR,
 			  "%s: %d: wrong state: BE %d, BK %d, VI %d, VO %d",
 			  __func__, __LINE__,
-			  pSession->ac_info[SME_QOS_EDCA_AC_BE].curr_state,
-			  pSession->ac_info[SME_QOS_EDCA_AC_BK].curr_state,
-			  pSession->ac_info[SME_QOS_EDCA_AC_VI].curr_state,
-			  pSession->ac_info[SME_QOS_EDCA_AC_VO].curr_state);
+			  pSession->ac_info[QCA_WLAN_AC_BE].curr_state,
+			  pSession->ac_info[QCA_WLAN_AC_BK].curr_state,
+			  pSession->ac_info[QCA_WLAN_AC_VI].curr_state,
+			  pSession->ac_info[QCA_WLAN_AC_VO].curr_state);
 		return status;
 	}
 	/* the session is active */
@@ -4441,7 +4352,7 @@ static QDF_STATUS sme_qos_process_assoc_complete_ev(tpAniSirGlobal pMac, uint8_t
 		(void)sme_qos_process_buffered_cmd(sessionId);
 		status = QDF_STATUS_SUCCESS;
 	} else {
-		for (ac = SME_QOS_EDCA_AC_BE; ac < SME_QOS_EDCA_AC_MAX; ac++) {
+		for (ac = QCA_WLAN_AC_BE; ac < QCA_WLAN_AC_ALL; ac++) {
 			pACInfo = &pSession->ac_info[ac];
 			switch (pACInfo->curr_state) {
 			case SME_QOS_INIT:
@@ -4474,12 +4385,12 @@ static QDF_STATUS sme_qos_process_assoc_complete_ev(tpAniSirGlobal pMac, uint8_t
  *
  * Return QDF_STATUS
  */
-static QDF_STATUS sme_qos_process_reassoc_req_ev(tpAniSirGlobal pMac, uint8_t
+static QDF_STATUS sme_qos_process_reassoc_req_ev(struct mac_context *mac, uint8_t
 						sessionId, void *pEvent_info)
 {
 	struct sme_qos_sessioninfo *pSession;
 	struct sme_qos_acinfo *pACInfo;
-	sme_QosEdcaAcType ac;
+	enum qca_wlan_ac_type ac;
 	struct sme_qos_flowinfoentry *flow_info = NULL;
 	tListElem *entry = NULL;
 
@@ -4526,7 +4437,7 @@ static QDF_STATUS sme_qos_process_reassoc_req_ev(tpAniSirGlobal pMac, uint8_t
 		 */
 		entry = csr_ll_peek_head(&sme_qos_cb.flow_list, false);
 		if (!entry) {
-			QDF_TRACE(QDF_MODULE_ID_SME, QDF_TRACE_LEVEL_WARN,
+			QDF_TRACE(QDF_MODULE_ID_SME, QDF_TRACE_LEVEL_DEBUG,
 				FL("Flow List empty, nothing to update"));
 			return QDF_STATUS_E_FAILURE;
 		}
@@ -4550,9 +4461,9 @@ static QDF_STATUS sme_qos_process_reassoc_req_ev(tpAniSirGlobal pMac, uint8_t
 		/* buffer the existing flows to be renewed after handoff is
 		 * done
 		 */
-		sme_qos_buffer_existing_flows(pMac, sessionId);
+		sme_qos_buffer_existing_flows(mac, sessionId);
 		/* clean up the control block partially for handoff */
-		sme_qos_cleanup_ctrl_blk_for_handoff(pMac, sessionId);
+		sme_qos_cleanup_ctrl_blk_for_handoff(mac, sessionId);
 		return QDF_STATUS_SUCCESS;
 	}
 /* TBH: Assuming both handoff algo & 11r willn't be enabled at the same time */
@@ -4575,7 +4486,7 @@ static QDF_STATUS sme_qos_process_reassoc_req_ev(tpAniSirGlobal pMac, uint8_t
 		return QDF_STATUS_SUCCESS;
 	}
 
-	for (ac = SME_QOS_EDCA_AC_BE; ac < SME_QOS_EDCA_AC_MAX; ac++) {
+	for (ac = QCA_WLAN_AC_BE; ac < QCA_WLAN_AC_ALL; ac++) {
 		pACInfo = &pSession->ac_info[ac];
 		switch (pACInfo->curr_state) {
 		case SME_QOS_LINK_UP:
@@ -4618,15 +4529,15 @@ static QDF_STATUS sme_qos_process_reassoc_req_ev(tpAniSirGlobal pMac, uint8_t
  * Return: QDF_STATUS
  */
 static
-QDF_STATUS sme_qos_handle_handoff_state(tpAniSirGlobal mac_ctx,
+QDF_STATUS sme_qos_handle_handoff_state(struct mac_context *mac_ctx,
 		struct sme_qos_sessioninfo *qos_session,
 		struct sme_qos_acinfo *ac_info,
-		sme_QosEdcaAcType ac, uint8_t sessionid)
+		enum qca_wlan_ac_type ac, uint8_t sessionid)
 
 {
 	struct sme_qos_searchinfo search_key;
 	struct sme_qos_searchinfo search_key1;
-	sme_QosEdcaAcType ac_index;
+	enum qca_wlan_ac_type ac_index;
 	tListElem *list_elt = NULL;
 	struct sme_qos_flowinfoentry *flow_info = NULL;
 	QDF_STATUS status = QDF_STATUS_E_FAILURE;
@@ -4642,9 +4553,9 @@ QDF_STATUS sme_qos_handle_handoff_state(tpAniSirGlobal mac_ctx,
 	 * case where we are resetting the bit in apsd_mask
 	 */
 	if (ac_info->requested_QoSInfo[SME_QOS_TSPEC_INDEX_0].ts_info.psb)
-		qos_session->apsdMask |= 1 << (SME_QOS_EDCA_AC_VO - ac);
+		qos_session->apsdMask |= 1 << (QCA_WLAN_AC_VO - ac);
 	else
-		qos_session->apsdMask &= ~(1 << (SME_QOS_EDCA_AC_VO - ac));
+		qos_session->apsdMask &= ~(1 << (QCA_WLAN_AC_VO - ac));
 
 	ac_info->reassoc_pending = false;
 	/*
@@ -4667,7 +4578,7 @@ QDF_STATUS sme_qos_handle_handoff_state(tpAniSirGlobal mac_ctx,
 	search_key1.index = SME_QOS_SEARCH_KEY_INDEX_3;
 	search_key1.key.reason = SME_QOS_REASON_SETUP;
 	search_key1.sessionId = sessionid;
-	for (ac_index = SME_QOS_EDCA_AC_BE; ac_index < SME_QOS_EDCA_AC_MAX;
+	for (ac_index = QCA_WLAN_AC_BE; ac_index < QCA_WLAN_AC_ALL;
 	     ac_index++) {
 		list_elt = sme_qos_find_in_flow_list(search_key1);
 		if (list_elt) {
@@ -4710,20 +4621,20 @@ QDF_STATUS sme_qos_handle_handoff_state(tpAniSirGlobal mac_ctx,
  *
  * Return: QDF_STATUS
  */
-static QDF_STATUS sme_qos_process_reassoc_success_ev(tpAniSirGlobal mac_ctx,
+static QDF_STATUS sme_qos_process_reassoc_success_ev(struct mac_context *mac_ctx,
 				uint8_t sessionid, void *event_info)
 {
 
 	struct csr_roam_session *csr_roam_session = NULL;
 	struct sme_qos_sessioninfo *qos_session;
 	struct sme_qos_acinfo *ac_info;
-	sme_QosEdcaAcType ac;
+	enum qca_wlan_ac_type ac;
 	QDF_STATUS status = QDF_STATUS_E_FAILURE;
 
 	QDF_TRACE(QDF_MODULE_ID_SME, QDF_TRACE_LEVEL_DEBUG,
 		  FL("invoked on session %d"), sessionid);
 
-	if (CSR_ROAM_SESSION_MAX <= sessionid) {
+	if (sessionid >= WLAN_MAX_VDEVS) {
 		QDF_TRACE(QDF_MODULE_ID_SME, QDF_TRACE_LEVEL_ERROR,
 			  FL("invoked on session %d"), sessionid);
 		return status;
@@ -4732,11 +4643,6 @@ static QDF_STATUS sme_qos_process_reassoc_success_ev(tpAniSirGlobal mac_ctx,
 	csr_roam_session = CSR_GET_SESSION(mac_ctx, sessionid);
 
 	qos_session = &sme_qos_cb.sessionInfo[sessionid];
-	/*
-	 * our pending reassociation has completed
-	 * we can allow powersave
-	 */
-	qos_session->readyForPowerSave = true;
 
 	/* get the association info */
 	if (!event_info) {
@@ -4745,9 +4651,9 @@ static QDF_STATUS sme_qos_process_reassoc_success_ev(tpAniSirGlobal mac_ctx,
 		return status;
 	}
 
-	if (!((sme_QosAssocInfo *) event_info)->pBssDesc) {
+	if (!((sme_QosAssocInfo *)event_info)->bss_desc) {
 		QDF_TRACE(QDF_MODULE_ID_SME, QDF_TRACE_LEVEL_ERROR,
-			  FL("pBssDesc is NULL"));
+			  FL("bss_desc is NULL"));
 		return status;
 	}
 	status = sme_qos_save_assoc_info(qos_session, event_info);
@@ -4797,7 +4703,7 @@ static QDF_STATUS sme_qos_process_reassoc_success_ev(tpAniSirGlobal mac_ctx,
 	}
 
 	qos_session->sessionActive = true;
-	for (ac = SME_QOS_EDCA_AC_BE; ac < SME_QOS_EDCA_AC_MAX; ac++) {
+	for (ac = QCA_WLAN_AC_BE; ac < QCA_WLAN_AC_ALL; ac++) {
 		ac_info = &qos_session->ac_info[ac];
 		switch (ac_info->curr_state) {
 		case SME_QOS_HANDOFF:
@@ -4831,21 +4737,18 @@ static QDF_STATUS sme_qos_process_reassoc_success_ev(tpAniSirGlobal mac_ctx,
  *
  * Return QDF_STATUS
  */
-static QDF_STATUS sme_qos_process_reassoc_failure_ev(tpAniSirGlobal pMac,
+static QDF_STATUS sme_qos_process_reassoc_failure_ev(struct mac_context *mac,
 					   uint8_t sessionId, void *pEvent_info)
 {
 	struct sme_qos_sessioninfo *pSession;
 	struct sme_qos_acinfo *pACInfo;
-	sme_QosEdcaAcType ac;
+	enum qca_wlan_ac_type ac;
 
 	QDF_TRACE(QDF_MODULE_ID_SME, QDF_TRACE_LEVEL_DEBUG,
 		  "%s: %d: invoked on session %d",
 		  __func__, __LINE__, sessionId);
 	pSession = &sme_qos_cb.sessionInfo[sessionId];
-	/* our pending reassociation has completed */
-	/* we can allow powersave */
-	pSession->readyForPowerSave = true;
-	for (ac = SME_QOS_EDCA_AC_BE; ac < SME_QOS_EDCA_AC_MAX; ac++) {
+	for (ac = QCA_WLAN_AC_BE; ac < QCA_WLAN_AC_ALL; ac++) {
 		pACInfo = &pSession->ac_info[ac];
 		switch (pACInfo->curr_state) {
 		case SME_QOS_HANDOFF:
@@ -4886,9 +4789,58 @@ static QDF_STATUS sme_qos_process_reassoc_failure_ev(tpAniSirGlobal pMac,
 		}
 	}
 	/* need to clean up flows */
-	sme_qos_delete_existing_flows(pMac, sessionId);
+	sme_qos_delete_existing_flows(mac, sessionId);
 	return QDF_STATUS_SUCCESS;
 }
+
+#ifdef WLAN_FEATURE_ROAM_OFFLOAD
+#ifdef FEATURE_WLAN_ESE
+static bool sme_qos_ft_handoff_required(struct mac_context *mac,
+					uint8_t session_id)
+{
+	struct csr_roam_session *csr_roam_session;
+
+	if (csr_roam_is11r_assoc(mac, session_id))
+		return true;
+
+	csr_roam_session = CSR_GET_SESSION(mac, session_id);
+
+	if (csr_roam_session &&
+	    MLME_IS_ROAM_SYNCH_IN_PROGRESS(mac->psoc, session_id) &&
+	    csr_roam_is_ese_assoc(mac, session_id) &&
+	    csr_roam_session->connectedInfo.nTspecIeLength)
+		return true;
+
+	return false;
+}
+#else
+static inline bool sme_qos_ft_handoff_required(struct mac_context *mac,
+					       uint8_t session_id)
+{
+	return csr_roam_is11r_assoc(mac, session_id) ? true : false;
+}
+#endif
+#else
+static inline bool sme_qos_ft_handoff_required(struct mac_context *mac,
+					       uint8_t session_id)
+{
+	return false;
+}
+#endif
+
+#ifdef FEATURE_WLAN_ESE
+static inline bool sme_qos_legacy_handoff_required(struct mac_context *mac,
+						   uint8_t session_id)
+{
+	return csr_roam_is_ese_assoc(mac, session_id) ? false : true;
+}
+#else
+static inline bool sme_qos_legacy_handoff_required(struct mac_context *mac,
+						   uint8_t session_id)
+{
+	return true;
+}
+#endif
 
 /*
  * sme_qos_process_handoff_assoc_req_ev() - Function to process the
@@ -4898,7 +4850,7 @@ static QDF_STATUS sme_qos_process_reassoc_failure_ev(tpAniSirGlobal pMac,
  *
  * Return QDF_STATUS
  */
-static QDF_STATUS sme_qos_process_handoff_assoc_req_ev(tpAniSirGlobal pMac,
+static QDF_STATUS sme_qos_process_handoff_assoc_req_ev(struct mac_context *mac,
 					uint8_t sessionId, void *pEvent_info)
 {
 	struct sme_qos_sessioninfo *pSession;
@@ -4909,7 +4861,7 @@ static QDF_STATUS sme_qos_process_handoff_assoc_req_ev(tpAniSirGlobal pMac,
 		  "%s: %d: invoked on session %d",
 		  __func__, __LINE__, sessionId);
 	pSession = &sme_qos_cb.sessionInfo[sessionId];
-	for (ac = SME_QOS_EDCA_AC_BE; ac < SME_QOS_EDCA_AC_MAX; ac++) {
+	for (ac = QCA_WLAN_AC_BE; ac < QCA_WLAN_AC_ALL; ac++) {
 		pACInfo = &pSession->ac_info[ac];
 		switch (pACInfo->curr_state) {
 		case SME_QOS_LINK_UP:
@@ -4927,7 +4879,7 @@ static QDF_STATUS sme_qos_process_handoff_assoc_req_ev(tpAniSirGlobal pMac,
 					  __func__, __LINE__);
 				break;
 			}
-
+			/* fallthrough */
 		case SME_QOS_CLOSED:
 		case SME_QOS_INIT:
 		default:
@@ -4938,19 +4890,19 @@ static QDF_STATUS sme_qos_process_handoff_assoc_req_ev(tpAniSirGlobal pMac,
 			break;
 		}
 	}
-#ifdef WLAN_FEATURE_ROAM_OFFLOAD
-	if (csr_roam_is11r_assoc(pMac, sessionId))
+
+	if (sme_qos_ft_handoff_required(mac, sessionId))
 		pSession->ftHandoffInProgress = true;
-#endif
-	/* If FT handoff is in progress, legacy handoff need not be enabled */
-	if (!pSession->ftHandoffInProgress)
+
+	/* If FT handoff/ESE in progress, legacy handoff need not be enabled */
+	if (!pSession->ftHandoffInProgress &&
+	    sme_qos_legacy_handoff_required(mac, sessionId))
 		pSession->handoffRequested = true;
 
 	/* this session no longer needs UAPSD */
 	pSession->apsdMask = 0;
 	/* do any sessions still require UAPSD? */
-	sme_ps_uapsd_disable(pMac, sessionId);
-	pSession->uapsdAlreadyRequested = false;
+	sme_ps_uapsd_disable(MAC_HANDLE(mac), sessionId);
 	return QDF_STATUS_SUCCESS;
 }
 
@@ -4962,7 +4914,7 @@ static QDF_STATUS sme_qos_process_handoff_assoc_req_ev(tpAniSirGlobal pMac,
  *
  * Return QDF_STATUS
  */
-static QDF_STATUS sme_qos_process_handoff_success_ev(tpAniSirGlobal pMac,
+static QDF_STATUS sme_qos_process_handoff_success_ev(struct mac_context *mac,
 					   uint8_t sessionId, void *pEvent_info)
 {
 	struct sme_qos_sessioninfo *pSession;
@@ -4975,7 +4927,7 @@ static QDF_STATUS sme_qos_process_handoff_success_ev(tpAniSirGlobal pMac,
 		  __func__, __LINE__, sessionId);
 	pSession = &sme_qos_cb.sessionInfo[sessionId];
 	/* go back to original state before handoff */
-	for (ac = SME_QOS_EDCA_AC_BE; ac < SME_QOS_EDCA_AC_MAX; ac++) {
+	for (ac = QCA_WLAN_AC_BE; ac < QCA_WLAN_AC_ALL; ac++) {
 		pACInfo = &pSession->ac_info[ac];
 		switch (pACInfo->curr_state) {
 		case SME_QOS_HANDOFF:
@@ -5016,71 +4968,6 @@ static QDF_STATUS sme_qos_process_handoff_success_ev(tpAniSirGlobal pMac,
 }
 
 /*
- * sme_qos_process_handoff_failure_ev() - Function to process the
- *  SME_QOS_CSR_HANDOFF_FAILURE event indication from CSR
- *
- * pEvent_info - Pointer to relevant info from CSR.
- *
- * Return QDF_STATUS
- */
-static QDF_STATUS sme_qos_process_handoff_failure_ev(tpAniSirGlobal pMac,
-					   uint8_t sessionId, void *pEvent_info)
-{
-	struct sme_qos_sessioninfo *pSession;
-	struct sme_qos_acinfo *pACInfo;
-	uint8_t ac;
-
-	QDF_TRACE(QDF_MODULE_ID_SME, QDF_TRACE_LEVEL_DEBUG,
-		  "%s: %d: invoked on session %d",
-		  __func__, __LINE__, sessionId);
-	pSession = &sme_qos_cb.sessionInfo[sessionId];
-	for (ac = SME_QOS_EDCA_AC_BE; ac < SME_QOS_EDCA_AC_MAX; ac++) {
-		pACInfo = &pSession->ac_info[ac];
-		switch (pACInfo->curr_state) {
-		case SME_QOS_HANDOFF:
-			sme_qos_state_transition(sessionId, ac, SME_QOS_INIT);
-			/* need to clean up flows: TODO */
-			qdf_mem_zero(&pACInfo->
-				     curr_QoSInfo[SME_QOS_TSPEC_INDEX_0],
-				     sizeof(struct sme_qos_wmmtspecinfo));
-			qdf_mem_zero(&pACInfo->
-				     requested_QoSInfo[SME_QOS_TSPEC_INDEX_0],
-				     sizeof(struct sme_qos_wmmtspecinfo));
-			qdf_mem_zero(&pACInfo->
-				     curr_QoSInfo[SME_QOS_TSPEC_INDEX_1],
-				     sizeof(struct sme_qos_wmmtspecinfo));
-			qdf_mem_zero(&pACInfo->
-				     requested_QoSInfo[SME_QOS_TSPEC_INDEX_1],
-				     sizeof(struct sme_qos_wmmtspecinfo));
-			pACInfo->tspec_mask_status = SME_QOS_TSPEC_MASK_CLEAR;
-			pACInfo->tspec_pending = 0;
-			pACInfo->num_flows[SME_QOS_TSPEC_INDEX_0] = 0;
-			pACInfo->num_flows[SME_QOS_TSPEC_INDEX_1] = 0;
-			break;
-		case SME_QOS_INIT:
-		case SME_QOS_CLOSED:
-		case SME_QOS_LINK_UP:
-		case SME_QOS_REQUESTED:
-		case SME_QOS_QOS_ON:
-		default:
-			QDF_TRACE(QDF_MODULE_ID_SME, QDF_TRACE_LEVEL_ERROR,
-				  "%s: %d: On session %d AC %d is in wrong state %d",
-				  __func__, __LINE__,
-				  sessionId, ac, pACInfo->curr_state);
-			break;
-		}
-	}
-	/* no longer in handoff */
-	pSession->handoffRequested = false;
-	/* clean up the assoc info */
-	if (pSession->assocInfo.pBssDesc) {
-		qdf_mem_free(pSession->assocInfo.pBssDesc);
-		pSession->assocInfo.pBssDesc = NULL;
-	}
-	return QDF_STATUS_SUCCESS;
-}
-
-/*
  * sme_qos_process_disconnect_ev() - Function to process the
  *  SME_QOS_CSR_DISCONNECT_REQ or  SME_QOS_CSR_DISCONNECT_IND event indication
  *  from CSR
@@ -5089,7 +4976,7 @@ static QDF_STATUS sme_qos_process_handoff_failure_ev(tpAniSirGlobal pMac,
  *
  * Return QDF_STATUS
  */
-static QDF_STATUS sme_qos_process_disconnect_ev(tpAniSirGlobal pMac, uint8_t
+static QDF_STATUS sme_qos_process_disconnect_ev(struct mac_context *mac, uint8_t
 					sessionId, void *pEvent_info)
 {
 	struct sme_qos_sessioninfo *pSession;
@@ -5119,24 +5006,22 @@ static QDF_STATUS sme_qos_process_disconnect_ev(tpAniSirGlobal pMac, uint8_t
 
 		return QDF_STATUS_SUCCESS;
 	}
-	sme_qos_init_a_cs(pMac, sessionId);
+	sme_qos_init_a_cs(mac, sessionId);
 	/* this session doesn't require UAPSD */
 	pSession->apsdMask = 0;
 
-	sme_ps_uapsd_disable(pMac, sessionId);
+	sme_ps_uapsd_disable(MAC_HANDLE(mac), sessionId);
 
-	pSession->uapsdAlreadyRequested = false;
 	pSession->handoffRequested = false;
-	pSession->readyForPowerSave = true;
 	pSession->roamID = 0;
 	/* need to clean up buffered req */
-	sme_qos_delete_buffered_requests(pMac, sessionId);
+	sme_qos_delete_buffered_requests(mac, sessionId);
 	/* need to clean up flows */
-	sme_qos_delete_existing_flows(pMac, sessionId);
+	sme_qos_delete_existing_flows(mac, sessionId);
 	/* clean up the assoc info */
-	if (pSession->assocInfo.pBssDesc) {
-		qdf_mem_free(pSession->assocInfo.pBssDesc);
-		pSession->assocInfo.pBssDesc = NULL;
+	if (pSession->assocInfo.bss_desc) {
+		qdf_mem_free(pSession->assocInfo.bss_desc);
+		pSession->assocInfo.bss_desc = NULL;
 	}
 	sme_qos_cb.sessionInfo[sessionId].sessionActive = false;
 	return QDF_STATUS_SUCCESS;
@@ -5150,47 +5035,42 @@ static QDF_STATUS sme_qos_process_disconnect_ev(tpAniSirGlobal pMac, uint8_t
  *
  * Return QDF_STATUS
  */
-static QDF_STATUS sme_qos_process_join_req_ev(tpAniSirGlobal pMac, uint8_t
+static QDF_STATUS sme_qos_process_join_req_ev(struct mac_context *mac, uint8_t
 						sessionId, void *pEvent_info)
 {
 	struct sme_qos_sessioninfo *pSession;
-	sme_QosEdcaAcType ac;
+	enum qca_wlan_ac_type ac;
 
-	QDF_TRACE(QDF_MODULE_ID_SME, QDF_TRACE_LEVEL_DEBUG,
-		  "%s: %d: invoked on session %d",
-		  __func__, __LINE__, sessionId);
 	pSession = &sme_qos_cb.sessionInfo[sessionId];
 	if (pSession->handoffRequested) {
-		QDF_TRACE(QDF_MODULE_ID_SME, QDF_TRACE_LEVEL_DEBUG,
-			  "%s: %d: no need for state transition, should already be in handoff state",
-			__func__, __LINE__);
+		sme_debug("No need for state transition, should already be in handoff state");
 		if ((pSession->ac_info[0].curr_state != SME_QOS_HANDOFF) ||
 		    (pSession->ac_info[1].curr_state != SME_QOS_HANDOFF) ||
 		    (pSession->ac_info[2].curr_state != SME_QOS_HANDOFF) ||
 		    (pSession->ac_info[3].curr_state != SME_QOS_HANDOFF))
-			QDF_TRACE(QDF_MODULE_ID_SME, QDF_TRACE_LEVEL_ERROR,
-				FL("curr_state is not HANDOFF, session %d"),
-					 sessionId);
+			sme_err("curr_state is not HANDOFF, session %d",
+				sessionId);
 		/* buffer the existing flows to be renewed after handoff is
 		 * done
 		 */
-		sme_qos_buffer_existing_flows(pMac, sessionId);
+		sme_qos_buffer_existing_flows(mac, sessionId);
 		/* clean up the control block partially for handoff */
-		sme_qos_cleanup_ctrl_blk_for_handoff(pMac, sessionId);
+		sme_qos_cleanup_ctrl_blk_for_handoff(mac, sessionId);
 		return QDF_STATUS_SUCCESS;
 	}
 
-	for (ac = SME_QOS_EDCA_AC_BE; ac < SME_QOS_EDCA_AC_MAX; ac++)
+	for (ac = QCA_WLAN_AC_BE; ac < QCA_WLAN_AC_ALL; ac++)
 		sme_qos_state_transition(sessionId, ac, SME_QOS_INIT);
 
 	/* clean up the assoc info if already set */
-	if (pSession->assocInfo.pBssDesc) {
-		qdf_mem_free(pSession->assocInfo.pBssDesc);
-		pSession->assocInfo.pBssDesc = NULL;
+	if (pSession->assocInfo.bss_desc) {
+		qdf_mem_free(pSession->assocInfo.bss_desc);
+		pSession->assocInfo.bss_desc = NULL;
 	}
 	return QDF_STATUS_SUCCESS;
 }
 
+#ifdef WLAN_FEATURE_HOST_ROAM
 /**
  * sme_qos_process_preauth_success_ind() - process preauth success indication
  * @mac_ctx: global MAC context
@@ -5202,7 +5082,7 @@ static QDF_STATUS sme_qos_process_join_req_ev(tpAniSirGlobal pMac, uint8_t
  *
  * Return: QDF_STATUS
  */
-static QDF_STATUS sme_qos_process_preauth_success_ind(tpAniSirGlobal mac_ctx,
+static QDF_STATUS sme_qos_process_preauth_success_ind(struct mac_context *mac_ctx,
 				uint8_t sessionid, void *event_info)
 {
 	struct sme_qos_sessioninfo *qos_session;
@@ -5216,11 +5096,13 @@ static QDF_STATUS sme_qos_process_preauth_success_ind(tpAniSirGlobal mac_ctx,
 	uint8_t *ric_ie;
 	uint8_t tspec_mask_status = 0;
 	uint8_t tspec_pending_status = 0;
+	struct wlan_objmgr_vdev *vdev;
+	struct mlme_legacy_priv *mlme_priv;
 
 	QDF_TRACE(QDF_MODULE_ID_SME, QDF_TRACE_LEVEL_DEBUG,
 		  FL("invoked on SME session %d"), sessionid);
 
-	if (NULL == sme_session) {
+	if (!sme_session) {
 		QDF_TRACE(QDF_MODULE_ID_SME, QDF_TRACE_LEVEL_ERROR,
 			  FL("sme_session is NULL"));
 		return QDF_STATUS_E_INVAL;
@@ -5228,7 +5110,7 @@ static QDF_STATUS sme_qos_process_preauth_success_ind(tpAniSirGlobal mac_ctx,
 
 	qos_session = &sme_qos_cb.sessionInfo[sessionid];
 
-	for (ac = SME_QOS_EDCA_AC_BE; ac < SME_QOS_EDCA_AC_MAX; ac++) {
+	for (ac = QCA_WLAN_AC_BE; ac < QCA_WLAN_AC_ALL; ac++) {
 		ac_info = &qos_session->ac_info[ac];
 
 		switch (ac_info->curr_state) {
@@ -5255,11 +5137,14 @@ static QDF_STATUS sme_qos_process_preauth_success_ind(tpAniSirGlobal mac_ctx,
 	if (!csr_roam_is11r_assoc(mac_ctx, sessionid))
 		return status;
 
-	/* Data is accessed from saved PreAuth Rsp */
-	if (NULL == sme_session->ftSmeContext.psavedFTPreAuthRsp) {
-		QDF_TRACE(QDF_MODULE_ID_SME, QDF_TRACE_LEVEL_ERROR,
-			  FL("psavedFTPreAuthRsp is NULL"));
+	vdev = wlan_objmgr_get_vdev_by_id_from_pdev(mac_ctx->pdev, sessionid,
+						    WLAN_LEGACY_SME_ID);
+	if (!vdev)
 		return QDF_STATUS_E_INVAL;
+	mlme_priv = wlan_vdev_mlme_get_ext_hdl(vdev);
+	if (!mlme_priv) {
+		status = QDF_STATUS_E_FAILURE;
+		goto end;
 	}
 
 	/*
@@ -5268,15 +5153,17 @@ static QDF_STATUS sme_qos_process_preauth_success_ind(tpAniSirGlobal mac_ctx,
 	 * length of the whole RIC IEs. Filling of TSPEC info should start
 	 * from this length
 	 */
-	ric_ie = sme_session->ftSmeContext.psavedFTPreAuthRsp->ric_ies;
-	ric_offset =
-		sme_session->ftSmeContext.psavedFTPreAuthRsp->ric_ies_length;
+	qdf_mem_zero(mlme_priv->connect_info.ft_info.ric_ies, MAX_FTIE_SIZE);
+	mlme_priv->connect_info.ft_info.ric_ies_length = 0;
+
+	ric_ie = mlme_priv->connect_info.ft_info.ric_ies;
+	ric_offset = mlme_priv->connect_info.ft_info.ric_ies_length;
 
 	/*
 	 * Now we have to process the currentTspeInfo inside this session and
 	 * create the RIC IEs
 	 */
-	for (ac = SME_QOS_EDCA_AC_BE; ac < SME_QOS_EDCA_AC_MAX; ac++) {
+	for (ac = QCA_WLAN_AC_BE; ac < QCA_WLAN_AC_ALL; ac++) {
 		volatile uint8_t tspec_idx = 0;
 
 		ric_ielen = 0;
@@ -5310,16 +5197,25 @@ static QDF_STATUS sme_qos_process_preauth_success_ind(tpAniSirGlobal mac_ctx,
 			}
 add_next_ric:
 			ric_offset += ric_ielen;
-			sme_session->ftSmeContext.psavedFTPreAuthRsp->
-				ric_ies_length += ric_ielen;
+			mlme_priv->connect_info.ft_info.ric_ies_length = ric_ielen;
 			tspec_mask_status >>= 1;
 			tspec_pending_status >>= 1;
 			tspec_idx++;
 		} while (tspec_mask_status);
 	}
+end:
+	wlan_objmgr_vdev_release_ref(vdev, WLAN_LEGACY_SME_ID);
+
 	return status;
 }
-
+#else
+static inline
+QDF_STATUS sme_qos_process_preauth_success_ind(struct mac_context *mac_ctx,
+				uint8_t sessionid, void *event_info)
+{
+	return QDF_STATUS_SUCCESS;
+}
+#endif
 /*
  * sme_qos_process_add_ts_failure_rsp() - Function to process the
  *  Addts request failure response came from PE
@@ -5327,18 +5223,18 @@ add_next_ric:
  * We will notify HDD only for the requested Flow, other Flows running on the AC
  * stay intact
  *
- * pMac - Pointer to the global MAC parameter structure.
+ * mac - Pointer to the global MAC parameter structure.
  * pRsp - Pointer to the addts response structure came from PE.
  *
  * Return QDF_STATUS
  */
-static QDF_STATUS sme_qos_process_add_ts_failure_rsp(tpAniSirGlobal pMac,
+static QDF_STATUS sme_qos_process_add_ts_failure_rsp(struct mac_context *mac,
 					      uint8_t sessionId,
 					      tSirAddtsRspInfo *pRsp)
 {
 	struct sme_qos_sessioninfo *pSession;
 	struct sme_qos_acinfo *pACInfo;
-	sme_QosEdcaAcType ac;
+	enum qca_wlan_ac_type ac;
 	struct sme_qos_searchinfo search_key;
 	uint8_t tspec_pending;
 	enum sme_qos_wmmuptype up =
@@ -5348,7 +5244,7 @@ static QDF_STATUS sme_qos_process_add_ts_failure_rsp(tpAniSirGlobal pMac,
 		  "%s: %d: invoked on session %d for UP %d", __func__, __LINE__,
 		  sessionId, up);
 	ac = sme_qos_up_to_ac(up);
-	if (SME_QOS_EDCA_AC_MAX == ac) {
+	if (QCA_WLAN_AC_ALL == ac) {
 		/* err msg */
 		QDF_TRACE(QDF_MODULE_ID_SME, QDF_TRACE_LEVEL_ERROR,
 			  "%s: %d: invalid AC %d from UP %d",
@@ -5373,7 +5269,7 @@ static QDF_STATUS sme_qos_process_add_ts_failure_rsp(tpAniSirGlobal pMac,
 	search_key.sessionId = sessionId;
 	if (!QDF_IS_STATUS_SUCCESS
 		    (sme_qos_find_all_in_flow_list
-			    (pMac, search_key, sme_qos_add_ts_failure_fnp))) {
+			    (mac, search_key, sme_qos_add_ts_failure_fnp))) {
 		QDF_TRACE(QDF_MODULE_ID_SME, QDF_TRACE_LEVEL_ERROR,
 			  "%s: %d: On session %d no match found for ac = %d",
 			  __func__, __LINE__, sessionId,
@@ -5398,7 +5294,7 @@ static QDF_STATUS sme_qos_process_add_ts_failure_rsp(tpAniSirGlobal pMac,
 }
 
 /**
- * sme_qos_update_tspec_mask() - Utiltity function to update the tspec.
+ * sme_qos_update_tspec_mask() - Utility function to update the tspec.
  * @sessionid: Session upon which the TSPEC is being updated
  * @search_key: search key
  * @new_tspec_mask: tspec to be set for this AC
@@ -5424,7 +5320,7 @@ static QDF_STATUS sme_qos_update_tspec_mask(uint8_t sessionid,
 
 	qos_session = &sme_qos_cb.sessionInfo[sessionid];
 
-	if (search_key.key.ac_type < SME_QOS_EDCA_AC_MAX) {
+	if (search_key.key.ac_type < QCA_WLAN_AC_ALL) {
 		ac_info = &qos_session->ac_info[search_key.key.ac_type];
 	} else {
 		QDF_TRACE(QDF_MODULE_ID_SME, QDF_TRACE_LEVEL_DEBUG,
@@ -5485,23 +5381,23 @@ static QDF_STATUS sme_qos_update_tspec_mask(uint8_t sessionid,
  * We will notify HDD with addts success for the requested Flow, & for other
  * Flows running on the AC we will send an addts modify status
  *
- * pMac - Pointer to the global MAC parameter structure.
+ * mac - Pointer to the global MAC parameter structure.
  * pRsp - Pointer to the addts response structure came from PE.
  *
  * Return QDF_STATUS
  */
-static QDF_STATUS sme_qos_process_add_ts_success_rsp(tpAniSirGlobal pMac,
+static QDF_STATUS sme_qos_process_add_ts_success_rsp(struct mac_context *mac,
 					      uint8_t sessionId,
 					      tSirAddtsRspInfo *pRsp)
 {
 	struct sme_qos_sessioninfo *pSession;
 	struct sme_qos_acinfo *pACInfo;
-	sme_QosEdcaAcType ac, ac_index;
+	enum qca_wlan_ac_type ac, ac_index;
 	struct sme_qos_searchinfo search_key;
 	struct sme_qos_searchinfo search_key1;
-	struct csr_roam_session *csr_session;
 	uint8_t tspec_pending;
 	tListElem *pEntry = NULL;
+	enum QDF_OPMODE opmode;
 	struct sme_qos_flowinfoentry *flow_info = NULL;
 	enum sme_qos_wmmuptype up =
 		(enum sme_qos_wmmuptype) pRsp->tspec.tsinfo.traffic.userPrio;
@@ -5515,7 +5411,7 @@ static QDF_STATUS sme_qos_process_add_ts_success_rsp(tpAniSirGlobal pMac,
 		  __func__, __LINE__, sessionId, up);
 	pSession = &sme_qos_cb.sessionInfo[sessionId];
 	ac = sme_qos_up_to_ac(up);
-	if (SME_QOS_EDCA_AC_MAX == ac) {
+	if (QCA_WLAN_AC_ALL == ac) {
 		/* err msg */
 		QDF_TRACE(QDF_MODULE_ID_SME, QDF_TRACE_LEVEL_ERROR,
 			  "%s: %d: invalid AC %d from UP %d",
@@ -5536,7 +5432,7 @@ static QDF_STATUS sme_qos_process_add_ts_success_rsp(tpAniSirGlobal pMac,
 	 */
 	if (pACInfo->requested_QoSInfo[tspec_pending - 1].ts_info.psb) {
 		/* update the session's apsd mask */
-		pSession->apsdMask |= 1 << (SME_QOS_EDCA_AC_VO - ac);
+		pSession->apsdMask |= 1 << (QCA_WLAN_AC_VO - ac);
 	} else {
 		if (((SME_QOS_TSPEC_MASK_BIT_1_2_SET & ~tspec_pending) > 0) &&
 		    ((SME_QOS_TSPEC_MASK_BIT_1_2_SET & ~tspec_pending) <=
@@ -5546,7 +5442,7 @@ static QDF_STATUS sme_qos_process_add_ts_success_rsp(tpAniSirGlobal pMac,
 			     1].ts_info.psb)
 				/* update the session's apsd mask */
 				pSession->apsdMask &=
-					~(1 << (SME_QOS_EDCA_AC_VO - ac));
+					~(1 << (QCA_WLAN_AC_VO - ac));
 		} else {
 			QDF_TRACE(QDF_MODULE_ID_SME, QDF_TRACE_LEVEL_DEBUG,
 				  "%s: %d: Exceeded the array bounds of pACInfo->requested_QosInfo",
@@ -5599,7 +5495,7 @@ static QDF_STATUS sme_qos_process_add_ts_success_rsp(tpAniSirGlobal pMac,
 	pACInfo->curr_QoSInfo[tspec_pending - 1].medium_time =
 		pRsp->tspec.mediumTime;
 
-	sme_set_tspec_uapsd_mask_per_session(pMac,
+	sme_set_tspec_uapsd_mask_per_session(mac,
 			&pRsp->tspec.tsinfo, sessionId);
 
 	QDF_TRACE(QDF_MODULE_ID_SME, QDF_TRACE_LEVEL_DEBUG,
@@ -5630,7 +5526,7 @@ static QDF_STATUS sme_qos_process_add_ts_success_rsp(tpAniSirGlobal pMac,
 	search_key1.index = SME_QOS_SEARCH_KEY_INDEX_3;
 	search_key1.key.reason = SME_QOS_REASON_SETUP;
 	search_key1.sessionId = sessionId;
-	for (ac_index = SME_QOS_EDCA_AC_BE; ac_index < SME_QOS_EDCA_AC_MAX;
+	for (ac_index = QCA_WLAN_AC_BE; ac_index < QCA_WLAN_AC_ALL;
 	     ac_index++) {
 		pEntry = sme_qos_find_in_flow_list(search_key1);
 		if (pEntry) {
@@ -5651,7 +5547,7 @@ static QDF_STATUS sme_qos_process_add_ts_success_rsp(tpAniSirGlobal pMac,
 	/* notify all the other flows running on the AC that QoS got modified */
 	if (!QDF_IS_STATUS_SUCCESS
 		    (sme_qos_find_all_in_flow_list
-			    (pMac, search_key, sme_qos_add_ts_success_fnp))) {
+			    (mac, search_key, sme_qos_add_ts_success_fnp))) {
 		QDF_TRACE(QDF_MODULE_ID_SME, QDF_TRACE_LEVEL_ERROR,
 			  "%s: %d: On session %d no match found for ac %d",
 			  __func__, __LINE__, sessionId,
@@ -5703,9 +5599,6 @@ static QDF_STATUS sme_qos_process_add_ts_success_rsp(tpAniSirGlobal pMac,
 					      1].surplus_bw_allowance;
 		log_ptr->suspension_interval =
 			pACInfo->curr_QoSInfo[tspec_pending -
-					      1].surplus_bw_allowance;
-		log_ptr->suspension_interval =
-			pACInfo->curr_QoSInfo[tspec_pending -
 					      1].suspension_interval;
 		log_ptr->svc_start_time =
 			pACInfo->curr_QoSInfo[tspec_pending - 1].svc_start_time;
@@ -5727,19 +5620,17 @@ static QDF_STATUS sme_qos_process_add_ts_success_rsp(tpAniSirGlobal pMac,
 	sme_qos_state_transition(sessionId, ac, SME_QOS_QOS_ON);
 
 	/* Inform this TSPEC IE change to FW */
-	csr_session = CSR_GET_SESSION(pMac, sessionId);
-	if ((csr_session != NULL) && (NULL != csr_session->pCurRoamProfile) &&
-	    (csr_session->pCurRoamProfile->csrPersona == QDF_STA_MODE))
-		csr_roam_offload_scan(pMac, sessionId,
-				      ROAM_SCAN_OFFLOAD_UPDATE_CFG,
-				      REASON_CONNECT_IES_CHANGED);
+	opmode = wlan_get_opmode_from_vdev_id(mac->pdev, sessionId);
+	if (opmode == QDF_STA_MODE)
+		wlan_roam_update_cfg(mac->psoc, sessionId,
+				    REASON_CONNECT_IES_CHANGED);
 
 	(void)sme_qos_process_buffered_cmd(sessionId);
 	return QDF_STATUS_SUCCESS;
 }
 
 /*
- * sme_qos_aggregate_params() - Utiltity function to increament the TSPEC
+ * sme_qos_aggregate_params() - Utility function to increament the TSPEC
  *  params per AC. Typical usage while using flow aggregation or deletion of
  *  flows
  *
@@ -5900,7 +5791,7 @@ static QDF_STATUS sme_qos_aggregate_params(
 }
 
 /*
- * sme_qos_update_params() - Utiltity function to update the TSPEC
+ * sme_qos_update_params() - Utility function to update the TSPEC
  *  params per AC. Typical usage while deleting flows on AC which is running
  *  multiple flows
  *
@@ -5911,7 +5802,7 @@ static QDF_STATUS sme_qos_aggregate_params(
  * Return QDF_STATUS
  */
 static QDF_STATUS sme_qos_update_params(uint8_t sessionId,
-		sme_QosEdcaAcType ac,
+		enum qca_wlan_ac_type ac,
 		uint8_t tspec_mask,
 		struct sme_qos_wmmtspecinfo *pTspec_Info)
 {
@@ -5986,17 +5877,17 @@ static QDF_STATUS sme_qos_update_params(uint8_t sessionId,
 }
 
 /*
- * sme_qos_up_to_ac() - Utiltity function to map an UP to AC
+ * sme_qos_up_to_ac() - Utility function to map an UP to AC
  *
  * up - Enumeration of the various User priorities (UP).
  * Return an Access Category
  */
-static sme_QosEdcaAcType sme_qos_up_to_ac(enum sme_qos_wmmuptype up)
+static enum qca_wlan_ac_type sme_qos_up_to_ac(enum sme_qos_wmmuptype up)
 {
-	sme_QosEdcaAcType ac = SME_QOS_EDCA_AC_MAX;
+	enum qca_wlan_ac_type ac = QCA_WLAN_AC_ALL;
 
 	if (up >= 0 && up < SME_QOS_WMM_UP_MAX)
-		ac = sme_qos_u_pto_ac_map[up];
+		ac = sme_qos_up_to_ac_map[up];
 
 	QDF_TRACE(QDF_MODULE_ID_SME, QDF_TRACE_LEVEL_DEBUG,
 		  "%s: %d: up = %d ac = %d returned",
@@ -6015,7 +5906,7 @@ static sme_QosEdcaAcType sme_qos_up_to_ac(enum sme_qos_wmmuptype up)
  * Return None
  */
 static void sme_qos_state_transition(uint8_t sessionId,
-				     sme_QosEdcaAcType ac,
+				     enum qca_wlan_ac_type ac,
 				     enum sme_qos_states new_state)
 {
 	struct sme_qos_sessioninfo *pSession;
@@ -6025,10 +5916,10 @@ static void sme_qos_state_transition(uint8_t sessionId,
 	pACInfo = &pSession->ac_info[ac];
 	pACInfo->prev_state = pACInfo->curr_state;
 	pACInfo->curr_state = new_state;
-	QDF_TRACE(QDF_MODULE_ID_SME, QDF_TRACE_LEVEL_DEBUG,
-		  "%s: %d: On session %d new state=%d, old state=%d, for AC=%d",
-		  __func__, __LINE__,
-		  sessionId, pACInfo->curr_state, pACInfo->prev_state, ac);
+	if (pACInfo->curr_state != pACInfo->prev_state)
+		sme_debug("On session %d new %d old %d, for AC %d",
+			  sessionId, pACInfo->curr_state,
+			  pACInfo->prev_state, ac);
 }
 
 /**
@@ -6121,7 +6012,7 @@ static tListElem *sme_qos_find_in_flow_list(struct sme_qos_searchinfo
  *
  * Return: None
  */
-static QDF_STATUS sme_qos_find_all_in_flow_list(tpAniSirGlobal mac_ctx,
+static QDF_STATUS sme_qos_find_all_in_flow_list(struct mac_context *mac_ctx,
 					 struct sme_qos_searchinfo search_key,
 					 sme_QosProcessSearchEntry fnp)
 {
@@ -6129,7 +6020,7 @@ static QDF_STATUS sme_qos_find_all_in_flow_list(tpAniSirGlobal mac_ctx,
 	struct sme_qos_sessioninfo *qos_session;
 	struct sme_qos_flowinfoentry *flow_info = NULL;
 	QDF_STATUS status = QDF_STATUS_E_FAILURE;
-	sme_QosEdcaAcType ac_type;
+	enum qca_wlan_ac_type ac_type;
 
 	list_elt = csr_ll_peek_head(&sme_qos_cb.flow_list, false);
 	if (!list_elt) {
@@ -6189,26 +6080,21 @@ static QDF_STATUS sme_qos_find_all_in_flow_list(tpAniSirGlobal mac_ctx,
  *
  * Return true if the AC mandates Admission Control
  */
-static bool sme_qos_is_acm(tpAniSirGlobal pMac, tSirBssDescription *pSirBssDesc,
-		    sme_QosEdcaAcType ac, tDot11fBeaconIEs *pIes)
+static bool
+sme_qos_is_acm(struct mac_context *mac, struct bss_description *pSirBssDesc,
+	       enum qca_wlan_ac_type ac, tDot11fBeaconIEs *pIes)
 {
 	bool ret_val = false;
 	tDot11fBeaconIEs *pIesLocal;
 
-	if (!pSirBssDesc) {
-		QDF_TRACE(QDF_MODULE_ID_SME, QDF_TRACE_LEVEL_ERROR,
-			  "%s: %d: pSirBssDesc is NULL", __func__, __LINE__);
-		return false;
-	}
-
-	if (NULL != pIes)
+	if (pIes)
 		/* IEs were provided so use them locally */
 		pIesLocal = pIes;
 	else {
 		/* IEs were not provided so parse them ourselves */
 		if (!QDF_IS_STATUS_SUCCESS
 			    (csr_get_parsed_bss_description_ies
-				    (pMac, pSirBssDesc, &pIesLocal))) {
+				    (mac, pSirBssDesc, &pIesLocal))) {
 			/* err msg */
 			QDF_TRACE(QDF_MODULE_ID_SME, QDF_TRACE_LEVEL_ERROR,
 				  "%s: %d: csr_get_parsed_bss_description_ies() failed",
@@ -6221,19 +6107,19 @@ static bool sme_qos_is_acm(tpAniSirGlobal pMac, tSirBssDescription *pSirBssDesc,
 
 	if (CSR_IS_QOS_BSS(pIesLocal)) {
 		switch (ac) {
-		case SME_QOS_EDCA_AC_BE:
+		case QCA_WLAN_AC_BE:
 			if (pIesLocal->WMMParams.acbe_acm)
 				ret_val = true;
 			break;
-		case SME_QOS_EDCA_AC_BK:
+		case QCA_WLAN_AC_BK:
 			if (pIesLocal->WMMParams.acbk_acm)
 				ret_val = true;
 			break;
-		case SME_QOS_EDCA_AC_VI:
+		case QCA_WLAN_AC_VI:
 			if (pIesLocal->WMMParams.acvi_acm)
 				ret_val = true;
 			break;
-		case SME_QOS_EDCA_AC_VO:
+		case QCA_WLAN_AC_VO:
 			if (pIesLocal->WMMParams.acvo_acm)
 				ret_val = true;
 			break;
@@ -6247,7 +6133,7 @@ static bool sme_qos_is_acm(tpAniSirGlobal pMac, tSirBssDescription *pSirBssDesc,
 	QDF_TRACE(QDF_MODULE_ID_SME, QDF_TRACE_LEVEL_DEBUG,
 		  "%s: %d: ACM = %d for AC = %d",
 		  __func__, __LINE__, ret_val, ac);
-	if (NULL == pIes)
+	if (!pIes)
 		/* IEs were allocated locally so free them */
 		qdf_mem_free(pIesLocal);
 
@@ -6264,7 +6150,7 @@ static bool sme_qos_is_acm(tpAniSirGlobal pMac, tSirBssDescription *pSirBssDesc,
  *
  * Return: QDF_STATUS
  */
-static QDF_STATUS sme_qos_buffer_existing_flows(tpAniSirGlobal mac_ctx,
+static QDF_STATUS sme_qos_buffer_existing_flows(struct mac_context *mac_ctx,
 						uint8_t sessionid)
 {
 	tListElem *list_entry = NULL, *list_nextentry = NULL;
@@ -6293,7 +6179,7 @@ static QDF_STATUS sme_qos_buffer_existing_flows(tpAniSirGlobal mac_ctx,
 		if ((SME_QOS_REASON_REQ_SUCCESS == flow_info->reason) ||
 		    (SME_QOS_REASON_SETUP == flow_info->reason)) {
 			cmd.command = SME_QOS_SETUP_REQ;
-			cmd.pMac = mac_ctx;
+			cmd.mac = mac_ctx;
 			cmd.sessionId = sessionid;
 			setupinfo = &cmd.u.setupCmdInfo;
 
@@ -6321,7 +6207,7 @@ static QDF_STATUS sme_qos_buffer_existing_flows(tpAniSirGlobal mac_ctx,
 					  flow_info->QosFlowID);
 		} else if (SME_QOS_REASON_RELEASE == flow_info->reason) {
 			cmd.command = SME_QOS_RELEASE_REQ;
-			cmd.pMac = mac_ctx;
+			cmd.mac = mac_ctx;
 			cmd.sessionId = sessionid;
 			cmd.u.releaseCmdInfo.QosFlowID = flow_info->QosFlowID;
 			if (!QDF_IS_STATUS_SUCCESS
@@ -6338,7 +6224,7 @@ static QDF_STATUS sme_qos_buffer_existing_flows(tpAniSirGlobal mac_ctx,
 		} else if (SME_QOS_REASON_MODIFY_PENDING ==
 			   flow_info->reason) {
 			cmd.command = SME_QOS_MODIFY_REQ;
-			cmd.pMac = mac_ctx;
+			cmd.mac = mac_ctx;
 			cmd.sessionId = sessionid;
 			cmd.u.modifyCmdInfo.QosFlowID = flow_info->QosFlowID;
 			cmd.u.modifyCmdInfo.QoSInfo = flow_info->QoSInfo;
@@ -6364,7 +6250,6 @@ static QDF_STATUS sme_qos_buffer_existing_flows(tpAniSirGlobal mac_ctx,
 		list_entry = list_nextentry;
 	}
 	qos_session = &sme_qos_cb.sessionInfo[sessionid];
-	qos_session->uapsdAlreadyRequested = false;
 	return QDF_STATUS_SUCCESS;
 }
 
@@ -6374,7 +6259,7 @@ static QDF_STATUS sme_qos_buffer_existing_flows(tpAniSirGlobal mac_ctx,
  *
  *  Return QDF_STATUS
  */
-static QDF_STATUS sme_qos_delete_existing_flows(tpAniSirGlobal pMac,
+static QDF_STATUS sme_qos_delete_existing_flows(struct mac_context *mac,
 						uint8_t sessionId)
 {
 	tListElem *pEntry = NULL, *pNextEntry = NULL;
@@ -6396,7 +6281,7 @@ static QDF_STATUS sme_qos_delete_existing_flows(tpAniSirGlobal pMac,
 			    (SME_QOS_REASON_SETUP == flow_info->reason) ||
 			    (SME_QOS_REASON_RELEASE == flow_info->reason) ||
 			    (SME_QOS_REASON_MODIFY == flow_info->reason)) {
-				flow_info->QoSCallback(pMac,
+				flow_info->QoSCallback(MAC_HANDLE(mac),
 						       flow_info->HDDcontext,
 						       NULL,
 					SME_QOS_STATUS_RELEASE_QOS_LOST_IND,
@@ -6435,15 +6320,10 @@ static QDF_STATUS sme_qos_buffer_cmd(struct sme_qos_cmdinfo *pcmd,
 
 	QDF_TRACE(QDF_MODULE_ID_SME, QDF_TRACE_LEVEL_DEBUG,
 		  "%s: %d: Invoked", __func__, __LINE__);
-	pentry = (struct sme_qos_cmdinfoentry *) qdf_mem_malloc(sizeof(
-					struct sme_qos_cmdinfoentry));
-	if (!pentry) {
-		/* err msg */
-		QDF_TRACE(QDF_MODULE_ID_SME, QDF_TRACE_LEVEL_ERROR,
-			  "%s: %d: Memory allocation failure",
-			  __func__, __LINE__);
+	pentry = qdf_mem_malloc(sizeof(struct sme_qos_cmdinfoentry));
+	if (!pentry)
 		return QDF_STATUS_E_NOMEM;
-	}
+
 	/* copy the entire CmdInfo */
 	pentry->cmdInfo = *pcmd;
 
@@ -6486,7 +6366,6 @@ static QDF_STATUS sme_qos_process_buffered_cmd(uint8_t session_id)
 			QDF_TRACE(QDF_MODULE_ID_SME, QDF_TRACE_LEVEL_ERROR,
 				  FL("no more buffered commands on session %d"),
 				  session_id);
-			qos_session->readyForPowerSave = true;
 			return QDF_STATUS_E_FAILURE;
 		}
 		pcmd = GET_BASE_ADDR(list_elt, struct sme_qos_cmdinfoentry,
@@ -6498,7 +6377,7 @@ static QDF_STATUS sme_qos_process_buffered_cmd(uint8_t session_id)
 		switch (qos_cmd->command) {
 		case SME_QOS_SETUP_REQ:
 			hdd_status = sme_qos_internal_setup_req(
-				       qos_cmd->pMac, qos_cmd->sessionId,
+				       qos_cmd->mac, qos_cmd->sessionId,
 				       &qos_cmd->u.setupCmdInfo.QoSInfo,
 				       qos_cmd->u.setupCmdInfo.QoSCallback,
 				       qos_cmd->u.setupCmdInfo.HDDcontext,
@@ -6514,7 +6393,7 @@ static QDF_STATUS sme_qos_process_buffered_cmd(uint8_t session_id)
 			}
 			break;
 		case SME_QOS_RELEASE_REQ:
-			hdd_status = sme_qos_internal_release_req(qos_cmd->pMac,
+			hdd_status = sme_qos_internal_release_req(qos_cmd->mac,
 					qos_cmd->sessionId,
 					qos_cmd->u.releaseCmdInfo.QosFlowID,
 					true);
@@ -6527,7 +6406,7 @@ static QDF_STATUS sme_qos_process_buffered_cmd(uint8_t session_id)
 			}
 			break;
 		case SME_QOS_MODIFY_REQ:
-			hdd_status = sme_qos_internal_modify_req(qos_cmd->pMac,
+			hdd_status = sme_qos_internal_modify_req(qos_cmd->mac,
 					&qos_cmd->u.modifyCmdInfo.QoSInfo,
 					qos_cmd->u.modifyCmdInfo.QosFlowID,
 					true);
@@ -6541,7 +6420,7 @@ static QDF_STATUS sme_qos_process_buffered_cmd(uint8_t session_id)
 			}
 			break;
 		case SME_QOS_RESEND_REQ:
-			hdd_status = sme_qos_re_request_add_ts(qos_cmd->pMac,
+			hdd_status = sme_qos_re_request_add_ts(qos_cmd->mac,
 					qos_cmd->sessionId,
 					&qos_cmd->u.resendCmdInfo.QoSInfo,
 					qos_cmd->u.resendCmdInfo.ac,
@@ -6566,7 +6445,6 @@ static QDF_STATUS sme_qos_process_buffered_cmd(uint8_t session_id)
 	} else {
 		QDF_TRACE(QDF_MODULE_ID_SME, QDF_TRACE_LEVEL_DEBUG,
 			  FL("cmd buffer empty"));
-		qos_session->readyForPowerSave = true;
 	}
 	return qdf_ret_status;
 }
@@ -6577,7 +6455,7 @@ static QDF_STATUS sme_qos_process_buffered_cmd(uint8_t session_id)
  *
  * Return QDF_STATUS
  */
-static QDF_STATUS sme_qos_delete_buffered_requests(tpAniSirGlobal pMac,
+static QDF_STATUS sme_qos_delete_buffered_requests(struct mac_context *mac,
 						   uint8_t sessionId)
 {
 	struct sme_qos_sessioninfo *pSession;
@@ -6629,34 +6507,30 @@ static QDF_STATUS sme_qos_delete_buffered_requests(tpAniSirGlobal pMac,
 static QDF_STATUS sme_qos_save_assoc_info(struct sme_qos_sessioninfo *pSession,
 				   sme_QosAssocInfo *pAssoc_info)
 {
-	tSirBssDescription *pBssDesc = NULL;
+	struct bss_description *bss_desc = NULL;
 	uint32_t bssLen = 0;
 
-	if (NULL == pAssoc_info) {
+	if (!pAssoc_info) {
 		QDF_TRACE(QDF_MODULE_ID_SME, QDF_TRACE_LEVEL_ERROR,
 			  "%s: %d: pAssoc_info is NULL", __func__, __LINE__);
 		return QDF_STATUS_E_FAILURE;
 	}
 	/* clean up the assoc info if already set */
-	if (pSession->assocInfo.pBssDesc) {
-		qdf_mem_free(pSession->assocInfo.pBssDesc);
-		pSession->assocInfo.pBssDesc = NULL;
+	if (pSession->assocInfo.bss_desc) {
+		qdf_mem_free(pSession->assocInfo.bss_desc);
+		pSession->assocInfo.bss_desc = NULL;
 	}
-	bssLen = pAssoc_info->pBssDesc->length +
-		 sizeof(pAssoc_info->pBssDesc->length);
+	bssLen = pAssoc_info->bss_desc->length +
+		 sizeof(pAssoc_info->bss_desc->length);
 	/* save the bss Descriptor */
-	pBssDesc = (tSirBssDescription *) qdf_mem_malloc(bssLen);
-	if (!pBssDesc) {
-		QDF_TRACE(QDF_MODULE_ID_SME, QDF_TRACE_LEVEL_ERROR,
-			  "%s: %d: couldn't allocate memory for the bss Descriptor",
-			  __func__, __LINE__);
+	bss_desc = qdf_mem_malloc(bssLen);
+	if (!bss_desc)
 		return QDF_STATUS_E_NOMEM;
-	}
-	qdf_mem_copy(pBssDesc, pAssoc_info->pBssDesc, bssLen);
-	pSession->assocInfo.pBssDesc = pBssDesc;
+
+	qdf_mem_copy(bss_desc, pAssoc_info->bss_desc, bssLen);
+	pSession->assocInfo.bss_desc = bss_desc;
 	/* save the apsd info from assoc */
-	if (pAssoc_info->pProfile)
-		pSession->apsdMask |= pAssoc_info->pProfile->uapsd_mask;
+	pSession->apsdMask |= pAssoc_info->uapsd_mask;
 
 	/* [TODO] Do we need to update the global APSD bitmap? */
 	return QDF_STATUS_SUCCESS;
@@ -6666,18 +6540,18 @@ static QDF_STATUS sme_qos_save_assoc_info(struct sme_qos_sessioninfo *pSession,
  * sme_qos_setup_fnp() - Utility function (pointer) to notify other entries
  *  in FLOW list on the same AC that qos params got modified
  *
- * pMac - Pointer to the global MAC parameter structure.
+ * mac - Pointer to the global MAC parameter structure.
  * pEntry - Pointer to an entry in the flow_list(i.e. tListElem structure)
  *
  * Return QDF_STATUS
  */
-static QDF_STATUS sme_qos_setup_fnp(tpAniSirGlobal pMac, tListElem *pEntry)
+static QDF_STATUS sme_qos_setup_fnp(struct mac_context *mac, tListElem *pEntry)
 {
 	struct sme_qos_sessioninfo *pSession;
 	struct sme_qos_acinfo *pACInfo;
 	struct sme_qos_flowinfoentry *flow_info = NULL;
 	enum sme_qos_statustype hdd_status = SME_QOS_STATUS_SETUP_MODIFIED_IND;
-	sme_QosEdcaAcType ac;
+	enum qca_wlan_ac_type ac;
 
 	if (!pEntry) {
 		QDF_TRACE(QDF_MODULE_ID_SME, QDF_TRACE_LEVEL_ERROR,
@@ -6690,7 +6564,8 @@ static QDF_STATUS sme_qos_setup_fnp(tpAniSirGlobal pMac, tListElem *pEntry)
 	pACInfo = &pSession->ac_info[ac];
 	if (SME_QOS_REASON_REQ_SUCCESS == flow_info->reason) {
 		/* notify HDD, only the other Flows running on the AC */
-		flow_info->QoSCallback(pMac, flow_info->HDDcontext,
+		flow_info->QoSCallback(MAC_HANDLE(mac),
+				       flow_info->HDDcontext,
 				       &pACInfo->curr_QoSInfo[flow_info->
 							      tspec_mask - 1],
 				       hdd_status, flow_info->QosFlowID);
@@ -6705,19 +6580,19 @@ static QDF_STATUS sme_qos_setup_fnp(tpAniSirGlobal pMac, tListElem *pEntry)
  * sme_qos_modification_notify_fnp() - Utility function (pointer) to notify
  *  other entries in FLOW list on the same AC that qos params got modified
  *
- * pMac - Pointer to the global MAC parameter structure.
+ * mac - Pointer to the global MAC parameter structure.
  * pEntry - Pointer to an entry in the flow_list(i.e. tListElem structure)
  *
  * Return QDF_STATUS
  */
-static QDF_STATUS sme_qos_modification_notify_fnp(tpAniSirGlobal pMac, tListElem
+static QDF_STATUS sme_qos_modification_notify_fnp(struct mac_context *mac, tListElem
 					*pEntry)
 {
 	struct sme_qos_sessioninfo *pSession;
 	struct sme_qos_acinfo *pACInfo;
 	struct sme_qos_flowinfoentry *flow_info = NULL;
 	enum sme_qos_statustype hdd_status = SME_QOS_STATUS_SETUP_MODIFIED_IND;
-	sme_QosEdcaAcType ac;
+	enum qca_wlan_ac_type ac;
 
 	if (!pEntry) {
 		QDF_TRACE(QDF_MODULE_ID_SME, QDF_TRACE_LEVEL_ERROR,
@@ -6730,7 +6605,8 @@ static QDF_STATUS sme_qos_modification_notify_fnp(tpAniSirGlobal pMac, tListElem
 	pACInfo = &pSession->ac_info[ac];
 	if (SME_QOS_REASON_REQ_SUCCESS == flow_info->reason) {
 		/* notify HDD, only the other Flows running on the AC */
-		flow_info->QoSCallback(pMac, flow_info->HDDcontext,
+		flow_info->QoSCallback(MAC_HANDLE(mac),
+				       flow_info->HDDcontext,
 				       &pACInfo->curr_QoSInfo[flow_info->
 							      tspec_mask - 1],
 				       hdd_status, flow_info->QosFlowID);
@@ -6745,12 +6621,12 @@ static QDF_STATUS sme_qos_modification_notify_fnp(tpAniSirGlobal pMac, tListElem
  * sme_qos_modify_fnp() - Utility function (pointer) to delete the origianl
  *  entry in FLOW list & add the modified one
  *
- * pMac - Pointer to the global MAC parameter structure.
+ * mac - Pointer to the global MAC parameter structure.
  * pEntry - Pointer to an entry in the flow_list(i.e. tListElem structure)
  *
  * Return QDF_STATUS
  */
-static QDF_STATUS sme_qos_modify_fnp(tpAniSirGlobal pMac, tListElem *pEntry)
+static QDF_STATUS sme_qos_modify_fnp(struct mac_context *mac, tListElem *pEntry)
 {
 	struct sme_qos_flowinfoentry *flow_info = NULL;
 
@@ -6790,17 +6666,17 @@ static QDF_STATUS sme_qos_modify_fnp(tpAniSirGlobal pMac, tListElem *pEntry)
  *  the perticular AC & delete them, also send HDD indication through the
  * callback it registered per request
  *
- * pMac - Pointer to the global MAC parameter structure.
+ * mac - Pointer to the global MAC parameter structure.
  * pEntry - Pointer to an entry in the flow_list(i.e. tListElem structure)
  *
  * Return QDF_STATUS
  */
-static QDF_STATUS sme_qos_del_ts_ind_fnp(tpAniSirGlobal pMac, tListElem *pEntry)
+static QDF_STATUS sme_qos_del_ts_ind_fnp(struct mac_context *mac, tListElem *pEntry)
 {
 	struct sme_qos_sessioninfo *pSession;
 	struct sme_qos_acinfo *pACInfo;
 	struct sme_qos_flowinfoentry *flow_info = NULL;
-	sme_QosEdcaAcType ac;
+	enum qca_wlan_ac_type ac;
 	QDF_STATUS lock_status = QDF_STATUS_E_FAILURE;
 	enum sme_qos_statustype status;
 
@@ -6816,7 +6692,7 @@ static QDF_STATUS sme_qos_del_ts_ind_fnp(tpAniSirGlobal pMac, tListElem *pEntry)
 	pACInfo = &pSession->ac_info[ac];
 	pACInfo->relTrig = SME_QOS_RELEASE_BY_AP;
 
-	lock_status = sme_acquire_global_lock(&pMac->sme);
+	lock_status = sme_acquire_global_lock(&mac->sme);
 	if (!QDF_IS_STATUS_SUCCESS(lock_status)) {
 		QDF_TRACE(QDF_MODULE_ID_SME, QDF_TRACE_LEVEL_ERROR,
 			  "%s: %d: Unable to obtain lock", __func__, __LINE__);
@@ -6826,9 +6702,9 @@ static QDF_STATUS sme_qos_del_ts_ind_fnp(tpAniSirGlobal pMac, tListElem *pEntry)
 	 * abstraction
 	 */
 	status =
-		sme_qos_internal_release_req(pMac, flow_info->sessionId,
+		sme_qos_internal_release_req(mac, flow_info->sessionId,
 					     flow_info->QosFlowID, false);
-	sme_release_global_lock(&pMac->sme);
+	sme_release_global_lock(&mac->sme);
 	QDF_TRACE(QDF_MODULE_ID_SME, QDF_TRACE_LEVEL_DEBUG,
 		  "%s: %d: QoS Release return status on Flow %d is %d",
 		  __func__, __LINE__, flow_info->QosFlowID, status);
@@ -6849,7 +6725,7 @@ static QDF_STATUS sme_qos_del_ts_ind_fnp(tpAniSirGlobal pMac, tListElem *pEntry)
  * Return:  QDF_STATUS enumaration
  */
 static QDF_STATUS
-sme_qos_reassoc_success_ev_fnp(tpAniSirGlobal mac_ctx,
+sme_qos_reassoc_success_ev_fnp(struct mac_context *mac_ctx,
 		tListElem *entry)
 {
 	struct sme_qos_sessioninfo *qos_session;
@@ -6857,7 +6733,7 @@ sme_qos_reassoc_success_ev_fnp(tpAniSirGlobal mac_ctx,
 	struct sme_qos_flowinfoentry *flow_info = NULL;
 	bool delete_entry = false;
 	enum sme_qos_statustype hdd_status = SME_QOS_STATUS_SETUP_FAILURE_RSP;
-	sme_QosEdcaAcType ac;
+	enum qca_wlan_ac_type ac;
 	QDF_STATUS pmc_status = QDF_STATUS_E_FAILURE;
 
 	if (!entry) {
@@ -6881,15 +6757,12 @@ sme_qos_reassoc_success_ev_fnp(tpAniSirGlobal mac_ctx,
 		 * do anything.
 		 */
 		if (ac_info->requested_QoSInfo[SME_QOS_TSPEC_INDEX_0].
-				ts_info.psb &&
-				!qos_session->uapsdAlreadyRequested) {
+				ts_info.psb) {
 			/* this is the first flow to detect we need
 			 * PMC in UAPSD mode
 			 */
-			pmc_status = sme_ps_start_uapsd(mac_ctx,
-					flow_info->sessionId,
-				sme_qos_pmc_offload_start_uapsd_callback,
-					qos_session);
+			pmc_status = sme_ps_start_uapsd(MAC_HANDLE(mac_ctx),
+							flow_info->sessionId);
 			/* if PMC doesn't return success right away means
 			 * it is yet to put the module in BMPS state & later
 			 * to UAPSD state
@@ -6899,11 +6772,6 @@ sme_qos_reassoc_success_ev_fnp(tpAniSirGlobal mac_ctx,
 					SME_QOS_STATUS_SETUP_SUCCESS_IND_APSD_SET_FAILED;
 				/* we need to always notify this case */
 				flow_info->hoRenewal = false;
-			} else if (QDF_STATUS_PMC_PENDING == pmc_status) {
-				/* let other flows know PMC has been notified */
-				qos_session->uapsdAlreadyRequested =
-				true;
-
 			}
 		}
 		/* for any other pmc status we declare success */
@@ -6919,15 +6787,12 @@ sme_qos_reassoc_success_ev_fnp(tpAniSirGlobal mac_ctx,
 		delete_entry = false;
 		flow_info->reason = SME_QOS_REASON_REQ_SUCCESS;
 		if (ac_info->requested_QoSInfo[SME_QOS_TSPEC_INDEX_0].
-				ts_info.psb &&
-				!qos_session->uapsdAlreadyRequested) {
+				ts_info.psb) {
 			/* this is the first flow to detect we need
 			 * PMC in UAPSD mode
 			 */
-			pmc_status = sme_ps_start_uapsd(mac_ctx,
-					 flow_info->sessionId,
-				sme_qos_pmc_offload_start_uapsd_callback,
-					 qos_session);
+			pmc_status = sme_ps_start_uapsd(MAC_HANDLE(mac_ctx),
+							flow_info->sessionId);
 			/* if PMC doesn't return success right away means
 			 * it is yet to put the module in BMPS state &
 			 * later to UAPSD state
@@ -6937,8 +6802,7 @@ sme_qos_reassoc_success_ev_fnp(tpAniSirGlobal mac_ctx,
 					SME_QOS_STATUS_MODIFY_SETUP_SUCCESS_IND_APSD_SET_FAILED;
 				/* we need to always notify this case */
 				flow_info->hoRenewal = false;
-			} else if (QDF_STATUS_PMC_PENDING == pmc_status)
-				qos_session->uapsdAlreadyRequested = true;
+			}
 		}
 		/* for any other pmc status we declare success */
 		break;
@@ -6951,9 +6815,11 @@ sme_qos_reassoc_success_ev_fnp(tpAniSirGlobal mac_ctx,
 	}
 	if (!delete_entry) {
 		if (!flow_info->hoRenewal) {
-			flow_info->QoSCallback(mac_ctx, flow_info->HDDcontext,
-				&ac_info->curr_QoSInfo[SME_QOS_TSPEC_INDEX_0],
-				hdd_status, flow_info->QosFlowID);
+			flow_info->QoSCallback(MAC_HANDLE(mac_ctx),
+					       flow_info->HDDcontext,
+					       &ac_info->curr_QoSInfo[SME_QOS_TSPEC_INDEX_0],
+					       hdd_status,
+					       flow_info->QosFlowID);
 		} else
 			flow_info->hoRenewal = false;
 	} else {
@@ -6977,12 +6843,12 @@ sme_qos_reassoc_success_ev_fnp(tpAniSirGlobal mac_ctx,
  * of an flow modification requested on the AC, delete the new entry from Flow
  * list & notify HDD
  *
- * pMac - Pointer to the global MAC parameter structure.
+ * mac - Pointer to the global MAC parameter structure.
  * pEntry - Pointer to an entry in the flow_list(i.e. tListElem structure)
  *
  *  Return QDF_STATUS
  */
-static QDF_STATUS sme_qos_add_ts_failure_fnp(tpAniSirGlobal pMac, tListElem
+static QDF_STATUS sme_qos_add_ts_failure_fnp(struct mac_context *mac, tListElem
 						*pEntry)
 {
 	struct sme_qos_sessioninfo *pSession;
@@ -6990,7 +6856,7 @@ static QDF_STATUS sme_qos_add_ts_failure_fnp(tpAniSirGlobal pMac, tListElem
 	struct sme_qos_flowinfoentry *flow_info = NULL;
 	bool inform_hdd = false;
 	enum sme_qos_statustype hdd_status = SME_QOS_STATUS_SETUP_FAILURE_RSP;
-	sme_QosEdcaAcType ac;
+	enum qca_wlan_ac_type ac;
 
 	if (!pEntry) {
 		QDF_TRACE(QDF_MODULE_ID_SME, QDF_TRACE_LEVEL_ERROR,
@@ -7018,7 +6884,9 @@ static QDF_STATUS sme_qos_add_ts_failure_fnp(tpAniSirGlobal pMac, tListElem
 		break;
 	case SME_QOS_REASON_MODIFY:
 		flow_info->reason = SME_QOS_REASON_REQ_SUCCESS;
+		/* fallthrough */
 	case SME_QOS_REASON_REQ_SUCCESS:
+		/* fallthrough */
 	default:
 		inform_hdd = false;
 		break;
@@ -7028,14 +6896,16 @@ static QDF_STATUS sme_qos_add_ts_failure_fnp(tpAniSirGlobal pMac, tListElem
 		 * the AC stay intact
 		 */
 		if (!flow_info->hoRenewal) {
-			flow_info->QoSCallback(pMac, flow_info->HDDcontext,
+			flow_info->QoSCallback(MAC_HANDLE(mac),
+					       flow_info->HDDcontext,
 					       &pACInfo->curr_QoSInfo[pACInfo->
 								   tspec_pending
 								      - 1],
 					       hdd_status,
 					       flow_info->QosFlowID);
 		} else {
-			flow_info->QoSCallback(pMac, flow_info->HDDcontext,
+			flow_info->QoSCallback(MAC_HANDLE(mac),
+					       flow_info->HDDcontext,
 					       &pACInfo->curr_QoSInfo[pACInfo->
 								   tspec_pending
 								      - 1],
@@ -7074,7 +6944,7 @@ static QDF_STATUS sme_qos_add_ts_failure_fnp(tpAniSirGlobal pMac, tListElem
  * Return: Status
  */
 
-static QDF_STATUS sme_qos_add_ts_success_fnp(tpAniSirGlobal mac_ctx,
+static QDF_STATUS sme_qos_add_ts_success_fnp(struct mac_context *mac_ctx,
 		tListElem *entry)
 {
 	struct sme_qos_sessioninfo *qos_session;
@@ -7083,7 +6953,7 @@ static QDF_STATUS sme_qos_add_ts_success_fnp(tpAniSirGlobal mac_ctx,
 	bool inform_hdd = false;
 	bool delete_entry = false;
 	enum sme_qos_statustype hdd_status = SME_QOS_STATUS_SETUP_FAILURE_RSP;
-	sme_QosEdcaAcType ac;
+	enum qca_wlan_ac_type ac;
 	QDF_STATUS pmc_status = QDF_STATUS_E_FAILURE;
 	tCsrRoamModifyProfileFields profile_fields;
 	uint8_t psb;
@@ -7115,15 +6985,12 @@ static QDF_STATUS sme_qos_add_ts_success_fnp(tpAniSirGlobal mac_ctx,
 		 * notify PMC as App is looking for APSD. If we already
 		 * requested then we don't need to do anything
 		 */
-		if (ac_info->requested_QoSInfo[tspec_index].ts_info.psb &&
-			!qos_session->uapsdAlreadyRequested) {
+		if (ac_info->requested_QoSInfo[tspec_index].ts_info.psb) {
 			/* this is the first flow to detect we need
 			 * PMC in UAPSD mode
 			 */
-			pmc_status = sme_ps_start_uapsd(mac_ctx,
-				flow_info->sessionId,
-				sme_qos_pmc_offload_start_uapsd_callback,
-				qos_session);
+			pmc_status = sme_ps_start_uapsd(MAC_HANDLE(mac_ctx),
+							flow_info->sessionId);
 			/* if PMC doesn't return success right away means
 			 * it is yet to put the module in BMPS state & later
 			 * to UAPSD state
@@ -7133,10 +7000,7 @@ static QDF_STATUS sme_qos_add_ts_success_fnp(tpAniSirGlobal mac_ctx,
 					SME_QOS_STATUS_SETUP_SUCCESS_IND_APSD_SET_FAILED;
 				/* we need to always notify this case */
 				flow_info->hoRenewal = false;
-			} else if (QDF_STATUS_PMC_PENDING == pmc_status)
-				/* let other flows know PMC has been notified */
-				qos_session->uapsdAlreadyRequested = true;
-			/* for any other pmc status we declare success */
+			}
 		}
 		break;
 	case SME_QOS_REASON_RELEASE:
@@ -7156,18 +7020,13 @@ static QDF_STATUS sme_qos_add_ts_success_fnp(tpAniSirGlobal mac_ctx,
 		inform_hdd = true;
 		psb = ac_info->requested_QoSInfo[tspec_index].ts_info.psb;
 		/* notify PMC if App is looking for APSD
-		 * notify PMC as App is looking for APSD. If we already
-		 * requested then we don't need to do anything.
 		 */
-		if (psb && !qos_session->uapsdAlreadyRequested) {
+		if (psb) {
 			/* this is the first flow to detect
 			 * we need PMC in UAPSD mode
 			 */
-			pmc_status =
-				sme_ps_start_uapsd(mac_ctx,
-					flow_info->sessionId,
-				sme_qos_pmc_offload_start_uapsd_callback,
-					qos_session);
+			pmc_status = sme_ps_start_uapsd(MAC_HANDLE(mac_ctx),
+							flow_info->sessionId);
 			/* if PMC doesn't return success right
 			 * away means it is yet to put
 			 * the module in BMPS state & later to UAPSD state
@@ -7177,11 +7036,7 @@ static QDF_STATUS sme_qos_add_ts_success_fnp(tpAniSirGlobal mac_ctx,
 				 SME_QOS_STATUS_MODIFY_SETUP_SUCCESS_IND_APSD_SET_FAILED;
 				/* we need to always notify this case */
 				flow_info->hoRenewal = false;
-			} else if (QDF_STATUS_PMC_PENDING == pmc_status)
-				/* let other flows know PMC has been notified */
-				qos_session->uapsdAlreadyRequested = true;
-
-			/* for any other pmc status we declare success */
+			}
 		} else if (!psb &&
 		((ac_info->num_flows[flow_info->tspec_mask - 1] == 1)
 			    && (SME_QOS_TSPEC_MASK_BIT_1_2_SET !=
@@ -7189,7 +7044,7 @@ static QDF_STATUS sme_qos_add_ts_success_fnp(tpAniSirGlobal mac_ctx,
 			/* this is the only TSPEC active on this AC */
 			/* so indicate that we no longer require APSD */
 			qos_session->apsdMask &=
-				~(1 << (SME_QOS_EDCA_AC_VO - ac));
+				~(1 << (QCA_WLAN_AC_VO - ac));
 			/* Also update modifyProfileFields.uapsd_mask
 			 * in CSR for consistency
 			 */
@@ -7202,23 +7057,25 @@ static QDF_STATUS sme_qos_add_ts_success_fnp(tpAniSirGlobal mac_ctx,
 				flow_info->sessionId,
 				&profile_fields);
 			if (!qos_session->apsdMask)
-				sme_ps_uapsd_disable(mac_ctx,
+				sme_ps_uapsd_disable(MAC_HANDLE(mac_ctx),
 					flow_info->sessionId);
 		}
 		break;
 	case SME_QOS_REASON_REQ_SUCCESS:
 		hdd_status = SME_QOS_STATUS_SETUP_MODIFIED_IND;
 		inform_hdd = true;
+	/* fallthrough */
 	default:
 		delete_entry = false;
 		break;
 	}
 	if (inform_hdd) {
 		if (!flow_info->hoRenewal) {
-			flow_info->QoSCallback(mac_ctx, flow_info->HDDcontext,
-			&ac_info->curr_QoSInfo[tspec_index],
-			hdd_status,
-			flow_info->QosFlowID);
+			flow_info->QoSCallback(MAC_HANDLE(mac_ctx),
+					       flow_info->HDDcontext,
+					       &ac_info->curr_QoSInfo[tspec_index],
+					       hdd_status,
+					       flow_info->QosFlowID);
 		} else
 			flow_info->hoRenewal = false;
 	}
@@ -7244,15 +7101,15 @@ static QDF_STATUS sme_qos_add_ts_success_fnp(tpAniSirGlobal mac_ctx,
  * Return bool
  *  true - Response is pending on an AC
  */
-static bool sme_qos_is_rsp_pending(uint8_t sessionId, sme_QosEdcaAcType ac)
+static bool sme_qos_is_rsp_pending(uint8_t sessionId, enum qca_wlan_ac_type ac)
 {
 	struct sme_qos_sessioninfo *pSession;
 	struct sme_qos_acinfo *pACInfo;
-	sme_QosEdcaAcType acIndex;
+	enum qca_wlan_ac_type acIndex;
 	bool status = false;
 
 	pSession = &sme_qos_cb.sessionInfo[sessionId];
-	for (acIndex = SME_QOS_EDCA_AC_BE; acIndex < SME_QOS_EDCA_AC_MAX;
+	for (acIndex = QCA_WLAN_AC_BE; acIndex < QCA_WLAN_AC_ALL;
 	     acIndex++) {
 		if (acIndex == ac)
 			continue;
@@ -7299,7 +7156,7 @@ static bool sme_qos_is_uapsd_active(void)
 	struct sme_qos_sessioninfo *pSession;
 	uint8_t sessionId;
 
-	for (sessionId = 0; sessionId < CSR_ROAM_SESSION_MAX; ++sessionId) {
+	for (sessionId = 0; sessionId < WLAN_MAX_VDEVS; ++sessionId) {
 		pSession = &sme_qos_cb.sessionInfo[sessionId];
 		if ((pSession->sessionActive) && (pSession->apsdMask))
 			return true;
@@ -7308,24 +7165,7 @@ static bool sme_qos_is_uapsd_active(void)
 	return false;
 }
 
-/*
- * sme_QosPmcStartUAPSDCallback() - Callback function registered with PMC
- *  to notify SME-QoS when it puts the chip into UAPSD mode
- *
- * callbackContext - The context passed to PMC during pmc_start_uapsd call.
- * status - QDF_STATUS returned by PMC.
- *
- * Return None
- */
-static void sme_qos_pmc_offload_start_uapsd_callback(void *callbackContext,
-					  uint32_t sessionId, QDF_STATUS status)
-{
-	struct sme_qos_sessioninfo *pSession = callbackContext;
-
-	pSession->uapsdAlreadyRequested = false;
-}
-
-QDF_STATUS sme_offload_qos_process_out_of_uapsd_mode(tpAniSirGlobal pMac,
+QDF_STATUS sme_offload_qos_process_out_of_uapsd_mode(struct mac_context *mac,
 						     uint32_t sessionId)
 {
 	struct sme_qos_sessioninfo *pSession;
@@ -7351,7 +7191,8 @@ QDF_STATUS sme_offload_qos_process_out_of_uapsd_mode(tpAniSirGlobal pMac,
 		    (flow_info->QoSInfo.max_service_interval ||
 		     flow_info->QoSInfo.min_service_interval) &&
 		    (SME_QOS_REASON_REQ_SUCCESS == flow_info->reason)) {
-			flow_info->QoSCallback(pMac, flow_info->HDDcontext,
+			flow_info->QoSCallback(MAC_HANDLE(mac),
+					       flow_info->HDDcontext,
 					       &pSession->ac_info[flow_info->
 							ac_type].curr_QoSInfo
 					       [flow_info->tspec_mask - 1],
@@ -7363,7 +7204,7 @@ QDF_STATUS sme_offload_qos_process_out_of_uapsd_mode(tpAniSirGlobal pMac,
 	return QDF_STATUS_SUCCESS;
 }
 
-QDF_STATUS sme_offload_qos_process_into_uapsd_mode(tpAniSirGlobal pMac,
+QDF_STATUS sme_offload_qos_process_into_uapsd_mode(struct mac_context *mac,
 						   uint32_t sessionId)
 {
 	struct sme_qos_sessioninfo *pSession;
@@ -7389,7 +7230,8 @@ QDF_STATUS sme_offload_qos_process_into_uapsd_mode(tpAniSirGlobal pMac,
 		    (flow_info->QoSInfo.max_service_interval ||
 		     flow_info->QoSInfo.min_service_interval) &&
 		    (SME_QOS_REASON_REQ_SUCCESS == flow_info->reason)) {
-			flow_info->QoSCallback(pMac, flow_info->HDDcontext,
+			flow_info->QoSCallback(MAC_HANDLE(mac),
+					       flow_info->HDDcontext,
 					       &pSession->ac_info[flow_info->
 							ac_type].curr_QoSInfo
 					       [flow_info->tspec_mask - 1],
@@ -7401,18 +7243,18 @@ QDF_STATUS sme_offload_qos_process_into_uapsd_mode(tpAniSirGlobal pMac,
 	return QDF_STATUS_SUCCESS;
 }
 
-void sme_qos_cleanup_ctrl_blk_for_handoff(tpAniSirGlobal pMac,
+void sme_qos_cleanup_ctrl_blk_for_handoff(struct mac_context *mac,
 					uint8_t sessionId)
 {
 	struct sme_qos_sessioninfo *pSession;
 	struct sme_qos_acinfo *pACInfo;
-	sme_QosEdcaAcType ac;
+	enum qca_wlan_ac_type ac;
 
 	pSession = &sme_qos_cb.sessionInfo[sessionId];
 	QDF_TRACE(QDF_MODULE_ID_SME, QDF_TRACE_LEVEL_DEBUG,
 		  FL("invoked on session %d"), sessionId);
 
-	for (ac = SME_QOS_EDCA_AC_BE; ac < SME_QOS_EDCA_AC_MAX; ac++) {
+	for (ac = QCA_WLAN_AC_BE; ac < QCA_WLAN_AC_ALL; ac++) {
 		pACInfo = &pSession->ac_info[ac];
 		qdf_mem_zero(pACInfo->curr_QoSInfo,
 			     sizeof(struct sme_qos_wmmtspecinfo) *
@@ -7432,26 +7274,27 @@ void sme_qos_cleanup_ctrl_blk_for_handoff(tpAniSirGlobal pMac,
 
 /**
  * sme_qos_is_ts_info_ack_policy_valid() - check if ACK policy is allowed.
- * @pMac: The handle returned by mac_open.
+ * @mac_handle: The handle returned by mac_open.
  * @pQoSInfo: Pointer to struct sme_qos_wmmtspecinfo which contains the
- * @          WMM TSPEC related info, provided by HDD
+ *            WMM TSPEC related info, provided by HDD
  * @sessionId: sessionId returned by sme_open_session.
  *
  * The SME QoS API exposed to HDD to check if TS info ack policy field can be
- * set to "HT-immediate block acknowledgement"
+ * set to "HT-immediate block acknowledgment"
  *
  * Return: true - Current Association is HT association and so TS info ack
- *                 policy can be set to "HT-immediate block acknowledgement"
+ *                 policy can be set to "HT-immediate block acknowledgment"
  */
-bool sme_qos_is_ts_info_ack_policy_valid(tpAniSirGlobal pMac,
+bool sme_qos_is_ts_info_ack_policy_valid(mac_handle_t mac_handle,
 					 struct sme_qos_wmmtspecinfo *pQoSInfo,
 					 uint8_t sessionId)
 {
 	tDot11fBeaconIEs *pIes = NULL;
 	struct sme_qos_sessioninfo *pSession;
 	QDF_STATUS hstatus;
+	struct mac_context *mac = MAC_CONTEXT(mac_handle);
 
-	if (!CSR_IS_SESSION_VALID(pMac, sessionId)) {
+	if (!CSR_IS_SESSION_VALID(mac, sessionId)) {
 		QDF_TRACE(QDF_MODULE_ID_SME, QDF_TRACE_LEVEL_ERROR,
 			  "%s: %d: Session Id %d is invalid",
 			  __func__, __LINE__, sessionId);
@@ -7467,15 +7310,15 @@ bool sme_qos_is_ts_info_ack_policy_valid(tpAniSirGlobal pMac,
 		return false;
 	}
 
-	if (!pSession->assocInfo.pBssDesc) {
+	if (!pSession->assocInfo.bss_desc) {
 		QDF_TRACE(QDF_MODULE_ID_SME, QDF_TRACE_LEVEL_ERROR,
 			  "%s: %d: Session %d has an Invalid BSS Descriptor",
 			  __func__, __LINE__, sessionId);
 		return false;
 	}
 
-	hstatus = csr_get_parsed_bss_description_ies(pMac,
-						   pSession->assocInfo.pBssDesc,
+	hstatus = csr_get_parsed_bss_description_ies(mac,
+						   pSession->assocInfo.bss_desc,
 						      &pIes);
 	if (!QDF_IS_STATUS_SUCCESS(hstatus)) {
 		QDF_TRACE(QDF_MODULE_ID_SME, QDF_TRACE_LEVEL_ERROR,
@@ -7501,34 +7344,29 @@ bool sme_qos_is_ts_info_ack_policy_valid(tpAniSirGlobal pMac,
 	return true;
 }
 
-static bool sme_qos_validate_requested_params(tpAniSirGlobal pMac,
-				       struct sme_qos_wmmtspecinfo *pQoSInfo,
-				       uint8_t sessionId)
+static bool sme_qos_validate_requested_params(struct mac_context *mac,
+				       struct sme_qos_wmmtspecinfo *qos_info,
+				       uint8_t session_id)
 {
-	bool rc = false;
+	if (SME_QOS_WMM_TS_DIR_RESV == qos_info->ts_info.direction)
+		return false;
+	if (!sme_qos_is_ts_info_ack_policy_valid(MAC_HANDLE(mac),
+						 qos_info, session_id))
+		return false;
 
-	do {
-		if (SME_QOS_WMM_TS_DIR_RESV == pQoSInfo->ts_info.direction)
-			break;
-		if (!sme_qos_is_ts_info_ack_policy_valid(pMac, pQoSInfo,
-							sessionId))
-			break;
-
-		rc = true;
-	} while (0);
-	return rc;
+	return true;
 }
 
-static QDF_STATUS qos_issue_command(tpAniSirGlobal pMac, uint8_t sessionId,
+static QDF_STATUS qos_issue_command(struct mac_context *mac, uint8_t vdev_id,
 				    eSmeCommandType cmdType,
 				    struct sme_qos_wmmtspecinfo *pQoSInfo,
-				    sme_QosEdcaAcType ac, uint8_t tspec_mask)
+				    enum qca_wlan_ac_type ac, uint8_t tspec_mask)
 {
 	QDF_STATUS status = QDF_STATUS_E_RESOURCES;
 	tSmeCmd *pCommand = NULL;
 
 	do {
-		pCommand = csr_get_command_buffer(pMac);
+		pCommand = csr_get_command_buffer(mac);
 		if (!pCommand) {
 			QDF_TRACE(QDF_MODULE_ID_SME, QDF_TRACE_LEVEL_ERROR,
 				  "%s: %d: fail to get command buffer for command %d",
@@ -7536,7 +7374,7 @@ static QDF_STATUS qos_issue_command(tpAniSirGlobal pMac, uint8_t sessionId,
 			break;
 		}
 		pCommand->command = cmdType;
-		pCommand->sessionId = sessionId;
+		pCommand->vdev_id = vdev_id;
 		switch (cmdType) {
 		case eSmeCommandAddTs:
 			if (pQoSInfo) {
@@ -7565,14 +7403,14 @@ static QDF_STATUS qos_issue_command(tpAniSirGlobal pMac, uint8_t sessionId,
 		}
 	} while (0);
 	if (QDF_IS_STATUS_SUCCESS(status) && pCommand)
-		csr_queue_sme_command(pMac, pCommand, false);
+		csr_queue_sme_command(mac, pCommand, false);
 	else if (pCommand)
-		qos_release_command(pMac, pCommand);
+		qos_release_command(mac, pCommand);
 
 	return status;
 }
 
-bool qos_process_command(tpAniSirGlobal pMac, tSmeCmd *pCommand)
+bool qos_process_command(struct mac_context *mac, tSmeCmd *pCommand)
 {
 	QDF_STATUS status = QDF_STATUS_SUCCESS;
 	bool fRemoveCmd = true;
@@ -7581,8 +7419,8 @@ bool qos_process_command(tpAniSirGlobal pMac, tSmeCmd *pCommand)
 		switch (pCommand->command) {
 		case eSmeCommandAddTs:
 			status =
-				sme_qos_add_ts_req(pMac, (uint8_t)
-						pCommand->sessionId,
+				sme_qos_add_ts_req(mac, (uint8_t)
+						pCommand->vdev_id,
 						  &pCommand->u.qosCmd.tspecInfo,
 						   pCommand->u.qosCmd.ac);
 			if (QDF_IS_STATUS_SUCCESS(status))
@@ -7590,8 +7428,8 @@ bool qos_process_command(tpAniSirGlobal pMac, tSmeCmd *pCommand)
 			break;
 		case eSmeCommandDelTs:
 			status =
-				sme_qos_del_ts_req(pMac, (uint8_t)
-						pCommand->sessionId,
+				sme_qos_del_ts_req(mac, (uint8_t)
+						pCommand->vdev_id,
 						   pCommand->u.qosCmd.ac,
 						 pCommand->u.qosCmd.tspec_mask);
 			if (QDF_IS_STATUS_SUCCESS(status))
@@ -7621,9 +7459,9 @@ bool qos_process_command(tpAniSirGlobal pMac, tSmeCmd *pCommand)
  * Return: status
  */
 static
-enum sme_qos_statustype sme_qos_re_request_add_ts(tpAniSirGlobal mac_ctx,
+enum sme_qos_statustype sme_qos_re_request_add_ts(struct mac_context *mac_ctx,
 		uint8_t session_id, struct sme_qos_wmmtspecinfo *qos_info,
-		sme_QosEdcaAcType ac, uint8_t tspec_mask)
+		enum qca_wlan_ac_type ac, uint8_t tspec_mask)
 {
 	struct sme_qos_sessioninfo *session;
 	struct sme_qos_acinfo *ac_info;
@@ -7636,8 +7474,6 @@ enum sme_qos_statustype sme_qos_re_request_add_ts(tpAniSirGlobal mac_ctx,
 		session_id, ac, tspec_mask);
 	session = &sme_qos_cb.sessionInfo[session_id];
 	ac_info = &session->ac_info[ac];
-	/* need to vote off powersave for the duration of this request */
-	session->readyForPowerSave = false;
 	/*
 	 * call PMC's request for power function
 	 * AND another check is added considering the flowing scenario
@@ -7653,7 +7489,7 @@ enum sme_qos_statustype sme_qos_re_request_add_ts(tpAniSirGlobal mac_ctx,
 			session_id, ac, ac_info->curr_state);
 		/* buffer cmd */
 		cmd.command = SME_QOS_RESEND_REQ;
-		cmd.pMac = mac_ctx;
+		cmd.mac = mac_ctx;
 		cmd.sessionId = session_id;
 		cmd.u.resendCmdInfo.ac = ac;
 		cmd.u.resendCmdInfo.tspecMask = tspec_mask;
@@ -7664,10 +7500,6 @@ enum sme_qos_statustype sme_qos_re_request_add_ts(tpAniSirGlobal mac_ctx,
 				"On session %d unable to buffer the AddTS request for AC %d TSPEC %d in state %d",
 				session_id, ac, tspec_mask,
 				ac_info->curr_state);
-			/* unable to buffer the request
-			 * nothing is pending so vote powersave back on
-			 */
-			session->readyForPowerSave = true;
 			return SME_QOS_STATUS_MODIFY_SETUP_FAILURE_RSP;
 		}
 		return SME_QOS_STATUS_MODIFY_SETUP_PENDING_RSP;
@@ -7684,11 +7516,6 @@ enum sme_qos_statustype sme_qos_re_request_add_ts(tpAniSirGlobal mac_ctx,
 			FL("sme_qos_setup returned in SME_QOS_QOS_ON state"));
 		QDF_TRACE(QDF_MODULE_ID_SME, QDF_TRACE_LEVEL_DEBUG,
 			FL("sme_qos_setup AC %d with status =%d"), ac, status);
-		if (SME_QOS_STATUS_SETUP_REQ_PENDING_RSP != status) {
-			/* we aren't waiting for a response from the AP */
-			/* so vote powersave back on */
-			session->readyForPowerSave = true;
-		}
 		if (SME_QOS_STATUS_SETUP_REQ_PENDING_RSP == status) {
 			status = SME_QOS_STATUS_MODIFY_SETUP_PENDING_RSP;
 			ac_info->tspec_pending = tspec_mask;
@@ -7714,7 +7541,7 @@ enum sme_qos_statustype sme_qos_re_request_add_ts(tpAniSirGlobal mac_ctx,
 			FL("Re-Add request in state = %d  buffer the request"),
 			ac_info->curr_state);
 		cmd.command = SME_QOS_RESEND_REQ;
-		cmd.pMac = mac_ctx;
+		cmd.mac = mac_ctx;
 		cmd.sessionId = session_id;
 		cmd.u.resendCmdInfo.ac = ac;
 		cmd.u.resendCmdInfo.tspecMask = tspec_mask;
@@ -7723,10 +7550,6 @@ enum sme_qos_statustype sme_qos_re_request_add_ts(tpAniSirGlobal mac_ctx,
 			QDF_TRACE(QDF_MODULE_ID_SME, QDF_TRACE_LEVEL_ERROR,
 				FL(" couldn't buf the read request state = %d"),
 				ac_info->curr_state);
-			/* unable to buffer the request
-			 * nothing is pending so vote powersave back on
-			 */
-			session->readyForPowerSave = true;
 			return SME_QOS_STATUS_MODIFY_SETUP_FAILURE_RSP;
 		}
 		status = SME_QOS_STATUS_MODIFY_SETUP_PENDING_RSP;
@@ -7739,10 +7562,6 @@ enum sme_qos_statustype sme_qos_re_request_add_ts(tpAniSirGlobal mac_ctx,
 		QDF_TRACE(QDF_MODULE_ID_SME, QDF_TRACE_LEVEL_ERROR,
 			FL("ReAdd request in unexpected state = %d"),
 			ac_info->curr_state);
-		/* unable to service the request
-		 * nothing is pending so vote powersave back on
-		 */
-		session->readyForPowerSave = true;
 		break;
 	}
 	if ((SME_QOS_STATUS_MODIFY_SETUP_SUCCESS_NO_ACM_NO_APSD_RSP ==
@@ -7754,20 +7573,20 @@ enum sme_qos_statustype sme_qos_re_request_add_ts(tpAniSirGlobal mac_ctx,
 	return status;
 }
 
-static void sme_qos_init_a_cs(tpAniSirGlobal pMac, uint8_t sessionId)
+static void sme_qos_init_a_cs(struct mac_context *mac, uint8_t sessionId)
 {
 	struct sme_qos_sessioninfo *pSession;
-	sme_QosEdcaAcType ac;
+	enum qca_wlan_ac_type ac;
 
 	pSession = &sme_qos_cb.sessionInfo[sessionId];
-	for (ac = SME_QOS_EDCA_AC_BE; ac < SME_QOS_EDCA_AC_MAX; ac++) {
+	for (ac = QCA_WLAN_AC_BE; ac < QCA_WLAN_AC_ALL; ac++) {
 		qdf_mem_zero(&pSession->ac_info[ac],
 				sizeof(struct sme_qos_acinfo));
 		sme_qos_state_transition(sessionId, ac, SME_QOS_INIT);
 	}
 }
 
-static QDF_STATUS sme_qos_request_reassoc(tpAniSirGlobal pMac,
+static QDF_STATUS sme_qos_request_reassoc(struct mac_context *mac,
 					uint8_t sessionId,
 					  tCsrRoamModifyProfileFields *
 					  pModFields, bool fForce)
@@ -7775,20 +7594,31 @@ static QDF_STATUS sme_qos_request_reassoc(tpAniSirGlobal pMac,
 	struct sme_qos_sessioninfo *pSession;
 	struct sme_qos_acinfo *pACInfo;
 	QDF_STATUS status;
+	struct qdf_mac_addr bssid;
+	qdf_freq_t ch_freq;
 
 	QDF_TRACE(QDF_MODULE_ID_SME, QDF_TRACE_LEVEL_DEBUG,
 		  "%s: %d: Invoked on session %d with UAPSD mask 0x%X",
 		  __func__, __LINE__, sessionId, pModFields->uapsd_mask);
+
+	if (!CSR_IS_SESSION_VALID(mac, sessionId)) {
+		sme_err("Invalid session for sessionId: %d", sessionId);
+		return QDF_STATUS_E_FAILURE;
+	}
+
 	pSession = &sme_qos_cb.sessionInfo[sessionId];
-	status = csr_reassoc(pMac, sessionId, pModFields, &pSession->roamID,
-				fForce);
+	wlan_mlme_get_bssid_vdev_id(mac->pdev, sessionId, &bssid);
+	ch_freq = wlan_get_operation_chan_freq_vdev_id(mac->pdev, sessionId);
+	status = wlan_cm_roam_invoke(mac->pdev, sessionId, &bssid, ch_freq,
+				     CM_ROAMING_HOST);
+
 	if (QDF_IS_STATUS_SUCCESS(status)) {
 		/* Update the state to Handoff so subsequent requests are
 		 * queued until this one is finished
 		 */
-		sme_QosEdcaAcType ac;
+		enum qca_wlan_ac_type ac;
 
-		for (ac = SME_QOS_EDCA_AC_BE; ac < SME_QOS_EDCA_AC_MAX; ac++) {
+		for (ac = QCA_WLAN_AC_BE; ac < QCA_WLAN_AC_ALL; ac++) {
 			pACInfo = &pSession->ac_info[ac];
 			QDF_TRACE(QDF_MODULE_ID_SME, QDF_TRACE_LEVEL_DEBUG,
 				  "%s: %d: AC[%d] is in state [%d]",

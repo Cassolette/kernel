@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017 The Linux Foundation. All rights reserved.
+ * Copyright (c) 2017-2018, 2020 The Linux Foundation. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -15,6 +15,7 @@
  * TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
  * PERFORMANCE OF THIS SOFTWARE.
  */
+
 /**
  * DOC: Implements public API for pmo to interact with target/WMI
  */
@@ -31,10 +32,10 @@ QDF_STATUS pmo_tgt_enable_wow_wakeup_event(
 	QDF_STATUS status;
 	struct wlan_objmgr_psoc *psoc;
 	struct wlan_pmo_tx_ops pmo_tx_ops;
-
-	PMO_ENTER();
+	int vdev_id;
 
 	psoc = pmo_vdev_get_psoc(vdev);
+	vdev_id = pmo_vdev_get_id(vdev);
 
 	pmo_tx_ops = GET_PMO_TX_OPS_FROM_PSOC(psoc);
 	if (!pmo_tx_ops.send_enable_wow_wakeup_event_req) {
@@ -42,11 +43,14 @@ QDF_STATUS pmo_tgt_enable_wow_wakeup_event(
 		status = QDF_STATUS_E_NULL_VALUE;
 		goto out;
 	}
+
+	pmo_debug("Enable wakeup events 0x%08x%08x%08x%08x for vdev_id %d",
+		  bitmap[3], bitmap[2], bitmap[1], bitmap[0], vdev_id);
+
 	status = pmo_tx_ops.send_enable_wow_wakeup_event_req(vdev, bitmap);
 	if (status != QDF_STATUS_SUCCESS)
 		pmo_err("Failed to enable wow wakeup event");
 out:
-	PMO_EXIT();
 
 	return status;
 }
@@ -58,10 +62,10 @@ QDF_STATUS pmo_tgt_disable_wow_wakeup_event(
 	QDF_STATUS status;
 	struct wlan_objmgr_psoc *psoc;
 	struct wlan_pmo_tx_ops pmo_tx_ops;
-
-	PMO_ENTER();
+	int vdev_id;
 
 	psoc = pmo_vdev_get_psoc(vdev);
+	vdev_id = pmo_vdev_get_id(vdev);
 
 	pmo_tx_ops = GET_PMO_TX_OPS_FROM_PSOC(psoc);
 	if (!pmo_tx_ops.send_disable_wow_wakeup_event_req) {
@@ -69,11 +73,14 @@ QDF_STATUS pmo_tgt_disable_wow_wakeup_event(
 		status = QDF_STATUS_E_NULL_VALUE;
 		goto out;
 	}
+
+	pmo_debug("Disable wakeup events 0x%x%x%x%x for vdev_id %d",
+		  bitmap[3], bitmap[2], bitmap[1], bitmap[0], vdev_id);
+
 	status = pmo_tx_ops.send_disable_wow_wakeup_event_req(vdev, bitmap);
 	if (status != QDF_STATUS_SUCCESS)
 		pmo_err("Failed to disable wow wakeup event");
 out:
-	PMO_EXIT();
 
 	return status;
 }
@@ -89,7 +96,6 @@ QDF_STATUS pmo_tgt_send_wow_patterns_to_fw(
 	struct wlan_objmgr_psoc *psoc;
 	struct wlan_pmo_tx_ops pmo_tx_ops;
 
-	PMO_ENTER();
 	psoc = pmo_vdev_get_psoc(vdev);
 
 	vdev_ctx = pmo_vdev_get_priv(vdev);
@@ -107,14 +113,44 @@ QDF_STATUS pmo_tgt_send_wow_patterns_to_fw(
 	if (status != QDF_STATUS_SUCCESS) {
 		if (!user)
 			pmo_decrement_wow_default_ptrn(vdev_ctx);
-		pmo_err("Failed to sen wow pattern event");
+		pmo_err("Failed to send wow pattern event");
 		goto out;
 	}
 
 	if (user)
 		pmo_increment_wow_user_ptrn(vdev_ctx);
 out:
-	PMO_EXIT();
+
+	return status;
+}
+
+QDF_STATUS pmo_tgt_del_wow_pattern(
+		struct wlan_objmgr_vdev *vdev, uint8_t ptrn_id,
+		bool user)
+{
+	QDF_STATUS status;
+	struct pmo_vdev_priv_obj *vdev_ctx;
+	struct wlan_objmgr_psoc *psoc;
+	struct wlan_pmo_tx_ops pmo_tx_ops;
+
+	psoc = pmo_vdev_get_psoc(vdev);
+	vdev_ctx = pmo_vdev_get_priv(vdev);
+
+	pmo_tx_ops = GET_PMO_TX_OPS_FROM_PSOC(psoc);
+	if (!pmo_tx_ops.del_wow_pattern) {
+		pmo_err("del_wow_pattern is null");
+		status = QDF_STATUS_E_NULL_VALUE;
+		goto out;
+	}
+	status = pmo_tx_ops.del_wow_pattern(vdev, ptrn_id);
+	if (status) {
+		status = QDF_STATUS_E_FAILURE;
+		goto out;
+	}
+
+	if (user)
+		pmo_decrement_wow_user_ptrn(vdev_ctx);
+out:
 
 	return status;
 }

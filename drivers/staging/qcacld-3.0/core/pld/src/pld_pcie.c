@@ -1,8 +1,5 @@
 /*
- * Copyright (c) 2016-2017 The Linux Foundation. All rights reserved.
- *
- * Previously licensed under the ISC license by Qualcomm Atheros, Inc.
- *
+ * Copyright (c) 2016-2021 The Linux Foundation. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -19,12 +16,6 @@
  * PERFORMANCE OF THIS SOFTWARE.
  */
 
-/*
- * This file was originally distributed by Qualcomm Atheros, Inc.
- * under proprietary terms before Copyright ownership was assigned
- * to the Linux Foundation.
- */
-
 #include <linux/platform_device.h>
 #include <linux/err.h>
 #include <linux/pci.h>
@@ -32,11 +23,16 @@
 #include <linux/slab.h>
 
 #ifdef CONFIG_PLD_PCIE_CNSS
+#ifdef CONFIG_CNSS_OUT_OF_TREE
+#include "cnss2.h"
+#else
 #include <net/cnss2.h>
+#endif
 #endif
 
 #include "pld_internal.h"
 #include "pld_pcie.h"
+#include "osif_psoc_sync.h"
 
 #ifdef CONFIG_PCI
 
@@ -68,7 +64,7 @@ static int pld_pcie_probe(struct pci_dev *pdev,
 		goto out;
 	}
 
-	ret = pld_add_dev(pld_context, &pdev->dev, PLD_BUS_TYPE_PCIE);
+	ret = pld_add_dev(pld_context, &pdev->dev, NULL, PLD_BUS_TYPE_PCIE);
 	if (ret)
 		goto out;
 
@@ -91,18 +87,75 @@ out:
 static void pld_pcie_remove(struct pci_dev *pdev)
 {
 	struct pld_context *pld_context;
+	int errno;
+	struct osif_psoc_sync *psoc_sync;
+
+	errno = osif_psoc_sync_trans_start_wait(&pdev->dev, &psoc_sync);
+	if (errno)
+		return;
+
+	osif_psoc_sync_unregister(&pdev->dev);
+
+	osif_psoc_sync_wait_for_ops(psoc_sync);
 
 	pld_context = pld_get_global_context();
 
 	if (!pld_context)
-		return;
+		goto out;
 
 	pld_context->ops->remove(&pdev->dev, PLD_BUS_TYPE_PCIE);
 
 	pld_del_dev(pld_context, &pdev->dev);
+
+out:
+	osif_psoc_sync_trans_stop(psoc_sync);
+	osif_psoc_sync_destroy(psoc_sync);
 }
 
 #ifdef CONFIG_PLD_PCIE_CNSS
+/**
+ * pld_pcie_idle_restart_cb() - Perform idle restart
+ * @pdev: PCIE device
+ * @id: PCIE device ID
+ *
+ * This function will be called if there is an idle restart request
+ *
+ * Return: int
+ */
+static int pld_pcie_idle_restart_cb(struct pci_dev *pdev,
+				    const struct pci_device_id *id)
+{
+	struct pld_context *pld_context;
+
+	pld_context = pld_get_global_context();
+	if (pld_context->ops->idle_restart)
+		return pld_context->ops->idle_restart(&pdev->dev,
+						      PLD_BUS_TYPE_PCIE);
+
+	return -ENODEV;
+}
+
+/**
+ * pld_pcie_idle_shutdown_cb() - Perform idle shutdown
+ * @pdev: PCIE device
+ * @id: PCIE device ID
+ *
+ * This function will be called if there is an idle shutdown request
+ *
+ * Return: int
+ */
+static int pld_pcie_idle_shutdown_cb(struct pci_dev *pdev)
+{
+	struct pld_context *pld_context;
+
+	pld_context = pld_get_global_context();
+	if (pld_context->ops->shutdown)
+		return pld_context->ops->idle_shutdown(&pdev->dev,
+						       PLD_BUS_TYPE_PCIE);
+
+	return -ENODEV;
+}
+
 /**
  * pld_pcie_reinit() - SSR re-initialize function for PCIE device
  * @pdev: PCIE device
@@ -193,7 +246,7 @@ static void pld_pcie_notify_handler(struct pci_dev *pdev, int state)
 static void pld_pcie_uevent(struct pci_dev *pdev, uint32_t status)
 {
 	struct pld_context *pld_context;
-	struct pld_uevent_data data;
+	struct pld_uevent_data data = {0};
 
 	pld_context = pld_get_global_context();
 	if (!pld_context)
@@ -201,7 +254,10 @@ static void pld_pcie_uevent(struct pci_dev *pdev, uint32_t status)
 
 	switch (status) {
 	case CNSS_RECOVERY:
-		data.uevent = PLD_RECOVERY;
+		data.uevent = PLD_FW_RECOVERY_START;
+		break;
+	case CNSS_FW_DOWN:
+		data.uevent = PLD_FW_DOWN;
 		break;
 	default:
 		goto out;
@@ -213,6 +269,91 @@ static void pld_pcie_uevent(struct pci_dev *pdev, uint32_t status)
 out:
 	return;
 }
+
+#if (LINUX_VERSION_CODE >= KERNEL_VERSION(4, 19, 0))
+/**
+ * pld_bus_event_type_convert() - Convert enum cnss_bus_event_type
+ *		to enum pld_bus_event
+ * @etype: enum cnss_bus_event_type value
+ *
+ * This function will convert enum cnss_bus_event_type to
+ * enum pld_bus_event.
+ *
+ * Return: enum pld_bus_event
+ */
+static inline
+enum pld_bus_event pld_bus_event_type_convert(enum cnss_bus_event_type etype)
+{
+	enum pld_bus_event pld_etype = PLD_BUS_EVENT_INVALID;
+
+	switch (etype) {
+	case BUS_EVENT_PCI_LINK_DOWN:
+		pld_etype = PLD_BUS_EVENT_PCIE_LINK_DOWN;
+		break;
+	default:
+		break;
+	}
+
+	return pld_etype;
+}
+
+/**
+ * pld_pcie_update_event() - update wlan driver status callback function
+ * @pdev: PCIE device
+ * @cnss_uevent_data: driver uevent data
+ *
+ * This function will be called when platform driver wants to update wlan
+ * driver's status.
+ *
+ * Return: 0 for success, non zero for error code
+ */
+static int pld_pcie_update_event(struct pci_dev *pdev,
+				 struct cnss_uevent_data *uevent_data)
+{
+	struct pld_context *pld_context;
+	struct pld_uevent_data data = {0};
+	struct cnss_hang_event *hang_event;
+
+	pld_context = pld_get_global_context();
+
+	if (!pld_context || !uevent_data)
+		return -EINVAL;
+
+	switch (uevent_data->status) {
+	case CNSS_HANG_EVENT:
+		if (!uevent_data->data)
+			return -EINVAL;
+		hang_event = (struct cnss_hang_event *)uevent_data->data;
+		data.uevent = PLD_FW_HANG_EVENT;
+		data.hang_data.hang_event_data = hang_event->hang_event_data;
+		data.hang_data.hang_event_data_len =
+					hang_event->hang_event_data_len;
+		break;
+	case CNSS_BUS_EVENT:
+	{
+		struct cnss_bus_event *bus_evt = uevent_data->data;
+
+		if (!bus_evt)
+			return -EINVAL;
+
+		data.uevent = PLD_BUS_EVENT;
+
+		/* Process uevent_data->data if any */
+		data.bus_data.etype =
+			pld_bus_event_type_convert(bus_evt->etype);
+		data.bus_data.event_data = bus_evt->event_data;
+		break;
+	}
+	default:
+		return 0;
+	}
+
+	if (pld_context->ops->uevent)
+		pld_context->ops->uevent(&pdev->dev, &data);
+
+	return 0;
+}
+#endif
 
 #ifdef FEATURE_RUNTIME_PM
 /**
@@ -253,6 +394,50 @@ static int pld_pcie_runtime_resume(struct pci_dev *pdev)
 							PLD_BUS_TYPE_PCIE);
 
 	return -ENODEV;
+}
+#endif
+
+#ifdef FEATURE_GET_DRIVER_MODE
+/**
+ * pld_pcie_get_mode() - Get current WLAN driver mode
+ *
+ * This function is to get current driver mode
+ *
+ * Return: mission mode or ftm mode
+ */
+static
+enum cnss_driver_mode pld_pcie_get_mode(void)
+{
+	struct pld_context *pld_ctx =  pld_get_global_context();
+	enum cnss_driver_mode cnss_mode = CNSS_MISSION;
+
+	if (!pld_ctx)
+		return cnss_mode;
+
+	switch (pld_ctx->mode) {
+	case QDF_GLOBAL_MISSION_MODE:
+		cnss_mode = CNSS_MISSION;
+		break;
+	case QDF_GLOBAL_WALTEST_MODE:
+		cnss_mode = CNSS_WALTEST;
+		break;
+	case QDF_GLOBAL_FTM_MODE:
+		cnss_mode = CNSS_FTM;
+		break;
+	case QDF_GLOBAL_COLDBOOT_CALIB_MODE:
+		cnss_mode = CNSS_CALIBRATION;
+		break;
+	case QDF_GLOBAL_EPPING_MODE:
+		cnss_mode = CNSS_EPPING;
+		break;
+	case QDF_GLOBAL_QVIT_MODE:
+		cnss_mode = CNSS_QVIT;
+		break;
+	default:
+		cnss_mode = CNSS_MISSION;
+		break;
+	}
+	return cnss_mode;
 }
 #endif
 #endif
@@ -439,13 +624,32 @@ static int pld_pcie_pm_resume_noirq(struct device *dev)
 #endif
 
 static struct pci_device_id pld_pcie_id_table[] = {
-	{ 0x168c, 0x003c, PCI_ANY_ID, PCI_ANY_ID },
+#ifdef CONFIG_AR6320_SUPPORT
 	{ 0x168c, 0x003e, PCI_ANY_ID, PCI_ANY_ID },
+#elif defined(QCA_WIFI_QCA6290)
+	{ 0x17cb, 0x1100, PCI_ANY_ID, PCI_ANY_ID },
+#elif defined(QCA_WIFI_QCA6390)
+	{ 0x17cb, 0x1101, PCI_ANY_ID, PCI_ANY_ID },
+#elif defined(QCA_WIFI_QCA6490)
+	{ 0x17cb, 0x1103, PCI_ANY_ID, PCI_ANY_ID },
+#elif defined(QCA_WIFI_WCN7850)
+	{ 0x17cb, 0x1107, PCI_ANY_ID, PCI_ANY_ID },
+#elif defined(QCN7605_SUPPORT)
+	{ 0x17cb, 0x1102, PCI_ANY_ID, PCI_ANY_ID },
+#else
+	{ 0x168c, 0x003c, PCI_ANY_ID, PCI_ANY_ID },
 	{ 0x168c, 0x0041, PCI_ANY_ID, PCI_ANY_ID },
 	{ 0x168c, 0xabcd, PCI_ANY_ID, PCI_ANY_ID },
 	{ 0x168c, 0x7021, PCI_ANY_ID, PCI_ANY_ID },
+#endif
 	{ 0 }
 };
+
+#ifdef MULTI_IF_NAME
+#define PLD_PCIE_OPS_NAME "pld_pcie_" MULTI_IF_NAME
+#else
+#define PLD_PCIE_OPS_NAME "pld_pcie"
+#endif
 
 #ifdef CONFIG_PLD_PCIE_CNSS
 #ifdef FEATURE_RUNTIME_PM
@@ -456,15 +660,20 @@ struct cnss_wlan_runtime_ops runtime_pm_ops = {
 #endif
 
 struct cnss_wlan_driver pld_pcie_ops = {
-	.name       = "pld_pcie",
+	.name       = PLD_PCIE_OPS_NAME,
 	.id_table   = pld_pcie_id_table,
 	.probe      = pld_pcie_probe,
 	.remove     = pld_pcie_remove,
+	.idle_restart  = pld_pcie_idle_restart_cb,
+	.idle_shutdown = pld_pcie_idle_shutdown_cb,
 	.reinit     = pld_pcie_reinit,
 	.shutdown   = pld_pcie_shutdown,
 	.crash_shutdown = pld_pcie_crash_shutdown,
 	.modem_status   = pld_pcie_notify_handler,
 	.update_status  = pld_pcie_uevent,
+#if (LINUX_VERSION_CODE >= KERNEL_VERSION(4, 19, 0))
+	.update_event = pld_pcie_update_event,
+#endif
 #ifdef CONFIG_PM
 	.suspend    = pld_pcie_suspend,
 	.resume     = pld_pcie_resume,
@@ -473,6 +682,9 @@ struct cnss_wlan_driver pld_pcie_ops = {
 #endif
 #ifdef FEATURE_RUNTIME_PM
 	.runtime_ops = &runtime_pm_ops,
+#endif
+#ifdef FEATURE_GET_DRIVER_MODE
+	.get_driver_mode  = pld_pcie_get_mode,
 #endif
 };
 
@@ -505,7 +717,7 @@ static const struct dev_pm_ops pld_pm_ops = {
 #endif
 
 struct pci_driver pld_pcie_ops = {
-	.name       = "pld_pcie",
+	.name       = PLD_PCIE_OPS_NAME,
 	.id_table   = pld_pcie_id_table,
 	.probe      = pld_pcie_probe,
 	.remove     = pld_pcie_remove,
@@ -576,6 +788,13 @@ int pld_pcie_wlan_enable(struct device *dev, struct pld_wlan_enable_cfg *config,
 	cfg.num_shadow_reg_v2_cfg = config->num_shadow_reg_v2_cfg;
 	cfg.shadow_reg_v2_cfg = (struct cnss_shadow_reg_v2_cfg *)
 		config->shadow_reg_v2_cfg;
+	cfg.rri_over_ddr_cfg_valid = config->rri_over_ddr_cfg_valid;
+	if (config->rri_over_ddr_cfg_valid) {
+		cfg.rri_over_ddr_cfg.base_addr_low =
+			 config->rri_over_ddr_cfg.base_addr_low;
+		cfg.rri_over_ddr_cfg.base_addr_high =
+			 config->rri_over_ddr_cfg.base_addr_high;
+	}
 
 	switch (mode) {
 	case PLD_FTM:
@@ -618,7 +837,6 @@ int pld_pcie_wlan_disable(struct device *dev, enum pld_driver_mode mode)
  * Return: 0 for success
  *         Non zero failure code for errors
  */
-#ifdef CNSS_API_WITH_DEV
 int pld_pcie_get_fw_files_for_target(struct device *dev,
 				     struct pld_fw_files *pfw_files,
 				     u32 target_type, u32 target_version)
@@ -626,7 +844,7 @@ int pld_pcie_get_fw_files_for_target(struct device *dev,
 	int ret = 0;
 	struct cnss_fw_files cnss_fw_files;
 
-	if (pfw_files == NULL)
+	if (!pfw_files)
 		return -ENODEV;
 
 	memset(pfw_files, 0, sizeof(*pfw_files));
@@ -636,59 +854,23 @@ int pld_pcie_get_fw_files_for_target(struct device *dev,
 	if (ret)
 		return ret;
 
-	strlcpy(pfw_files->image_file, cnss_fw_files.image_file,
-		PLD_MAX_FILE_NAME);
-	strlcpy(pfw_files->board_data, cnss_fw_files.board_data,
-		PLD_MAX_FILE_NAME);
-	strlcpy(pfw_files->otp_data, cnss_fw_files.otp_data,
-		PLD_MAX_FILE_NAME);
-	strlcpy(pfw_files->utf_file, cnss_fw_files.utf_file,
-		PLD_MAX_FILE_NAME);
-	strlcpy(pfw_files->utf_board_data, cnss_fw_files.utf_board_data,
-		PLD_MAX_FILE_NAME);
-	strlcpy(pfw_files->epping_file, cnss_fw_files.epping_file,
-		PLD_MAX_FILE_NAME);
-	strlcpy(pfw_files->evicted_data, cnss_fw_files.evicted_data,
-		PLD_MAX_FILE_NAME);
+	scnprintf(pfw_files->image_file, PLD_MAX_FILE_NAME, PREFIX "%s",
+		  cnss_fw_files.image_file);
+	scnprintf(pfw_files->board_data, PLD_MAX_FILE_NAME, PREFIX "%s",
+		  cnss_fw_files.board_data);
+	scnprintf(pfw_files->otp_data, PLD_MAX_FILE_NAME, PREFIX "%s",
+		  cnss_fw_files.otp_data);
+	scnprintf(pfw_files->utf_file, PLD_MAX_FILE_NAME, PREFIX "%s",
+		  cnss_fw_files.utf_file);
+	scnprintf(pfw_files->utf_board_data, PLD_MAX_FILE_NAME, PREFIX "%s",
+		  cnss_fw_files.utf_board_data);
+	scnprintf(pfw_files->epping_file, PLD_MAX_FILE_NAME, PREFIX "%s",
+		  cnss_fw_files.epping_file);
+	scnprintf(pfw_files->evicted_data, PLD_MAX_FILE_NAME, PREFIX "%s",
+		  cnss_fw_files.evicted_data);
 
 	return 0;
 }
-#else
-int pld_pcie_get_fw_files_for_target(struct device *dev,
-				     struct pld_fw_files *pfw_files,
-				     u32 target_type, u32 target_version)
-{
-	int ret = 0;
-	struct cnss_fw_files cnss_fw_files;
-
-	if (pfw_files == NULL)
-		return -ENODEV;
-
-	memset(pfw_files, 0, sizeof(*pfw_files));
-
-	ret = cnss_get_fw_files_for_target(&cnss_fw_files,
-					   target_type, target_version);
-	if (ret)
-		return ret;
-
-	strlcpy(pfw_files->image_file, cnss_fw_files.image_file,
-		PLD_MAX_FILE_NAME);
-	strlcpy(pfw_files->board_data, cnss_fw_files.board_data,
-		PLD_MAX_FILE_NAME);
-	strlcpy(pfw_files->otp_data, cnss_fw_files.otp_data,
-		PLD_MAX_FILE_NAME);
-	strlcpy(pfw_files->utf_file, cnss_fw_files.utf_file,
-		PLD_MAX_FILE_NAME);
-	strlcpy(pfw_files->utf_board_data, cnss_fw_files.utf_board_data,
-		PLD_MAX_FILE_NAME);
-	strlcpy(pfw_files->epping_file, cnss_fw_files.epping_file,
-		PLD_MAX_FILE_NAME);
-	strlcpy(pfw_files->evicted_data, cnss_fw_files.evicted_data,
-		PLD_MAX_FILE_NAME);
-
-	return 0;
-}
-#endif
 
 /**
  * pld_pcie_get_platform_cap() - Get platform capabilities
@@ -700,13 +882,12 @@ int pld_pcie_get_fw_files_for_target(struct device *dev,
  * Return: 0 for success
  *         Non zero failure code for errors
  */
-#ifdef CNSS_API_WITH_DEV
 int pld_pcie_get_platform_cap(struct device *dev, struct pld_platform_cap *cap)
 {
 	int ret = 0;
 	struct cnss_platform_cap cnss_cap;
 
-	if (cap == NULL)
+	if (!cap)
 		return -ENODEV;
 
 	ret = cnss_get_platform_cap(dev, &cnss_cap);
@@ -716,23 +897,6 @@ int pld_pcie_get_platform_cap(struct device *dev, struct pld_platform_cap *cap)
 	memcpy(cap, &cnss_cap, sizeof(*cap));
 	return 0;
 }
-#else
-int pld_pcie_get_platform_cap(struct device *dev, struct pld_platform_cap *cap)
-{
-	int ret = 0;
-	struct cnss_platform_cap cnss_cap;
-
-	if (cap == NULL)
-		return -ENODEV;
-
-	ret = cnss_get_platform_cap(&cnss_cap);
-	if (ret)
-		return ret;
-
-	memcpy(cap, &cnss_cap, sizeof(*cap));
-	return 0;
-}
-#endif
 
 /**
  * pld_pcie_get_soc_info() - Get SOC information
@@ -746,17 +910,37 @@ int pld_pcie_get_platform_cap(struct device *dev, struct pld_platform_cap *cap)
  */
 int pld_pcie_get_soc_info(struct device *dev, struct pld_soc_info *info)
 {
-	int ret = 0;
-	struct cnss_soc_info cnss_info;
+	int ret = 0, i;
+	struct cnss_soc_info cnss_info = {0};
 
-	if (info == NULL)
+	if (!info)
 		return -ENODEV;
 
 	ret = cnss_get_soc_info(dev, &cnss_info);
 	if (ret)
 		return ret;
 
-	memcpy(info, &cnss_info, sizeof(*info));
+	info->v_addr = cnss_info.va;
+	info->p_addr = cnss_info.pa;
+	info->chip_id = cnss_info.chip_id;
+	info->chip_family = cnss_info.chip_family;
+	info->board_id = cnss_info.board_id;
+	info->soc_id = cnss_info.soc_id;
+	info->fw_version = cnss_info.fw_version;
+	strlcpy(info->fw_build_timestamp, cnss_info.fw_build_timestamp,
+		sizeof(info->fw_build_timestamp));
+	info->device_version.family_number =
+		cnss_info.device_version.family_number;
+	info->device_version.device_number =
+		cnss_info.device_version.device_number;
+	info->device_version.major_version =
+		cnss_info.device_version.major_version;
+	info->device_version.minor_version =
+		cnss_info.device_version.minor_version;
+	for (i = 0; i < PLD_MAX_DEV_MEM_NUM; i++) {
+		info->dev_mem_info[i].start = cnss_info.dev_mem_info[i].start;
+		info->dev_mem_info[i].size = cnss_info.dev_mem_info[i].size;
+	}
 
 	return 0;
 }

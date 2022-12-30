@@ -1,8 +1,5 @@
 /*
- * Copyright (c) 2016-2017 The Linux Foundation. All rights reserved.
- *
- * Previously licensed under the ISC license by Qualcomm Atheros, Inc.
- *
+ * Copyright (c) 2016-2020 The Linux Foundation. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -19,25 +16,63 @@
  * PERFORMANCE OF THIS SOFTWARE.
  */
 
-/*
- * This file was originally distributed by Qualcomm Atheros, Inc.
- * under proprietary terms before Copyright ownership was assigned
- * to the Linux Foundation.
- */
-
 #include <linux/platform_device.h>
 #include <linux/err.h>
 #include <linux/list.h>
 #include <linux/slab.h>
 
 #ifdef CONFIG_PLD_SNOC_ICNSS
+#ifdef CONFIG_PLD_SNOC_ICNSS2
+#include <soc/qcom/icnss2.h>
+#else
 #include <soc/qcom/icnss.h>
+#endif
 #endif
 
 #include "pld_internal.h"
 #include "pld_snoc.h"
+#include "osif_psoc_sync.h"
 
 #ifdef CONFIG_PLD_SNOC_ICNSS
+/**
+ * pld_snoc_idle_restart_cb() - Perform idle restart
+ * @pdev: platform device
+ *
+ * This function will be called if there is an idle restart request
+ *
+ * Return: int
+ **/
+static int pld_snoc_idle_restart_cb(struct device *dev)
+{
+	struct pld_context *pld_context;
+
+	pld_context = pld_get_global_context();
+	if (pld_context->ops->idle_restart)
+		return pld_context->ops->idle_restart(dev, PLD_BUS_TYPE_SNOC);
+
+	return -ENODEV;
+}
+
+/**
+ * pld_snoc_idle_shutdown_cb() - Perform idle shutdown
+ * @pdev: PCIE device
+ * @id: PCIE device ID
+ *
+ * This function will be called if there is an idle shutdown request
+ *
+ * Return: int
+ */
+static int pld_snoc_idle_shutdown_cb(struct device *dev)
+{
+	struct pld_context *pld_context;
+
+	pld_context = pld_get_global_context();
+	if (pld_context->ops->shutdown)
+		return pld_context->ops->idle_shutdown(dev, PLD_BUS_TYPE_SNOC);
+
+	return -ENODEV;
+}
+
 /**
  * pld_snoc_probe() - Probe function for platform driver
  * @dev: device
@@ -58,7 +93,7 @@ static int pld_snoc_probe(struct device *dev)
 		goto out;
 	}
 
-	ret = pld_add_dev(pld_context, dev, PLD_BUS_TYPE_SNOC);
+	ret = pld_add_dev(pld_context, dev, NULL, PLD_BUS_TYPE_SNOC);
 	if (ret)
 		goto out;
 
@@ -81,15 +116,28 @@ out:
 static void pld_snoc_remove(struct device *dev)
 {
 	struct pld_context *pld_context;
+	int errno;
+	struct osif_psoc_sync *psoc_sync;
+
+	errno = osif_psoc_sync_trans_start_wait(dev, &psoc_sync);
+	if (errno)
+		return;
+
+	osif_psoc_sync_unregister(dev);
+	osif_psoc_sync_wait_for_ops(psoc_sync);
 
 	pld_context = pld_get_global_context();
 
 	if (!pld_context)
-		return;
+		goto out;
 
 	pld_context->ops->remove(dev, PLD_BUS_TYPE_SNOC);
 
 	pld_del_dev(pld_context, dev);
+
+out:
+	osif_psoc_sync_trans_stop(psoc_sync);
+	osif_psoc_sync_destroy(psoc_sync);
 }
 
 /**
@@ -235,12 +283,25 @@ static int pld_snoc_resume_noirq(struct device *dev)
 	return 0;
 }
 
+#if (LINUX_VERSION_CODE >= KERNEL_VERSION(4, 19, 0))
+static int pld_update_hang_evt_data(struct icnss_uevent_hang_data *evt_data,
+				    struct pld_uevent_data *data)
+{
+	if (!evt_data || !data)
+		return -EINVAL;
+
+	data->hang_data.hang_event_data = evt_data->hang_event_data;
+	data->hang_data.hang_event_data_len = evt_data->hang_event_data_len;
+	return 0;
+}
+
 static int pld_snoc_uevent(struct device *dev,
 			   struct icnss_uevent_data *uevent)
 {
 	struct pld_context *pld_context;
-	struct icnss_uevent_fw_down_data *uevent_data = NULL;
-	struct pld_uevent_data data;
+	struct icnss_uevent_fw_down_data *fw_down_data = NULL;
+	struct icnss_uevent_hang_data *hang_data = NULL;
+	struct pld_uevent_data data = {0};
 
 	pld_context = pld_get_global_context();
 	if (!pld_context)
@@ -254,19 +315,22 @@ static int pld_snoc_uevent(struct device *dev,
 
 	switch (uevent->uevent) {
 	case ICNSS_UEVENT_FW_CRASHED:
-		data.uevent = PLD_RECOVERY;
+		data.uevent = PLD_FW_CRASHED;
 		break;
 	case ICNSS_UEVENT_FW_DOWN:
-		if (uevent->data == NULL)
+		if (!uevent->data)
 			return -EINVAL;
-		uevent_data = (struct icnss_uevent_fw_down_data *)uevent->data;
+		fw_down_data = (struct icnss_uevent_fw_down_data *)uevent->data;
 		data.uevent = PLD_FW_DOWN;
-		data.fw_down.crashed = uevent_data->crashed;
+		data.fw_down.crashed = fw_down_data->crashed;
 		break;
-	case ICNSS_UEVENT_FW_READY:
-		data.uevent = PLD_FW_READY;
+	case ICNSS_UEVENT_HANG_DATA:
+		if (!uevent->data)
+			return -EINVAL;
+		hang_data = (struct icnss_uevent_hang_data *)uevent->data;
+		data.uevent = PLD_FW_HANG_EVENT;
+		pld_update_hang_evt_data(hang_data, &data);
 		break;
-
 	default:
 		goto out;
 	}
@@ -275,9 +339,53 @@ static int pld_snoc_uevent(struct device *dev,
 out:
 	return 0;
 }
+#else
+static int pld_snoc_uevent(struct device *dev,
+			   struct icnss_uevent_data *uevent)
+{
+	struct pld_context *pld_context;
+	struct icnss_uevent_fw_down_data *fw_down_data = NULL;
+	struct pld_uevent_data data = {0};
+
+	pld_context = pld_get_global_context();
+	if (!pld_context)
+		return -EINVAL;
+
+	if (!pld_context->ops->uevent)
+		goto out;
+
+	if (!uevent)
+		return -EINVAL;
+
+	switch (uevent->uevent) {
+	case ICNSS_UEVENT_FW_CRASHED:
+		data.uevent = PLD_FW_CRASHED;
+		break;
+	case ICNSS_UEVENT_FW_DOWN:
+		if (!uevent->data)
+			return -EINVAL;
+		fw_down_data = (struct icnss_uevent_fw_down_data *)uevent->data;
+		data.uevent = PLD_FW_DOWN;
+		data.fw_down.crashed = fw_down_data->crashed;
+		break;
+	default:
+		goto out;
+	}
+
+	pld_context->ops->uevent(dev, &data);
+out:
+	return 0;
+}
+#endif
+
+#ifdef MULTI_IF_NAME
+#define PLD_SNOC_OPS_NAME "pld_snoc_" MULTI_IF_NAME
+#else
+#define PLD_SNOC_OPS_NAME "pld_snoc"
+#endif
 
 struct icnss_driver_ops pld_snoc_ops = {
-	.name       = "pld_snoc",
+	.name       = PLD_SNOC_OPS_NAME,
 	.probe      = pld_snoc_probe,
 	.remove     = pld_snoc_remove,
 	.shutdown   = pld_snoc_shutdown,
@@ -288,6 +396,8 @@ struct icnss_driver_ops pld_snoc_ops = {
 	.suspend_noirq = pld_snoc_suspend_noirq,
 	.resume_noirq = pld_snoc_resume_noirq,
 	.uevent = pld_snoc_uevent,
+	.idle_restart  = pld_snoc_idle_restart_cb,
+	.idle_shutdown = pld_snoc_idle_shutdown_cb,
 };
 
 /**
@@ -324,7 +434,6 @@ void pld_snoc_unregister_driver(void)
  *         Non zero failure code for errors
  */
 
-#ifdef ICNSS_API_WITH_DEV
 int pld_snoc_wlan_enable(struct device *dev, struct pld_wlan_enable_cfg *config,
 			 enum pld_driver_mode mode, const char *host_version)
 {
@@ -358,38 +467,6 @@ int pld_snoc_wlan_enable(struct device *dev, struct pld_wlan_enable_cfg *config,
 
 	return icnss_wlan_enable(dev, &cfg, icnss_mode, host_version);
 }
-#else
-int pld_snoc_wlan_enable(struct device *dev, struct pld_wlan_enable_cfg *config,
-			 enum pld_driver_mode mode, const char *host_version)
-{
-	struct icnss_wlan_enable_cfg cfg;
-	enum icnss_driver_mode icnss_mode;
-
-	cfg.num_ce_tgt_cfg = config->num_ce_tgt_cfg;
-	cfg.ce_tgt_cfg = (struct ce_tgt_pipe_cfg *)
-		config->ce_tgt_cfg;
-	cfg.num_ce_svc_pipe_cfg = config->num_ce_svc_pipe_cfg;
-	cfg.ce_svc_cfg = (struct ce_svc_pipe_cfg *)
-		config->ce_svc_cfg;
-	cfg.num_shadow_reg_cfg = config->num_shadow_reg_cfg;
-	cfg.shadow_reg_cfg = (struct icnss_shadow_reg_cfg *)
-		config->shadow_reg_cfg;
-
-	switch (mode) {
-	case PLD_FTM:
-		icnss_mode = ICNSS_FTM;
-		break;
-	case PLD_EPPING:
-		icnss_mode = ICNSS_EPPING;
-		break;
-	default:
-		icnss_mode = ICNSS_MISSION;
-		break;
-	}
-
-	return icnss_wlan_enable(&cfg, icnss_mode, host_version);
-}
-#endif
 
 /**
  * pld_snoc_wlan_disable() - Disable WLAN
@@ -401,7 +478,6 @@ int pld_snoc_wlan_enable(struct device *dev, struct pld_wlan_enable_cfg *config,
  * Return: 0 for success
  *         Non zero failure code for errors
  */
-#ifdef ICNSS_API_WITH_DEV
 int pld_snoc_wlan_disable(struct device *dev, enum pld_driver_mode mode)
 {
 	if (!dev)
@@ -409,12 +485,6 @@ int pld_snoc_wlan_disable(struct device *dev, enum pld_driver_mode mode)
 
 	return icnss_wlan_disable(dev, ICNSS_OFF);
 }
-#else
-int pld_snoc_wlan_disable(struct device *dev, enum pld_driver_mode mode)
-{
-	return icnss_wlan_disable(ICNSS_OFF);
-}
-#endif
 
 /**
  * pld_snoc_get_soc_info() - Get SOC information
@@ -426,37 +496,28 @@ int pld_snoc_wlan_disable(struct device *dev, enum pld_driver_mode mode)
  * Return: 0 for success
  *         Non zero failure code for errors
  */
-#ifdef ICNSS_API_WITH_DEV
 int pld_snoc_get_soc_info(struct device *dev, struct pld_soc_info *info)
 {
-	int ret = 0;
-	struct icnss_soc_info icnss_info;
+	int errno;
+	struct icnss_soc_info icnss_info = {0};
 
-	if (info == NULL || !dev)
+	if (!info || !dev)
 		return -ENODEV;
 
-	ret = icnss_get_soc_info(dev, &icnss_info);
-	if (0 != ret)
-		return ret;
+	errno = icnss_get_soc_info(dev, &icnss_info);
+	if (errno)
+		return errno;
 
-	memcpy(info, &icnss_info, sizeof(*info));
+	info->v_addr = icnss_info.v_addr;
+	info->p_addr = icnss_info.p_addr;
+	info->chip_id = icnss_info.chip_id;
+	info->chip_family = icnss_info.chip_family;
+	info->board_id = icnss_info.board_id;
+	info->soc_id = icnss_info.soc_id;
+	info->fw_version = icnss_info.fw_version;
+	strlcpy(info->fw_build_timestamp, icnss_info.fw_build_timestamp,
+		sizeof(info->fw_build_timestamp));
+
 	return 0;
 }
-#else
-int pld_snoc_get_soc_info(struct device *dev, struct pld_soc_info *info)
-{
-	int ret = 0;
-	struct icnss_soc_info icnss_info;
-
-	if (info == NULL)
-		return -ENODEV;
-
-	ret = icnss_get_soc_info(&icnss_info);
-	if (0 != ret)
-		return ret;
-
-	memcpy(info, &icnss_info, sizeof(*info));
-	return 0;
-}
-#endif
 #endif

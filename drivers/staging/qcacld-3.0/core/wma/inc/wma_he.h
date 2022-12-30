@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017 The Linux Foundation. All rights reserved.
+ * Copyright (c) 2017-2020 The Linux Foundation. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -21,10 +21,18 @@
 
 #include "wma.h"
 #include "sir_api.h"
+#include "target_if.h"
+
+/* Number of bits to shift on HE MCS 12 13 MAP to get the desired map */
+#define WMA_MCS_12_13_MAP_L80 16
+#define WMA_MCS_12_13_MAP_G80 8
+
+/* Mask to fill tx and rx mcs rate maps to be sent to the FW */
+#define WMA_MCS_12_13_PEER_RATE_MAP 0x00ff0000
 
 #ifdef WLAN_FEATURE_11AX
 /**
- * @wma_print_he_cap() - Print HE capabilities
+ * wma_print_he_cap() - Print HE capabilities
  * @he_cap: pointer to HE Capability
  *
  * Received HE capabilities are converted into dot11f structure.
@@ -58,17 +66,27 @@ void wma_print_he_ppet(void *ppet);
 void wma_print_he_phy_cap(uint32_t *phy_cap);
 
 /**
- * wma_print_he_mac_cap() - Print HE MAC Capability
+ * wma_print_he_mac_cap_w1() - Print HE MAC Capability
  * @mac_cap: MAC Capability
  *
  * This function prints HE MAC Capability received from FW.
  *
  * Return: none
  */
-void wma_print_he_mac_cap(uint32_t mac_cap);
+void wma_print_he_mac_cap_w1(uint32_t mac_cap);
 
 /**
- * @wma_print_he_op() - Print HE Operation
+ * wma_print_he_mac_cap_w2() - Print HE MAC Capability
+ * @mac_cap: MAC Capability
+ *
+ * This function prints HE MAC Capability received from FW.
+ *
+ * Return: none
+ */
+void wma_print_he_mac_cap_w2(uint32_t mac_cap);
+
+/**
+ * wma_print_he_op() - Print HE Operation
  * @he_cap: pointer to HE Operation
  *
  * Print HE operation stored as dot11f structure
@@ -79,7 +97,7 @@ void wma_print_he_op(tDot11fIEhe_op *he_ops);
 
 /**
  * wma_update_target_ext_he_cap() - Update HE caps with given extended cap
- * @wma_handle: pointer to wma_handle
+ * @tgt_hdl: target psoc information
  * @tgt_cfg: Target config
  *
  * This function loop through each hardware mode and for each hardware mode
@@ -88,12 +106,12 @@ void wma_print_he_op(tDot11fIEhe_op *he_ops);
  *
  * Return: None
  */
-void wma_update_target_ext_he_cap(tp_wma_handle wma_handle,
-	struct wma_tgt_cfg *tgt_cfg);
+void wma_update_target_ext_he_cap(struct target_psoc_info *tgt_hdl,
+				  struct wma_tgt_cfg *tgt_cfg);
 
 /*
  * wma_he_update_tgt_services() - update tgt cfg to indicate 11ax support
- * @wma: pointer to WMA handle
+ * @wmi_handle: pointer to WMI handle
  * @cfg: pointer to WMA target services
  *
  * Based on WMI SERVICES information, enable 11ax support and set DOT11AX bit
@@ -101,7 +119,7 @@ void wma_update_target_ext_he_cap(tp_wma_handle wma_handle,
  *
  * Return: None
  */
-void wma_he_update_tgt_services(tp_wma_handle wma,
+void wma_he_update_tgt_services(struct wmi_unified *wmi_handle,
 				struct wma_tgt_services *cfg);
 
 /**
@@ -116,44 +134,50 @@ void wma_populate_peer_he_cap(struct peer_assoc_params *peer,
 
 /**
  * wma_update_vdev_he_ops() - update he ops in vdev start request
- * @req: pointer to vdev start request
- * @add_bss: pointer to ADD BSS params
+ * @he_ops: target he ops
+ * @he_op: source he ops
  *
  * Return: None
  */
-void wma_update_vdev_he_ops(struct wma_vdev_start_req *req,
-		tpAddBssParams add_bss);
+void wma_update_vdev_he_ops(uint32_t *he_ops, tDot11fIEhe_op *he_op);
+
+#define DOT11AX_HEMU_MODE 0x30
+#define HE_SUBFEE 0
+#define HE_SUBFER 1
+#define HE_MUBFEE 2
+#define HE_MUBFER 3
 
 /**
- * wma_copy_txrxnode_he_ops() - copy HE ops from vdev start req to txrx node
- * @node: pointer to txrx node
- * @req: pointer to vdev start request
+ * wma_set_he_txbf_params() - set HE Tx beamforming params to FW
+ * @vdev_id: VDEV id
+ * @su bfer: SU beamformer capability
+ * @su bfee: SU beamformee capability
+ * @mu bfer: MU beamformer capability
  *
  * Return: None
  */
-void wma_copy_txrxnode_he_ops(struct wma_txrx_node *node,
-		struct wma_vdev_start_req *req);
+void wma_set_he_txbf_params(uint8_t vdev_id, bool su_bfer,
+			    bool su_bfee, bool mu_bfer);
+
 
 /**
- * wma_copy_vdev_start_he_ops() - copy HE ops from vdev start req to vdev start
- * @params: pointer to vdev_start_params
- * @req: pointer to vdev start request
+ * wma_set_he_txbf_cfg() - set HE Tx beamforming mlme cfg to FW
+ * @mac: Global MAC context
+ * @vdev_id: VDEV id
  *
  * Return: None
  */
-void wma_copy_vdev_start_he_ops(struct vdev_start_params *params,
-		struct wma_vdev_start_req *req);
-
+void wma_set_he_txbf_cfg(struct mac_context *mac, uint8_t vdev_id);
 /**
  * wma_vdev_set_he_bss_params() - set HE OPs in vdev start
  * @wma: pointer to wma handle
  * @vdev_id: VDEV id
- * @req: pointer to vdev start request
+ * @he_info: pointer to he info
  *
  * Return: None
  */
 void wma_vdev_set_he_bss_params(tp_wma_handle wma, uint8_t vdev_id,
-				struct wma_vdev_start_req *req);
+				struct vdev_mlme_he_ops_info *he_info);
 
 /**
  * wma_vdev_set_he_config() - set HE Config in vdev start
@@ -164,22 +188,12 @@ void wma_vdev_set_he_bss_params(tp_wma_handle wma, uint8_t vdev_id,
  * Return: None
  */
 void wma_vdev_set_he_config(tp_wma_handle wma, uint8_t vdev_id,
-				tpAddBssParams add_bss);
+				struct bss_params *add_bss);
 
 static inline bool wma_is_peer_he_capable(tpAddStaParams params)
 {
 	return params->he_capable;
 }
-
-/**
- * wma_update_vdev_he_capable() - update vdev start request he capability
- * @req: pointer to vdev start request
- * @params: pointer to chan switch params
- *
- * Return: None
- */
-void wma_update_vdev_he_capable(struct wma_vdev_start_req *req,
-		tpSwitchChannelParams params);
 
 /**
  * wma_update_he_ops_ie() - update the HE OPS IE to firmware
@@ -193,7 +207,7 @@ void wma_update_vdev_he_capable(struct wma_vdev_start_req *req,
  * Return: QDF_STATUS
  */
 QDF_STATUS wma_update_he_ops_ie(tp_wma_handle wma, uint8_t vdev_id,
-					   uint32_t he_ops);
+				tDot11fIEhe_op *he_ops);
 
 /**
  * wma_get_he_capabilities() - Get HE capabilities from WMA
@@ -242,7 +256,11 @@ static inline void wma_print_he_phy_cap(uint32_t *phy_cap)
 {
 }
 
-static inline void wma_print_he_mac_cap(uint32_t mac_cap)
+static inline void wma_print_he_mac_cap_w1(uint32_t mac_cap)
+{
+}
+
+static inline void wma_print_he_mac_cap_w2(uint32_t mac_cap)
 {
 }
 
@@ -250,12 +268,13 @@ static inline void wma_print_he_op(tDot11fIEhe_op *he_ops)
 {
 }
 
-static inline void wma_update_target_ext_he_cap(tp_wma_handle wma_handle,
+static inline void wma_update_target_ext_he_cap(struct
+						target_psoc_info *tgt_hdl,
 						struct wma_tgt_cfg *tgt_cfg)
 {
 }
 
-static inline void wma_he_update_tgt_services(tp_wma_handle wma,
+static inline void wma_he_update_tgt_services(struct wmi_unified *wmi_handle,
 					      struct wma_tgt_services *cfg)
 {
 	cfg->en_11ax = false;
@@ -267,33 +286,34 @@ static inline void wma_populate_peer_he_cap(struct peer_assoc_params *peer,
 {
 }
 
-static inline void wma_update_vdev_he_ops(struct wma_vdev_start_req *req,
-			tpAddBssParams add_bss)
-{
-}
-static inline void wma_copy_txrxnode_he_ops(struct wma_txrx_node *intr,
-			struct wma_vdev_start_req *req)
+static inline
+void wma_update_vdev_he_ops(uint32_t *he_ops, tDot11fIEhe_op *he_op)
 {
 }
 
-static inline void wma_copy_vdev_start_he_ops(struct vdev_start_params *params,
-			struct wma_vdev_start_req *req)
+static inline void wma_set_he_txbf_params(uint8_t vdev_id, bool su_bfer,
+					  bool su_bfee, bool mu_bfer)
+{
+}
+
+static inline void wma_set_he_txbf_cfg(struct mac_context *mac, uint8_t vdev_id)
 {
 }
 
 static inline  QDF_STATUS wma_update_he_ops_ie(tp_wma_handle wma,
-			uint8_t vdev_id, uint32_t he_ops)
+			uint8_t vdev_id, tDot11fIEhe_op *he_ops)
 {
 	return QDF_STATUS_SUCCESS;
 }
 
-static inline void wma_vdev_set_he_bss_params(tp_wma_handle wma,
-				uint8_t vdev_id, struct wma_vdev_start_req *req)
+static inline
+void wma_vdev_set_he_bss_params(tp_wma_handle wma, uint8_t vdev_id,
+				struct vdev_mlme_he_ops_info *he_info)
 {
 }
 
 static inline void wma_vdev_set_he_config(tp_wma_handle wma, uint8_t vdev_id,
-					tpAddBssParams add_bss)
+					struct bss_params *add_bss)
 {
 }
 
@@ -302,21 +322,14 @@ static inline bool wma_is_peer_he_capable(tpAddStaParams params)
 	return false;
 }
 
-static inline void wma_update_vdev_he_capable(struct wma_vdev_start_req *req,
-					      tpSwitchChannelParams params)
-{
-}
-
 static inline void wma_set_he_vdev_param(struct wma_txrx_node *intr,
 			WMI_VDEV_PARAM param_id, uint32_t value)
 {
-	WMA_LOGI(FL("Unable to update WMI_VDEV_PARAM: %0x"), param_id);
 }
 
 static inline uint32_t wma_get_he_vdev_param(struct wma_txrx_node *intr,
 					     WMI_VDEV_PARAM param_id)
 {
-	WMA_LOGI(FL("Unable to update WMI_VDEV_PARAM: %0x"), param_id);
 	return 0;
 }
 

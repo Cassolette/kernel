@@ -1,8 +1,5 @@
 /*
- * Copyright (c) 2012-2017 The Linux Foundation. All rights reserved.
- *
- * Previously licensed under the ISC license by Qualcomm Atheros, Inc.
- *
+ * Copyright (c) 2012-2020 The Linux Foundation. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -19,15 +16,9 @@
  * PERFORMANCE OF THIS SOFTWARE.
  */
 
-/*
- * This file was originally distributed by Qualcomm Atheros, Inc.
- * under proprietary terms before Copyright ownership was assigned
- * to the Linux Foundation.
- */
-
 #include <wlan_qct_sys.h>
 #include <cds_api.h>
-#include <sir_types.h>           /* needed for tSirRetStatus */
+#include <sir_types.h>
 #include <sir_params.h>          /* needed for tSirMbMsg */
 #include <sir_api.h>             /* needed for SIR_... message types */
 #include <wni_api.h>             /* needed for WNI_... message types */
@@ -37,27 +28,100 @@
 #include "mac_init_api.h"
 #include "qdf_trace.h"
 
-/**
- * sys_build_message_header() - to build the sys message header
- * @sysMsgId: message id
- * @pMsg: pointer to message context
- *
- * This API is used to build the sys message header.
- *
- * Return: QDF_STATUS
+/*
+ * Cookie for SYS messages.  Note that anyone posting a SYS Message
+ * has to write the COOKIE in the reserved field of the message.  The
+ * SYS Module relies on this COOKIE
  */
-QDF_STATUS sys_build_message_header(SYS_MSG_ID sysMsgId,
-				    struct scheduler_msg *pMsg)
+#define SYS_MSG_COOKIE      0xFACE
+
+/* SYS stop timeout 30 seconds */
+#define SYS_STOP_TIMEOUT (30000)
+static qdf_event_t g_stop_evt;
+
+QDF_STATUS sys_build_message_header(SYS_MSG_ID msg_id,
+				    struct scheduler_msg *msg)
 {
-	pMsg->type = sysMsgId;
-	pMsg->reserved = SYS_MSG_COOKIE;
+	msg->type = msg_id;
+	msg->reserved = SYS_MSG_COOKIE;
 
 	return QDF_STATUS_SUCCESS;
 }
 
 /**
+ * umac_stop_complete_cb() - a callback when system stop completes
+ * @msg: pointer to actual message being handled
+ *
+ * this callback is used once system stop is completed.
+ *
+ * Return: QDF_STATUS
+ */
+#ifdef QDF_ENABLE_TRACING
+static QDF_STATUS umac_stop_complete_cb(struct scheduler_msg *msg)
+{
+	qdf_event_t *stop_evt = msg->bodyptr;
+	QDF_STATUS qdf_status = qdf_event_set(stop_evt);
+
+	QDF_ASSERT(QDF_IS_STATUS_SUCCESS(qdf_status));
+
+	return qdf_status;
+}
+#else
+static QDF_STATUS umac_stop_complete_cb(struct scheduler_msg *msg)
+{
+	return QDF_STATUS_SUCCESS;
+}
+#endif
+
+static inline QDF_STATUS umac_stop_flush_cb(struct scheduler_msg *msg)
+{
+	return QDF_STATUS_SUCCESS;
+}
+
+/**
+ * umac_stop() - To post stop message to system module
+ *
+ * This API is used post a stop message to system module
+ *
+ * Return: QDF_STATUS
+ */
+QDF_STATUS umac_stop(void)
+{
+	QDF_STATUS qdf_status = QDF_STATUS_SUCCESS;
+	struct scheduler_msg umac_stop_msg;
+
+	/* Initialize the stop event */
+	qdf_status = qdf_event_create(&g_stop_evt);
+
+	if (!QDF_IS_STATUS_SUCCESS(qdf_status))
+		return qdf_status;
+
+	/* post a message to SYS module in MC to stop SME and MAC */
+	sys_build_message_header(SYS_MSG_ID_UMAC_STOP, &umac_stop_msg);
+
+	/* Save the user callback and user data */
+	umac_stop_msg.callback = umac_stop_complete_cb;
+	umac_stop_msg.bodyptr = (void *)&g_stop_evt;
+	umac_stop_msg.flush_callback = umac_stop_flush_cb;
+
+	/* post the message.. */
+	qdf_status = scheduler_post_message(QDF_MODULE_ID_SYS,
+					    QDF_MODULE_ID_SYS,
+					    QDF_MODULE_ID_SYS, &umac_stop_msg);
+	if (!QDF_IS_STATUS_SUCCESS(qdf_status))
+		qdf_status = QDF_STATUS_E_BADMSG;
+
+	qdf_status = qdf_wait_single_event(&g_stop_evt, SYS_STOP_TIMEOUT);
+	QDF_ASSERT(QDF_IS_STATUS_SUCCESS(qdf_status));
+
+	qdf_status = qdf_event_destroy(&g_stop_evt);
+	QDF_ASSERT(QDF_IS_STATUS_SUCCESS(qdf_status));
+
+	return qdf_status;
+}
+
+/**
  * sys_mc_process_msg() - to process system mc thread messages
- * @p_cds_context: pointer to cds context
  * @pMsg: message pointer
  *
  * This API is used to process the message
@@ -67,11 +131,9 @@ QDF_STATUS sys_build_message_header(SYS_MSG_ID sysMsgId,
 static QDF_STATUS sys_mc_process_msg(struct scheduler_msg *pMsg)
 {
 	QDF_STATUS qdf_status = QDF_STATUS_SUCCESS;
-	data_stall_detect_cb data_stall_detect_callback;
-	tpAniSirGlobal mac_ctx;
-	void *hHal;
+	mac_handle_t mac_handle;
 
-	if (NULL == pMsg) {
+	if (!pMsg) {
 		QDF_TRACE(QDF_MODULE_ID_SYS, QDF_TRACE_LEVEL_ERROR,
 			  "%s: NULL pointer to struct scheduler_msg", __func__);
 		QDF_ASSERT(0);
@@ -88,49 +150,23 @@ static QDF_STATUS sys_mc_process_msg(struct scheduler_msg *pMsg)
 	if (SYS_MSG_COOKIE == pMsg->reserved) {
 		/* Process all the new SYS messages.. */
 		switch (pMsg->type) {
-		case SYS_MSG_ID_MC_THR_PROBE:
-			/*
-			 * Process MC thread probe.  Just callback to the
-			 * function that is in the message.
-			 */
+		case SYS_MSG_ID_UMAC_STOP:
 			QDF_TRACE(QDF_MODULE_ID_SYS, QDF_TRACE_LEVEL_ERROR,
-				"Rx SYS_MSG_ID_MC_THR_PROBE msgType=%d[0x%08x]",
-				pMsg->type, pMsg->type);
-			break;
+				"Processing SYS MC STOP");
+			mac_handle = cds_get_context(QDF_MODULE_ID_PE);
+			if (!mac_handle)
+				break;
 
-		case SYS_MSG_ID_FTM_RSP:
-			hHal = cds_get_context(QDF_MODULE_ID_PE);
-			if (NULL == hHal) {
-				QDF_TRACE(QDF_MODULE_ID_SYS,
-						QDF_TRACE_LEVEL_ERROR,
-						FL("Invalid hal"));
-				qdf_mem_free(pMsg->bodyptr);
-				break;
-			}
-			mac_ctx = PMAC_STRUCT(hHal);
-			if (NULL == mac_ctx) {
-				QDF_TRACE(QDF_MODULE_ID_SYS,
-						QDF_TRACE_LEVEL_ERROR,
-						FL("Invalid mac context"));
-				qdf_mem_free(pMsg->bodyptr);
-				break;
-			}
-			if (NULL == mac_ctx->ftm_msg_processor_callback) {
-				QDF_TRACE(QDF_MODULE_ID_SYS,
-						QDF_TRACE_LEVEL_ERROR,
-						FL("callback pointer is NULL"));
-				qdf_mem_free(pMsg->bodyptr);
-				break;
-			}
-			mac_ctx->ftm_msg_processor_callback(
-					(void *)pMsg->bodyptr);
-			qdf_mem_free(pMsg->bodyptr);
+			qdf_status = sme_stop(mac_handle);
+			QDF_ASSERT(QDF_IS_STATUS_SUCCESS(qdf_status));
+			qdf_status = mac_stop(mac_handle);
+			QDF_ASSERT(QDF_IS_STATUS_SUCCESS(qdf_status));
+			qdf_status = pMsg->callback(pMsg);
 			break;
-
 		case SYS_MSG_ID_DATA_STALL_MSG:
-			data_stall_detect_callback = pMsg->callback;
-			if (NULL != data_stall_detect_callback)
-				data_stall_detect_callback(pMsg->bodyptr);
+			if (pMsg->callback)
+				qdf_status = pMsg->callback(pMsg);
+
 			qdf_mem_free(pMsg->bodyptr);
 			break;
 		default:
@@ -159,113 +195,39 @@ QDF_STATUS sys_mc_process_handler(struct scheduler_msg *msg)
 	return sys_mc_process_msg(msg);
 }
 
-/**
- * sys_process_mmh_msg() - this api to process mmh message
- * @pMac: pointer to mac context
- * @pMsg: pointer to message
- *
- * This API is used to process mmh message
- *
- * Return: none
- */
-void sys_process_mmh_msg(tpAniSirGlobal pMac, struct scheduler_msg *pMsg)
+void sys_process_mmh_msg(struct mac_context *mac, struct scheduler_msg *msg)
 {
-	QDF_MODULE_ID targetMQ = QDF_MODULE_ID_SYS;
+	QDF_MODULE_ID dest_module = QDF_MODULE_ID_SYS;
 
-	/*
-	 * The body of this pMsg is a tSirMbMsg
-	 * Contrary to previous generation, we cannot free it here!
-	 * It is up to the callee to free it
-	 */
-	if (NULL == pMsg) {
-		QDF_TRACE(QDF_MODULE_ID_SYS, QDF_TRACE_LEVEL_ERROR,
-				"NULL Message Pointer");
+	if (!msg) {
 		QDF_ASSERT(0);
 		return;
 	}
 
-	switch (pMsg->type) {
-	/*
-	 * Following messages are routed to SYS
-	 */
-	case WNI_CFG_DNLD_REQ:
-	case WNI_CFG_DNLD_CNF:
-		/* Forward this message to the SYS module */
-		targetMQ = QDF_MODULE_ID_SYS;
-		QDF_TRACE(QDF_MODULE_ID_SYS, QDF_TRACE_LEVEL_ERROR,
-			"Handling for the Message ID %d is removed in SYS",
-			pMsg->type);
-		QDF_ASSERT(0);
-		break;
-
-		/*
-		 * Following messages are routed to HAL
-		 */
-	case WNI_CFG_DNLD_RSP:
-		/* Forward this message to the HAL module */
-		targetMQ = QDF_MODULE_ID_WMA;
-		QDF_TRACE(QDF_MODULE_ID_SYS, QDF_TRACE_LEVEL_ERROR,
-			"Handling for the Message ID %d is removed as no HAL",
-			pMsg->type);
-
-		QDF_ASSERT(0);
-		break;
-
-	case WNI_CFG_GET_REQ:
-	case WNI_CFG_SET_REQ:
-	case WNI_CFG_SET_REQ_NO_RSP:
+	switch (msg->type) {
 	case eWNI_SME_SYS_READY_IND:
 		/* Forward this message to the PE module */
-		targetMQ = QDF_MODULE_ID_PE;
+		dest_module = QDF_MODULE_ID_PE;
 		break;
-
-	case WNI_CFG_GET_RSP:
-	case WNI_CFG_SET_CNF:
-		/* Forward this message to the SME module */
-		targetMQ = QDF_MODULE_ID_SME;
-		break;
-
 	default:
-		if ((pMsg->type >= eWNI_SME_MSG_TYPES_BEGIN)
-				&& (pMsg->type <= eWNI_SME_MSG_TYPES_END)) {
-			targetMQ = QDF_MODULE_ID_SME;
+		if ((msg->type >= eWNI_SME_MSG_TYPES_BEGIN) &&
+		    (msg->type <= eWNI_SME_MSG_TYPES_END)) {
+			dest_module = QDF_MODULE_ID_SME;
 			break;
 		}
 
 		QDF_TRACE(QDF_MODULE_ID_SYS, QDF_TRACE_LEVEL_ERROR,
-			"Message of ID %d is not yet handled by SYS",
-			pMsg->type);
+			  "Message of ID %d is not yet handled by SYS",
+			  msg->type);
 		QDF_ASSERT(0);
 	}
 
 	/*
 	 * Post now the message to the appropriate module for handling
 	 */
-	if (QDF_STATUS_SUCCESS != scheduler_post_msg(targetMQ,
-					 pMsg)) {
-		/*
-		 * Caller doesn't allocate memory for the pMsg.
-		 * It allocate memory for bodyptr free the mem and return
-		 */
-		if (pMsg->bodyptr)
-			qdf_mem_free(pMsg->bodyptr);
-	}
-
-}
-
-/**
- * wlan_sys_probe() - API to post MC thread probe
- *
- * This API will be used send probe message
- *
- * Return: none
- */
-void wlan_sys_probe(void)
-{
-	struct scheduler_msg message = {0};
-
-	message.reserved = SYS_MSG_COOKIE;
-	message.type = SYS_MSG_ID_MC_THR_PROBE;
-	message.bodyptr = NULL;
-	scheduler_post_msg(QDF_MODULE_ID_SYS, &message);
+	if (QDF_STATUS_SUCCESS != scheduler_post_message(QDF_MODULE_ID_SYS,
+							 QDF_MODULE_ID_SYS,
+							 dest_module,
+							 msg))
+		qdf_mem_free(msg->bodyptr);
 }

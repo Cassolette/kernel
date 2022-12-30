@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017 The Linux Foundation. All rights reserved.
+ * Copyright (c) 2017-2021 The Linux Foundation. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -38,13 +38,32 @@
 /**
  * typedef for vdev notifying the vdev pause bitmap new value to mlme
  */
-typedef void (*pmo_notify_pause_bitmap)(
-			uint8_t vdev_id, uint16_t value);
+typedef void (*pmo_notify_pause_bitmap)(uint8_t vdev_id, uint16_t value);
+
+/**
+ * typedef for function that gets cfg integer from mlme
+ */
+typedef QDF_STATUS (*pmo_get_cfg_int)(int cfg_id, int *value);
+
+/**
+ * typedef for function that gets dtim period from mlme
+ */
+typedef QDF_STATUS (*pmo_get_dtim_period)(uint8_t vdev_id, uint8_t *value);
+
+/**
+ * typedef for function that gets  beacon interval from mlme
+ */
+typedef QDF_STATUS (*pmo_get_beacon_interval)(uint8_t vdev_id, uint16_t *value);
 
 /**
  * typedef for getting vdev pause bitmap
  */
 typedef  uint16_t(*pmo_get_pause_bitmap)(uint8_t vdev_id);
+
+/**
+ * typedef for getting vdev datapath handle
+ */
+typedef struct cdp_vdev * (*pmo_get_vdev_dp_handle)(uint8_t vdev_id);
 
 /**
  * typedef to know is deviec is in power save mode
@@ -54,14 +73,12 @@ typedef  bool (*pmo_is_device_in_low_pwr_mode)(uint8_t vdev_id);
 /*
  * typedef for pld auto suspend callback during runtime suspend
  */
-typedef
-int (*pmo_pld_auto_suspend_cb)(void);
+typedef int (*pmo_pld_auto_suspend_cb)(void);
 
 /*
  * typedef for pld auto resume callback during runtime resume
  */
-typedef
-int (*pmo_pld_auto_resume_cb)(void);
+typedef int (*pmo_pld_auto_resume_cb)(void);
 
 /**
  * struct wlan_pmo_tx_ops - structure of tx function
@@ -74,6 +91,7 @@ int (*pmo_pld_auto_resume_cb)(void);
  * @send_enable_wakeup_event_req: fp to send enable wow wakeup events req
  * @send_disable_wakeup_event_req: fp to send disable wow wakeup events req
  * @send_add_wow_pattern: fp to send wow pattern request
+ * @del_wow_pattern: fp to delete wow pattern from firmware
  * @send_enhance_mc_offload_req: fp to send enhanced multicast offload request
  * @send_set_mc_filter_req: fp to send set mc filter request
  * @send_clear_mc_filter_req: fp to send clear mc filter request
@@ -101,6 +119,11 @@ int (*pmo_pld_auto_resume_cb)(void);
  * @psoc_get_runtime_pm_in_progress: fp to get runtime pm is in progress status
  * @psoc_send_host_wakeup_ind: fp tp send host wake indication to fwr
  * @psoc_send_target_resume_req: fp to send target resume request
+ * @psoc_send_d0wow_enable_req: fp to send D0 WOW enable request
+ * @psoc_send_d0wow_disable_req: fp to send D0 WOW disable request
+ * @psoc_send_idle_roam_suspend_mode: fp to send suspend mode for
+ * idle roam  trigger to firmware.
+ * @send_icmp_offload_req: fp to send icmp offload request
  */
 struct wlan_pmo_tx_ops {
 	QDF_STATUS (*send_arp_offload_req)(struct wlan_objmgr_vdev *vdev,
@@ -112,11 +135,13 @@ struct wlan_pmo_tx_ops {
 	QDF_STATUS (*send_ns_offload_req)(struct wlan_objmgr_vdev *vdev,
 			struct pmo_arp_offload_params *arp_offload_req,
 			struct pmo_ns_offload_params *ns_offload_req);
+#ifdef WLAN_FEATURE_PACKET_FILTERING
 	QDF_STATUS(*send_set_pkt_filter)(struct wlan_objmgr_vdev *vdev,
 			struct pmo_rcv_pkt_fltr_cfg *pmo_set_pkt_fltr_req);
 	QDF_STATUS(*send_clear_pkt_filter)(struct wlan_objmgr_vdev *vdev,
 			struct pmo_rcv_pkt_fltr_clear_param
 						*pmo_clr_pkt_fltr_param);
+#endif
 	QDF_STATUS (*send_enable_wow_wakeup_event_req)(
 			struct wlan_objmgr_vdev *vdev,
 			uint32_t *bitmap);
@@ -128,6 +153,8 @@ struct wlan_pmo_tx_ops {
 			uint8_t ptrn_id, const uint8_t *ptrn, uint8_t ptrn_len,
 			uint8_t ptrn_offset, const uint8_t *mask,
 			uint8_t mask_len, bool user);
+	QDF_STATUS (*del_wow_pattern)(
+			struct wlan_objmgr_vdev *vdev, uint8_t ptrn_id);
 	QDF_STATUS (*send_enhance_mc_offload_req)(
 			struct wlan_objmgr_vdev *vdev, bool enable);
 	QDF_STATUS (*send_set_mc_filter_req)(
@@ -175,6 +202,11 @@ struct wlan_pmo_tx_ops {
 	QDF_STATUS (*send_vdev_sta_ps_param_req)(
 			struct wlan_objmgr_vdev *vdev,
 			uint32_t ps_mode, uint32_t value);
+#ifdef WLAN_FEATURE_IGMP_OFFLOAD
+	QDF_STATUS (*send_igmp_offload_req)(
+			struct wlan_objmgr_vdev *vdev,
+			struct pmo_igmp_offload_req *pmo_igmp_req);
+#endif
 	void (*psoc_update_wow_bus_suspend)(
 			struct wlan_objmgr_psoc *psoc, uint8_t value);
 	int (*psoc_get_host_credits)(
@@ -183,6 +215,9 @@ struct wlan_pmo_tx_ops {
 			struct wlan_objmgr_psoc *psoc);
 	void (*update_target_suspend_flag)(
 		struct wlan_objmgr_psoc *psoc, uint8_t value);
+	void (*update_target_suspend_acked_flag)(
+		struct wlan_objmgr_psoc *psoc, uint8_t value);
+	bool (*is_target_suspended)(struct wlan_objmgr_psoc *psoc);
 	QDF_STATUS (*psoc_send_wow_enable_req)(struct wlan_objmgr_psoc *psoc,
 		struct pmo_wow_cmd_params *param);
 	QDF_STATUS (*psoc_send_supend_req)(struct wlan_objmgr_psoc *psoc,
@@ -193,7 +228,17 @@ struct wlan_pmo_tx_ops {
 	QDF_STATUS (*psoc_send_host_wakeup_ind)(struct wlan_objmgr_psoc *psoc);
 	QDF_STATUS (*psoc_send_target_resume_req)(
 			struct wlan_objmgr_psoc *psoc);
-
+	QDF_STATUS (*psoc_send_d0wow_enable_req)(
+			struct wlan_objmgr_psoc *psoc);
+	QDF_STATUS (*psoc_send_d0wow_disable_req)(
+			struct wlan_objmgr_psoc *psoc);
+	QDF_STATUS (*psoc_send_idle_roam_suspend_mode)(
+			struct wlan_objmgr_psoc *psoc, uint8_t val);
+#ifdef WLAN_FEATURE_ICMP_OFFLOAD
+	QDF_STATUS (*send_icmp_offload_req)(
+			struct wlan_objmgr_psoc *psoc,
+			struct pmo_icmp_offload *pmo_icmp_req);
+#endif
 };
 
 #endif /* end  of _WLAN_PMO_OBJ_MGMT_PUBLIC_STRUCT_H_ */

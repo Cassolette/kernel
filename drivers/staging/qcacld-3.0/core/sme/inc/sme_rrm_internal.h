@@ -1,8 +1,5 @@
 /*
- * Copyright (c) 2011-2012, 2014-2017 The Linux Foundation. All rights reserved.
- *
- * Previously licensed under the ISC license by Qualcomm Atheros, Inc.
- *
+ * Copyright (c) 2011-2012, 2014-2018, 2020 The Linux Foundation. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -17,12 +14,6 @@
  * PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR OTHER
  * TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
  * PERFORMANCE OF THIS SOFTWARE.
- */
-
-/*
- * This file was originally distributed by Qualcomm Atheros, Inc.
- * under proprietary terms before Copyright ownership was assigned
- * to the Linux Foundation.
  */
 
 #if !defined(__SMERRMINTERNAL_H)
@@ -73,6 +64,7 @@ typedef struct sRrmSMEContext {
 	uint16_t token;
 	struct qdf_mac_addr sessionBssId;
 	uint8_t regClass;
+	uint8_t measurement_idx;
 	/* list of all channels to be measured. */
 	tCsrChannelInfo channelList;
 	uint8_t currentIndex;
@@ -83,8 +75,7 @@ typedef struct sRrmSMEContext {
 	uint16_t randnIntvl;
 	uint16_t duration[SIR_ESE_MAX_MEAS_IE_REQS];
 	uint8_t measMode[SIR_ESE_MAX_MEAS_IE_REQS];
-	struct rrm_config_param rrmConfig;
-	qdf_mc_timer_t IterMeasTimer;
+	uint32_t scan_id;
 	tDblLinkList neighborReportCache;
 	tRrmNeighborRequestControlInfo neighborReqControlInfo;
 
@@ -99,6 +90,17 @@ typedef struct sRrmSMEContext {
 typedef struct sRrmNeighborReq {
 	uint8_t no_ssid;
 	tSirMacSSid ssid;
+	bool neighbor_report_offload;
 } tRrmNeighborReq, *tpRrmNeighborReq;
+
+/**
+ * sme_rrm_issue_scan_req() - To issue rrm scan request
+ * @mac_ctx: pointer to mac context
+ *
+ * This routine is called to issue rrm scan request
+ *
+ * Return: QDF_STATUS
+ */
+QDF_STATUS sme_rrm_issue_scan_req(struct mac_context *mac_ctx, uint8_t idx);
 
 #endif /* #if !defined( __SMERRMINTERNAL_H ) */

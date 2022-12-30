@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017 The Linux Foundation. All rights reserved.
+ * Copyright (c) 2017-2020 The Linux Foundation. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -23,6 +23,8 @@
 #ifndef _WLAN_PMO_OBJMGR_H
 #define _WLAN_PMO_OBJMGR_H
 
+#ifdef WLAN_POWER_MANAGEMENT_OFFLOAD
+
 #include "wlan_cmn.h"
 #include "wlan_objmgr_cmn.h"
 #include "wlan_objmgr_peer_obj.h"
@@ -30,6 +32,8 @@
 #include "wlan_objmgr_pdev_obj.h"
 #include "wlan_objmgr_psoc_obj.h"
 #include "wlan_pmo_obj_mgmt_public_struct.h"
+#include "wlan_utility.h"
+
 
 /* Get/Put Ref */
 
@@ -37,7 +41,6 @@
 #define pmo_peer_put_ref(peer) wlan_objmgr_peer_release_ref(peer, WLAN_PMO_ID)
 
 #define pmo_vdev_get_ref(vdev) wlan_objmgr_vdev_try_get_ref(vdev, WLAN_PMO_ID)
-#define pmo_vdev_put_ref(vdev) wlan_objmgr_vdev_release_ref(vdev, WLAN_PMO_ID)
 
 #define pmo_pdev_get_ref(pdev) wlan_objmgr_pdev_try_get_ref(pdev, WLAN_PMO_ID)
 #define pmo_pdev_put_ref(pdev) wlan_objmgr_pdev_release_ref(pdev, WLAN_PMO_ID)
@@ -116,22 +119,6 @@ pmo_vdev_get_id(struct wlan_objmgr_vdev *vdev)
 
 /* Tree Navigation: psoc */
 
-static inline struct wlan_objmgr_vdev *
-pmo_psoc_get_vdev(struct wlan_objmgr_psoc *psoc, uint8_t vdev_id)
-{
-	struct wlan_objmgr_vdev *vdev;
-
-	QDF_BUG(vdev_id < WLAN_UMAC_PSOC_MAX_VDEVS);
-	if (vdev_id >= WLAN_UMAC_PSOC_MAX_VDEVS)
-		return NULL;
-
-	wlan_psoc_obj_lock(psoc);
-	vdev = psoc->soc_objmgr.wlan_vdev_list[vdev_id];
-	wlan_psoc_obj_unlock(psoc);
-
-	return vdev;
-}
-
 static inline struct pmo_psoc_priv_obj *
 pmo_psoc_get_priv(struct wlan_objmgr_psoc *psoc)
 {
@@ -142,6 +129,21 @@ pmo_psoc_get_priv(struct wlan_objmgr_psoc *psoc)
 
 	return psoc_priv;
 }
+
+static inline bool __pmo_spinlock_bh_safe(struct pmo_psoc_priv_obj *psoc_ctx)
+{
+	if (!psoc_ctx)
+		return false;
+
+	qdf_spin_lock_bh(&psoc_ctx->lock);
+
+	return true;
+}
+
+#define pmo_psoc_with_ctx(psoc, cursor) \
+	for (cursor = pmo_psoc_get_priv(psoc); \
+	     __pmo_spinlock_bh_safe(cursor); \
+	     qdf_spin_unlock_bh(&cursor->lock), cursor = NULL)
 
 /* Tree Navigation: pdev */
 
@@ -197,5 +199,7 @@ pmo_vdev_get_psoc_priv(struct wlan_objmgr_vdev *vdev)
 {
 	return pmo_psoc_get_priv(pmo_pdev_get_psoc(pmo_vdev_get_pdev(vdev)));
 }
+
+#endif /* WLAN_POWER_MANAGEMENT_OFFLOAD */
 
 #endif /* _WLAN_PMO_OBJMGR_H */

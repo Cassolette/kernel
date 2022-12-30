@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017 The Linux Foundation. All rights reserved.
+ * Copyright (c) 2017-2021 The Linux Foundation. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -68,6 +68,9 @@ QDF_STATUS target_if_pmo_send_wow_patterns_to_fw(struct wlan_objmgr_vdev *vdev,
 		const uint8_t *ptrn, uint8_t ptrn_len,
 		uint8_t ptrn_offset, const uint8_t *mask,
 		uint8_t mask_len, bool user);
+
+QDF_STATUS target_if_pmo_del_wow_patterns_to_fw(struct wlan_objmgr_vdev *vdev,
+		uint8_t ptrn_id);
 
 /**
  * target_if_pmo_send_enhance_mc_offload_req() - send enhance mc offload req
@@ -169,6 +172,7 @@ QDF_STATUS target_if_pmo_send_action_frame_patterns(
 QDF_STATUS target_if_pmo_conf_hw_filter(struct wlan_objmgr_psoc *psoc,
 					struct pmo_hw_filter_params *req);
 
+#ifdef WLAN_FEATURE_PACKET_FILTERING
 /**
  * target_if_pmo_send_pkt_filter_req() - enable packet filter
  * @vdev: objmgr vdev
@@ -192,6 +196,7 @@ QDF_STATUS target_if_pmo_send_pkt_filter_req(struct wlan_objmgr_vdev *vdev,
  */
 QDF_STATUS target_if_pmo_clear_pkt_filter_req(struct wlan_objmgr_vdev *vdev,
 			struct pmo_rcv_pkt_fltr_clear_param *rcv_clear_param);
+#endif
 
 /**
  * target_if_pmo_send_arp_offload_req() - sends arp request to fwr
@@ -208,6 +213,7 @@ QDF_STATUS target_if_pmo_send_arp_offload_req(
 		struct pmo_arp_offload_params *arp_offload_req,
 		struct pmo_ns_offload_params *ns_offload_req);
 
+#ifdef WLAN_NS_OFFLOAD
 /**
  * target_if_pmo_send_ns_offload_req() - sends ns request to fwr
  * @vdev: objmgr vdev
@@ -222,7 +228,15 @@ QDF_STATUS target_if_pmo_send_ns_offload_req(
 		struct wlan_objmgr_vdev *vdev,
 		struct pmo_arp_offload_params *arp_offload_req,
 		struct pmo_ns_offload_params *ns_offload_req);
-
+#else /* WLAN_NS_OFFLOAD */
+static inline QDF_STATUS
+target_if_pmo_send_ns_offload_req(struct wlan_objmgr_vdev *vdev,
+		struct pmo_arp_offload_params *arp_offload_req,
+		struct pmo_ns_offload_params *ns_offload_req)
+{
+	return QDF_STATUS_SUCCESS;
+}
+#endif /* WLAN_NS_OFFLOAD */
 /**
  * target_if_pmo_send_gtk_offload_req() - send gtk offload request in fwr
  * @vdev: objmgr vdev handle
@@ -337,6 +351,28 @@ QDF_STATUS target_if_pmo_send_vdev_ps_param_req(
 		uint32_t param_id,
 		uint32_t param_value);
 
+#ifdef WLAN_FEATURE_IGMP_OFFLOAD
+/**
+ * target_if_pmo_send_igmp_offload_req() - Send igmp offload req to fw
+ * @vdev: objmgr vdev
+ * @pmo_igmp_req: igmp req
+ *
+ * Return: QDF status
+ */
+QDF_STATUS
+target_if_pmo_send_igmp_offload_req(
+		struct wlan_objmgr_vdev *vdev,
+		struct pmo_igmp_offload_req *pmo_igmp_req);
+#else
+static inline QDF_STATUS
+target_if_pmo_send_igmp_offload_req(
+		struct wlan_objmgr_vdev *vdev,
+		struct pmo_igmp_offload_req *pmo_igmp_req)
+{
+	return QDF_STATUS_SUCCESS;
+}
+#endif
+
 /**
  * target_if_pmo_psoc_update_bus_suspend() - update wmi bus suspend flag
  * @psoc: objmgr psoc
@@ -368,10 +404,30 @@ int target_if_pmo_psoc_get_pending_cmnds(struct wlan_objmgr_psoc *psoc);
  * @psoc: objmgr psoc
  * @value: value
  *
- * Return: return wmi pending commands
+ * Return: None
  */
 void target_if_pmo_update_target_suspend_flag(struct wlan_objmgr_psoc *psoc,
 		uint8_t value);
+
+/**
+ * target_if_pmo_update_target_suspend_acked_flag() - set wmi target suspend
+ *                                                    acked flag
+ * @psoc: objmgr psoc
+ * @value: value
+ *
+ * Return: None
+ */
+void target_if_pmo_update_target_suspend_acked_flag(
+						struct wlan_objmgr_psoc *psoc,
+						uint8_t value);
+
+/**
+ * target_if_pmo_is_target_suspended() - get wmi target suspend flag
+ * @psoc: objmgr psoc
+ *
+ * Return: true if target suspended, false otherwise
+ */
+bool target_if_pmo_is_target_suspended(struct wlan_objmgr_psoc *psoc);
 
 /**
  * target_if_pmo_psoc_send_wow_enable_req() -send wow enable request
@@ -430,6 +486,35 @@ QDF_STATUS target_if_pmo_psoc_send_target_resume_req(
 		struct wlan_objmgr_psoc *psoc);
 
 /**
+ * target_if_pmo_psoc_send_d0wow_enable_req() - send d0 wow enable request
+ * @psoc: objmgr psoc
+ *
+ * Return: return QDF_STATUS_SUCCESS on success else error code
+ */
+QDF_STATUS target_if_pmo_psoc_send_d0wow_enable_req(
+		struct wlan_objmgr_psoc *psoc);
+
+/**
+ * target_if_pmo_psoc_send_d0wow_disable_req() - send d0 wow disable request
+ * @psoc: objmgr psoc
+ *
+ * Return: return QDF_STATUS_SUCCESS on success else error code
+ */
+QDF_STATUS target_if_pmo_psoc_send_d0wow_disable_req(
+		struct wlan_objmgr_psoc *psoc);
+
+/**
+ * target_if_pmo_psoc_send_idle_monitor_cmd() - send screen status to firmware
+ * @psoc: objmgr psoc
+ * @val: Idle monitor value
+ *
+ * Return: QDF_STATUS_SUCCESS on success else error code
+ */
+QDF_STATUS
+target_if_pmo_psoc_send_idle_monitor_cmd(struct wlan_objmgr_psoc *psoc,
+					 uint8_t val);
+
+/**
  * target_if_pmo_register_tx_ops() - Register PMO component TX OPS
  * @tx_ops: PMO if transmit ops
  *
@@ -437,5 +522,19 @@ QDF_STATUS target_if_pmo_psoc_send_target_resume_req(
  */
 void target_if_pmo_register_tx_ops(struct wlan_pmo_tx_ops *tx_ops);
 
+#ifdef WLAN_FEATURE_ICMP_OFFLOAD
+/**
+ * target_if_pmo_send_icmp_offload_req() - sends icmp request to fwr
+ * @psoc: objmgr psoc
+ * @pmo_icmp_req: icmp offload request
+ *
+ * This functions sends icmp request to fwr.
+ *
+ * Return: QDF_STATUS_SUCCESS for success or error code
+ */
+QDF_STATUS
+target_if_pmo_send_icmp_offload_req(struct wlan_objmgr_psoc *psoc,
+				    struct pmo_icmp_offload *pmo_icmp_req);
 #endif
 
+#endif

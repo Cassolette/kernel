@@ -1,8 +1,5 @@
 /*
- * Copyright (c) 2011,2013-2017 The Linux Foundation. All rights reserved.
- *
- * Previously licensed under the ISC license by Qualcomm Atheros, Inc.
- *
+ * Copyright (c) 2011,2013-2020 The Linux Foundation. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -17,12 +14,6 @@
  * PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR OTHER
  * TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
  * PERFORMANCE OF THIS SOFTWARE.
- */
-
-/*
- * This file was originally distributed by Qualcomm Atheros, Inc.
- * under proprietary terms before Copyright ownership was assigned
- * to the Linux Foundation.
  */
 
 /*
@@ -77,6 +68,7 @@ static const struct reg_dmn_pair g_reg_dmn_pairs[] = {
 	{FCC1_WORLD, FCC1, WORLD, CTRY_DEFAULT},
 	{FCC2_WORLD, FCC2, WORLD, CTRY_DEFAULT},
 	{FCC2_ETSIC, FCC2, ETSIC, CTRY_DEFAULT},
+	{FCC2_FCCA, FCC2, FCCA, CTRY_DEFAULT},
 	{FCC3_FCCA, FCC3, FCCA, CTRY_DEFAULT},
 	{FCC3_WORLD, FCC3, WORLD, CTRY_DEFAULT},
 	{FCC3_ETSIC, FCC3, ETSIC, CTRY_DEFAULT},
@@ -89,6 +81,8 @@ static const struct reg_dmn_pair g_reg_dmn_pairs[] = {
 	{FCC9_FCCA, FCC9, FCCA, CTRY_DEFAULT},
 	{FCC10_FCCA, FCC10, FCCA, CTRY_DEFAULT},
 	{FCC11_WORLD, FCC11, WORLD, CTRY_DEFAULT},
+	{FCC13_WORLD, FCC13, WORLD, CTRY_DEFAULT},
+	{FCC14_FCCB, FCC14, FCCB, CTRY_DEFAULT},
 	{ETSI1_WORLD, ETSI1, WORLD, CTRY_DEFAULT},
 	{ETSI3_WORLD, ETSI3, WORLD, CTRY_DEFAULT},
 	{ETSI4_WORLD, ETSI4, WORLD, CTRY_DEFAULT},
@@ -111,6 +105,9 @@ static const struct reg_dmn_pair g_reg_dmn_pairs[] = {
 	{APL14_WORLD, APL14, WORLD, CTRY_DEFAULT},
 	{APL15_WORLD, APL15, WORLD, CTRY_DEFAULT},
 	{APL16_WORLD, APL16, WORLD, CTRY_DEFAULT},
+	{APL17_ETSID, APL17, WORLD, CTRY_DEFAULT},
+	{APL20_WORLD, APL20, WORLD, CTRY_DEFAULT},
+	{APL23_WORLD, APL23, WORLD, CTRY_DEFAULT},
 	{WOR0_WORLD, WOR0_WORLD, WOR0_WORLD, CTRY_DEFAULT},
 	{WOR1_WORLD, WOR1_WORLD, WOR1_WORLD, CTRY_DEFAULT},
 	{WOR2_WORLD, WOR2_WORLD, WOR2_WORLD, CTRY_DEFAULT},
@@ -125,6 +122,7 @@ static const struct reg_dmn_pair g_reg_dmn_pairs[] = {
 	{WORB_WORLD, WORB_WORLD, WORB_WORLD, CTRY_DEFAULT},
 	{WORC_WORLD, WORC_WORLD, WORC_WORLD, CTRY_DEFAULT},
 	{MKK5_MKKC, MKK5, MKKC, CTRY_JAPAN15},
+	{MKK5_MKKA2, MKK5, MKKA, CTRY_DEFAULT},
 };
 
 static const struct country_code_to_reg_dmn g_all_countries[] = {
@@ -303,65 +301,70 @@ static const struct country_code_to_reg_dmn g_all_countries[] = {
 };
 
 static const struct reg_dmn g_reg_dmns[] = {
-	{FCC1, FCC},
-	{FCC2, FCC},
-	{FCC3, FCC},
-	{FCC4, FCC},
-	{FCC5, FCC},
-	{FCC6, FCC},
-	{FCC7, FCC},
-	{FCC8, FCC},
-	{FCC9, FCC},
-	{FCC10, FCC},
-	{FCC11, FCC},
-	{ETSI1, ETSI},
-	{ETSI2, ETSI},
-	{ETSI3, ETSI},
-	{ETSI4, ETSI},
-	{ETSI5, ETSI},
-	{ETSI6, ETSI},
-	{ETSI8, ETSI},
-	{ETSI9, ETSI},
-	{ETSI10, ETSI},
-	{ETSI11, ETSI},
-	{APL1, ETSI},
-	{APL2, ETSI},
-	{APL3, ETSI},
-	{APL4, ETSI},
-	{APL5, ETSI},
-	{APL6, ETSI},
-	{APL7, ETSI},
-	{APL8, ETSI},
-	{APL9, ETSI},
-	{APL10, ETSI},
-	{APL11, ETSI},
-	{APL12, ETSI},
-	{APL13, ETSI},
-	{APL14, FCC},
-	{APL15, FCC},
-	{APL16, FCC},
-	{NULL1, NO_CTL},
-	{MKK3, MKK},
-	{MKK5, MKK},
-	{MKK11, MKK},
-	{WORLD, ETSI},
-	{FCCA, FCC},
-	{MKKA, MKK},
-	{MKKC, MKK},
-	{ETSIC, ETSI},
-	{WOR0_WORLD, NO_CTL},
-	{WOR1_WORLD, NO_CTL},
-	{WOR2_WORLD, NO_CTL},
-	{WOR3_WORLD, NO_CTL},
-	{WOR4_FCCA, NO_CTL},
-	{WOR5_ETSIC, NO_CTL},
-	{WOR01_WORLD, NO_CTL},
-	{WOR02_WORLD, NO_CTL},
-	{EU1_WORLD, NO_CTL},
-	{WOR9_WORLD, NO_CTL},
-	{WORA_WORLD, NO_CTL},
-	{WORB_WORLD, NO_CTL},
-	{WORC_WORLD, NO_CTL},
+	{FCC1, CTL_FCC},
+	{FCC2, CTL_FCC},
+	{FCC3, CTL_FCC},
+	{FCC4, CTL_FCC},
+	{FCC5, CTL_FCC},
+	{FCC6, CTL_FCC},
+	{FCC7, CTL_FCC},
+	{FCC8, CTL_FCC},
+	{FCC9, CTL_FCC},
+	{FCC10, CTL_FCC},
+	{FCC11, CTL_FCC},
+	{FCC13, CTL_FCC},
+	{FCC14, CTL_FCC},
+	{ETSI1, CTL_ETSI},
+	{ETSI2, CTL_ETSI},
+	{ETSI3, CTL_ETSI},
+	{ETSI4, CTL_ETSI},
+	{ETSI5, CTL_ETSI},
+	{ETSI6, CTL_ETSI},
+	{ETSI8, CTL_ETSI},
+	{ETSI9, CTL_ETSI},
+	{ETSI10, CTL_ETSI},
+	{ETSI11, CTL_ETSI},
+	{APL1, CTL_ETSI},
+	{APL2, CTL_ETSI},
+	{APL3, CTL_ETSI},
+	{APL4, CTL_ETSI},
+	{APL5, CTL_ETSI},
+	{APL6, CTL_ETSI},
+	{APL7, CTL_ETSI},
+	{APL8, CTL_ETSI},
+	{APL9, CTL_ETSI},
+	{APL10, CTL_ETSI},
+	{APL11, CTL_ETSI},
+	{APL12, CTL_ETSI},
+	{APL13, CTL_ETSI},
+	{APL14, CTL_FCC},
+	{APL15, CTL_FCC},
+	{APL16, CTL_FCC},
+	{APL17, CTL_FCC},
+	{APL20, CTL_ETSI},
+	{APL23, CTL_ETSI},
+	{NULL1, CTL_NONE},
+	{MKK3, CTL_MKK},
+	{MKK5, CTL_MKK},
+	{MKK11, CTL_MKK},
+	{WORLD, CTL_ETSI},
+	{FCCA, CTL_FCC},
+	{MKKA, CTL_MKK},
+	{MKKC, CTL_MKK},
+	{ETSIC, CTL_ETSI},
+	{WOR0_WORLD, CTL_NONE},
+	{WOR1_WORLD, CTL_NONE},
+	{WOR2_WORLD, CTL_NONE},
+	{WOR3_WORLD, CTL_NONE},
+	{WOR4_FCCA, CTL_NONE},
+	{WOR5_ETSIC, CTL_NONE},
+	{WOR01_WORLD, CTL_NONE},
+	{WOR02_WORLD, CTL_NONE},
+	{EU1_WORLD, CTL_NONE},
+	{WOR9_WORLD, CTL_NONE},
+	{WORA_WORLD, CTL_NONE},
+	{WORB_WORLD, CTL_NONE},
+	{WORC_WORLD, CTL_NONE},
 };
 
 
@@ -465,8 +468,7 @@ static bool is_reg_dmn_valid(uint16_t reg_dmn)
 				return true;
 	}
 
-	QDF_TRACE(QDF_MODULE_ID_QDF, QDF_TRACE_LEVEL_ERROR,
-		  "invalid regulatory domain/country code 0x%x", reg_dmn);
+	cds_err("invalid regulatory domain/country code 0x%x", reg_dmn);
 
 	return false;
 }
@@ -634,8 +636,7 @@ int32_t cds_fill_some_regulatory_info(struct regulatory *reg)
 	if (country_code != CTRY_DEFAULT) {
 		country = find_country(country_code);
 		if (!country) {
-			QDF_TRACE(QDF_MODULE_ID_QDF, QDF_TRACE_LEVEL_ERROR,
-				  "not a valid country code");
+			cds_err("not a valid country code");
 			return -EINVAL;
 		}
 
@@ -644,8 +645,7 @@ int32_t cds_fill_some_regulatory_info(struct regulatory *reg)
 
 	reg->regpair = get_reg_dmn_pair(reg_dmn);
 	if (!reg->regpair) {
-		QDF_TRACE(QDF_MODULE_ID_QDF, QDF_TRACE_LEVEL_ERROR,
-			  "no regpair is found, can not proceeed");
+		cds_err("no regpair is found, can not proceeed");
 		return -EINVAL;
 	}
 
@@ -679,24 +679,23 @@ void cds_fill_and_send_ctl_to_fw(struct regulatory *reg)
 	const struct reg_dmn_pair *regpair;
 	tp_wma_handle wma = cds_get_context(QDF_MODULE_ID_WMA);
 
-	if (!wma) {
-		QDF_TRACE(QDF_MODULE_ID_QDF, QDF_TRACE_LEVEL_ERROR,
-			  "unable to get WMA handle");
+	if (!wma)
+		return;
+
+	if (!reg->regpair) {
+		cds_err(FL("no regpair is found, can not proceed"));
 		return;
 	}
-
 	regpair = reg->regpair;
 	reg_dmn_2g = get_reg_dmn(regpair->reg_dmn_2ghz);
 	if (!reg_dmn_2g) {
-		QDF_TRACE(QDF_MODULE_ID_QDF, QDF_TRACE_LEVEL_ERROR,
-			  "failed to get regdmn 2G");
+		cds_err("failed to get regdmn 2G");
 		return;
 	}
 
 	reg_dmn_5g = get_reg_dmn(regpair->reg_dmn_5ghz);
 	if (!reg_dmn_5g) {
-		QDF_TRACE(QDF_MODULE_ID_QDF, QDF_TRACE_LEVEL_ERROR,
-			  "failed to get regdmn 5G");
+		cds_err("failed to get regdmn 5G");
 		return;
 	}
 
